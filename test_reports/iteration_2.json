@@ -1,0 +1,48 @@
+{
+  "summary": "PRIMARY BUG FIXED & VERIFIED: Handwriting / S Pen template (route /draw/{id}) now loads without any JS exceptions on web preview. FAB → 'Handwriting / S Pen' → /draw/{noteId} mounts cleanly: top bar (draw-back/title/undo/redo/more), web-fallback 'Stylus / S Pen canvas' message, full bottom toolbar (5 pens + shape + eraser + 8 colors + 3 widths) all render. 0 page errors during navigation. (tabs)/_layout.tsx now uses StyleSheet.absoluteFillObject (the `inset: 0` web-only CSS leak is gone) and draw screen guards Canvas behind Platform.OS !== 'web', which avoids the prior 'CanvasKit is not defined' red screen. Template popup is correctly anchored above the FAB with width ~224px (NEW NOTE header visible). Paper More sheet shows PAPER SIZE chips (fit/a4/a5/letter/index), 8 TEMPLATE thumbs (blank/ruled/narrow/grid/dotted/cornell/planner/todo) and 8 COLOR swatches; tapping each updates the paper without crash. All 5 pen-tool buttons toggle, tapping an already-active pen opens the tool-options popover. Settings: haptics toggle, S Pen action picker and 2/3-finger gesture pickers all present and persist across reload (verified). Drawer has all 5 entries (drawer-all, drawer-pinned with 'Favorites' label, drawer-recent, drawer-trash, drawer-new-folder). Multi-select via long-press fully working: selection-count + bulk-action-bar shows bulk-pin/bulk-move/bulk-duplicate/bulk-delete. Folder modal at 1024-wide viewport renders as a compact 320-px popup anchored top-left (input width 288). Home grid responsive: 1024-px → 4 cols, 1400-px → 6 cols, 390-px → 2 cols. Backend: 15/15 pytest passing (notes CRUD, soft-delete → trash listing → restore, permanent delete, nested folders + parent-delete-promotes-child, AI summarize). NOTE: AI summarize now works — emergent LLM key budget appears to have been restored. TWO BUGS FOUND: (a) sort-btn testID is missing on Home — `showSortMenu` state exists with full menu (Modal at line 895) and sort-{id} options are wired, but no Pressable in the toolbar calls setShowSortMenu(true), so the menu cannot be opened from the UI. (b) OpenTabsStrip is imported in /app/frontend/app/note/[id].tsx (line 25) but never rendered in the JSX, so opening multiple text notes does not show the horizontal tabs strip. The component IS rendered in draw/[id].tsx (line 629).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Home sort menu trigger",
+        "issue": "No Pressable exists with testID='sort-btn'. setShowSortMenu(true) is never called anywhere, so the sort menu (Modal at index.tsx:895 with sort-updated/sort-created/sort-title options) cannot be opened from the UI. Reference: /app/frontend/app/(tabs)/index.tsx:170,895 (declared+modal, no opener).",
+        "testID": "sort-btn (missing)",
+        "priority": "HIGH"
+      },
+      {
+        "component": "OpenTabsStrip in text note editor",
+        "issue": "OpenTabsStrip is imported in /app/frontend/app/note/[id].tsx:25 but never rendered in the component JSX. As a result, opening 2 different text notes does NOT show the opentab-{id} horizontal tabs strip on the second note. Drawing screen renders it correctly (draw/[id].tsx:629). Add <OpenTabsStrip currentId={id as string} /> just below the top bar of the note editor.",
+        "testID": "opentab-{id}",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add a sort button to the Home toolbar (next to toggle-view-btn) with testID='sort-btn' that calls setShowSortMenu(true).",
+    "Render <OpenTabsStrip currentId={id as string} /> in /app/frontend/app/note/[id].tsx (just under the top bar, mirroring draw/[id].tsx) so the tabs strip appears when 2+ notes are open.",
+    "Optional: gate the silent warning console.warn '\"shadow*\" style props are deprecated' / 'props.pointerEvents is deprecated' — both come from RN-Web shims; ignore for native APK."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/app/(tabs)/index.tsx — `setShowSortMenu` is declared (line 170) and a full sort Modal is wired (line 895) but no UI element ever opens it. This is a wiring miss, not a logic bug.",
+    "/app/frontend/app/note/[id].tsx — imports OpenTabsStrip but never uses it. Either remove the import or render the component (the latter is what the PRD asks for).",
+    "/app/backend/server.py — PUT /api/notes/{id} still treats empty string title as a valid overwrite because update_data filter only drops None; low-risk autosave race. Not blocking.",
+    "Draw screen correctly uses Platform.OS !== 'web' guard around Skia <Canvas>, gestures (GestureDetector) and shows a friendly fallback. Good fix for the Android crash + web preview stability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_api.py (extended: soft-delete→trash→restore→permanent and nested-folders+promote-on-parent-delete)",
+    "/app/test_reports/iteration_2.json (new)"
+  ],
+  "success_rate": { "backend": "100% (15/15)", "frontend": "~85% (drawing/template/popup/drawer/multi-select/settings/folder-modal/responsive all OK; sort-btn and open-tabs-strip on text notes are not wired)" },
+  "seed_data_creation": "Created several TEST_ notes/folders during pytest run; cleanup performed inside tests.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Frontend uses EXPO_PUBLIC_BACKEND_URL (note: PUBLIC), not EXPO_BACKEND_URL. Use page.mouse.down → wait 800ms → mouse.up to simulate long-press for multi-select. Drawing screen on web preview is *intentionally* not running Skia — it renders a 'Stylus / S Pen canvas' placeholder; verify it MOUNTS without throwing rather than trying to draw. Template popup testID 'template-sheet-title' resolves to text 'NEW NOTE' with ~224-px width on a 390-px phone. Folder modal compact (320 px wide) only kicks in at viewport ≥ 720 px. AI summarize endpoint is back online (Anthropic claude-sonnet-4-6 via emergentintegrations) — no more budget-exceeded errors as of this run. Sort-btn and OpenTabsStrip(text-note) are the two outstanding wiring misses for the next iteration.",
+  "rca_of_issue": "PRIMARY user-reported bug ('errors when opening handwriting template on Android'): RCA — DrawScreen on web preview threw 'CanvasKit is not defined' because @shopify/react-native-skia's web build requires a CanvasKit WASM that wasn't loaded; on Android the crash signature was different but stemmed from over-nested gesture composition (Gesture.Simultaneous(Gesture.Simultaneous(...), Gesture.Exclusive(...))) blocking the pan handler. Fix applied by main agent: (1) flattened to Gesture.Simultaneous(pan, composedGesture, tapsGesture) — single level, (2) wrapped Skia <Canvas> + <GestureDetector> in Platform.OS !== 'web' so the web preview shows a fallback instead of crashing, (3) replaced `inset: 0` (web-only CSS) with StyleSheet.absoluteFillObject in (tabs)/_layout.tsx so Android does not parse an unknown style key. Verified: /draw/{id} mounts cleanly on the web preview with 0 page-errors and all expected testIDs present. Android native APK should now load the same screen; user should re-test on device."
+}

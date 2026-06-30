@@ -23,7 +23,8 @@ import { NotesApi, FoldersApi, Note, Folder, ChecklistItem, NoteStatus } from '@
 import { haptic } from '@/src/state/useAppSettings';
 
 type ViewMode = 'grid' | 'list';
-type CategoryKey = 'all' | 'pinned' | 'trash' | string; // string === folder id
+type CategoryKey = 'all' | 'pinned' | 'recent' | 'trash' | string;
+type SortBy = 'updated' | 'created' | 'title';
 
 interface Template {
   key: string;
@@ -165,6 +166,8 @@ export default function HomeScreen() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<CategoryKey>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const [sortBy, setSortBy] = useState<SortBy>('updated');
+  const [showSortMenu, setShowSortMenu] = useState(false);
 
   // Modals
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -184,7 +187,7 @@ export default function HomeScreen() {
 
   const status: NoteStatus = category === 'trash' ? 'trash' : 'active';
   const folderFilter = useMemo(() => {
-    if (category === 'all' || category === 'pinned' || category === 'trash') return null;
+    if (category === 'all' || category === 'pinned' || category === 'recent' || category === 'trash') return null;
     return category;
   }, [category]);
 
@@ -215,13 +218,27 @@ export default function HomeScreen() {
     return () => clearTimeout(t);
   }, [search, category, load]);
 
+  // Sort & filter notes client-side based on chosen sort
+  const sortedNotes = useMemo(() => {
+    const arr = [...notes];
+    if (sortBy === 'title') {
+      arr.sort((a, b) => (a.title || 'Untitled').localeCompare(b.title || 'Untitled'));
+    } else if (sortBy === 'created') {
+      arr.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    } else {
+      arr.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    }
+    if (category === 'recent') return arr.slice(0, 20);
+    return arr;
+  }, [notes, sortBy, category]);
+
   const pinnedNotes = useMemo(
-    () => (category === 'all' ? notes.filter((n) => n.pinned) : []),
-    [notes, category]
+    () => (category === 'all' ? sortedNotes.filter((n) => n.pinned) : []),
+    [sortedNotes, category]
   );
   const otherNotes = useMemo(
-    () => (category === 'all' ? notes.filter((n) => !n.pinned) : notes),
-    [notes, category]
+    () => (category === 'all' ? sortedNotes.filter((n) => !n.pinned) : sortedNotes),
+    [sortedNotes, category]
   );
 
   const folderById = (id: string | null | undefined) =>
@@ -320,6 +337,7 @@ export default function HomeScreen() {
   const categoryLabel = useMemo(() => {
     if (category === 'all') return 'All notes';
     if (category === 'pinned') return 'Pinned';
+    if (category === 'recent') return 'Recents';
     if (category === 'trash') return 'Trash';
     return folderById(category)?.name || 'Notes';
   }, [category, folders]);
@@ -696,11 +714,18 @@ export default function HomeScreen() {
               testID="drawer-all"
             />
             <DrawerRow
-              icon="pin-outline"
-              label="Pinned"
+              icon="star-outline"
+              label="Favorites"
               active={category === 'pinned'}
               onPress={() => { setCategory('pinned'); setDrawerOpen(false); }}
               testID="drawer-pinned"
+            />
+            <DrawerRow
+              icon="time-outline"
+              label="Recents"
+              active={category === 'recent'}
+              onPress={() => { setCategory('recent'); setDrawerOpen(false); }}
+              testID="drawer-recent"
             />
             <DrawerRow
               icon="trash-outline"
@@ -795,13 +820,21 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
-      {/* Template picker */}
-      <Modal visible={showTemplate} transparent animationType="slide" onRequestClose={() => setShowTemplate(false)}>
+      {/* Template picker — anchored above the FAB */}
+      <Modal visible={showTemplate} transparent animationType="fade" onRequestClose={() => setShowTemplate(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowTemplate(false)}>
-          <Pressable style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]}>
-            <View style={styles.sheetHandle} />
-            <Text style={[styles.sheetTitle, { color: colors.onSurface }]} testID="template-sheet-title">
-              Choose a template
+          <Pressable
+            style={[
+              styles.tplPopup,
+              {
+                backgroundColor: colors.surface,
+                right: spacing.lg,
+                bottom: insets.bottom + 70 + 70, // above the FAB
+              },
+            ]}
+          >
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1 }} testID="template-sheet-title">
+              NEW NOTE
             </Text>
             {TEMPLATES.map((tpl) => (
               <Pressable
@@ -809,22 +842,16 @@ export default function HomeScreen() {
                 testID={`tpl-${tpl.key}`}
                 onPress={() => createFromTemplate(tpl)}
                 style={({ pressed }) => [
-                  styles.tplRow,
-                  { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary },
+                  styles.tplPopupRow,
+                  { backgroundColor: pressed ? colors.surfaceTertiary : 'transparent' },
                 ]}
               >
-                <View style={[styles.tplIcon, { backgroundColor: colors.brandTertiary }]}>
-                  <Ionicons name={tpl.icon} size={22} color={colors.brand} />
+                <View style={[styles.tplIconSmall, { backgroundColor: colors.brandTertiary }]}>
+                  <Ionicons name={tpl.icon} size={18} color={colors.brand} />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.lg }}>
-                    {tpl.label}
-                  </Text>
-                  <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
-                    {tpl.description}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.base, fontWeight: '600', marginLeft: spacing.sm }}>
+                  {tpl.label}
+                </Text>
               </Pressable>
             ))}
           </Pressable>
@@ -864,6 +891,45 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
+      {/* Sort menu */}
+      <Modal visible={showSortMenu} transparent animationType="fade" onRequestClose={() => setShowSortMenu(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowSortMenu(false)}>
+          <Pressable
+            style={[
+              styles.sheet,
+              { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg, maxWidth: 480, alignSelf: 'center', borderRadius: radius.lg, marginBottom: insets.bottom + 80 },
+            ]}
+          >
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: colors.onSurface }]}>Sort by</Text>
+            {([
+              { id: 'updated', label: 'Recently updated' },
+              { id: 'created', label: 'Newest first' },
+              { id: 'title', label: 'Title (A → Z)' },
+            ] as { id: SortBy; label: string }[]).map((o) => (
+              <Pressable
+                key={o.id}
+                onPress={() => { setSortBy(o.id); setShowSortMenu(false); }}
+                testID={`sort-${o.id}`}
+                style={({ pressed }) => [
+                  styles.tplRow,
+                  { backgroundColor: pressed ? colors.surfaceTertiary : sortBy === o.id ? colors.brandTertiary : colors.surfaceSecondary },
+                ]}
+              >
+                <Ionicons
+                  name={sortBy === o.id ? 'radio-button-on' : 'radio-button-off'}
+                  size={20}
+                  color={sortBy === o.id ? colors.brand : colors.muted}
+                />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, marginLeft: spacing.md, fontWeight: sortBy === o.id ? '700' : '500' }}>
+                  {o.label}
+                </Text>
+              </Pressable>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Folder create / edit modal */}
       <FolderModal
         visible={!!folderModal}
@@ -894,6 +960,8 @@ function FolderModal({
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
+  const wide = winW >= 720;
   const [name, setName] = useState('');
   const [color, setColor] = useState(folderColors[0]);
 
@@ -905,10 +973,23 @@ function FolderModal({
   }, [visible, folder]);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
+    <Modal visible={visible} transparent animationType={wide ? 'fade' : 'slide'} onRequestClose={onCancel}>
       <Pressable style={styles.backdrop} onPress={onCancel}>
-        <Pressable style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]}>
-          <View style={styles.sheetHandle} />
+        <Pressable
+          style={
+            wide
+              ? [
+                  styles.folderPopup,
+                  {
+                    backgroundColor: colors.surface,
+                    top: insets.top + spacing.xxl + 60,
+                    left: spacing.lg,
+                  },
+                ]
+              : [styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]
+          }
+        >
+          {!wide && <View style={styles.sheetHandle} />}
           <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.xs }}>
             {folder ? 'Edit folder' : 'New folder'}
           </Text>
@@ -1162,6 +1243,17 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: spacing.xs,
   },
+  folderPopup: {
+    position: 'absolute',
+    width: 320,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 12,
+  },
   drawerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', flexDirection: 'row' },
   drawerPanel: {
     width: '82%',
@@ -1228,6 +1320,29 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   folderDot: { width: 14, height: 14, borderRadius: 7, marginRight: spacing.md },
+  tplPopup: {
+    position: 'absolute',
+    width: 240,
+    padding: spacing.sm,
+    paddingTop: spacing.md,
+    borderRadius: radius.lg,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  tplPopupRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+  },
+  tplIconSmall: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+  },
   tplRow: {
     flexDirection: 'row',
     alignItems: 'center',

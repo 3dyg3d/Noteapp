@@ -67,11 +67,46 @@ class TestNotes:
         r2 = s.get(f"{API}/notes/{TestNotes.created_id}")
         assert r2.json()["pinned"] is True
 
-    def test_delete_note(self, s):
+    def test_delete_note_soft_then_restore(self, s):
+        # Soft delete: note still exists, listed under trash, restorable
         r = s.delete(f"{API}/notes/{TestNotes.created_id}")
         assert r.status_code == 200
+        # Should appear in trash list
+        trash = s.get(f"{API}/notes", params={"status": "trash"}).json()
+        assert any(n["id"] == TestNotes.created_id for n in trash)
+        # Not in active list
+        active = s.get(f"{API}/notes", params={"status": "active"}).json()
+        assert all(n["id"] != TestNotes.created_id for n in active)
+        # Restore
+        rr = s.post(f"{API}/notes/{TestNotes.created_id}/restore")
+        assert rr.status_code == 200, rr.text
+        assert rr.json().get("deleted_at") is None
+        # Permanent delete
+        rp = s.delete(f"{API}/notes/{TestNotes.created_id}", params={"permanent": True})
+        assert rp.status_code == 200
         r2 = s.get(f"{API}/notes/{TestNotes.created_id}")
         assert r2.status_code == 404
+
+
+# ----- Nested folders -----
+class TestNestedFolders:
+    parent_id = None
+    child_id = None
+
+    def test_create_parent_and_child(self, s):
+        p = s.post(f"{API}/folders", json={"name": "TEST_Parent"}).json()
+        TestNestedFolders.parent_id = p["id"]
+        c = s.post(f"{API}/folders", json={"name": "TEST_Child", "parent_id": p["id"]}).json()
+        assert c["parent_id"] == p["id"]
+        TestNestedFolders.child_id = c["id"]
+
+    def test_delete_parent_promotes_child(self, s):
+        s.delete(f"{API}/folders/{TestNestedFolders.parent_id}")
+        listing = s.get(f"{API}/folders").json()
+        child = next((f for f in listing if f["id"] == TestNestedFolders.child_id), None)
+        assert child is not None
+        assert child["parent_id"] is None
+        s.delete(f"{API}/folders/{TestNestedFolders.child_id}")
 
 
 # ----- Folders CRUD + detach -----

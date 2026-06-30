@@ -21,6 +21,8 @@ import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
 import { NotesApi, FoldersApi, AiApi, Note, Folder, ChecklistItem } from '@/src/api/client';
 import { haptic } from '@/src/state/useAppSettings';
+import { useOpenTabs } from '@/src/state/useOpenTabs';
+import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import DrawingPad from '@/src/components/DrawingPad';
 
 function uid() {
@@ -32,6 +34,7 @@ export default function NoteEditor() {
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const { openTab, renameTab } = useOpenTabs();
 
   const [note, setNote] = useState<Note | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -52,6 +55,7 @@ export default function NoteEditor() {
         const [n, f] = await Promise.all([NotesApi.get(id as string), FoldersApi.list()]);
         setNote(n);
         setFolders(f);
+        openTab({ id: n.id, title: n.title || 'Untitled', type: 'text' });
       } catch (e) {
         console.warn(e);
       } finally {

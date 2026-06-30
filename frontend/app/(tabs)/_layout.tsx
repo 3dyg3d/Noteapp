@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { BlurView } from 'expo-blur';
 
 import { useTheme } from '@/src/theme/ThemeContext';
@@ -33,7 +33,7 @@ export default function TabsLayout() {
                 <BlurView
                   intensity={isDark ? 50 : 80}
                   tint={isDark ? 'dark' : 'light'}
-                  style={{ position: 'absolute', inset: 0, backgroundColor: colors.surface + 'ee' } as any}
+                  style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.surface + 'ee' }]}
                 />
               ),
       }}

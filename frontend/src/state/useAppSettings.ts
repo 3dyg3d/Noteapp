@@ -4,12 +4,14 @@ import * as Haptics from 'expo-haptics';
 
 export type GestureAction = 'none' | 'undo' | 'redo' | 'eraser';
 export type SPenAction = 'none' | 'undo' | 'redo' | 'eraser';
+export type ToolbarPosition = 'top' | 'bottom' | 'left' | 'right';
 
 export interface AppSettings {
   hapticsEnabled: boolean;
   sPenButton: SPenAction;
   gestureTwoFingerTap: GestureAction;
   gestureThreeFingerTap: GestureAction;
+  toolbarPosition: ToolbarPosition;
 }
 
 const KEY = 'galaxynotes:app-settings';
@@ -18,6 +20,7 @@ const DEFAULTS: AppSettings = {
   sPenButton: 'eraser',
   gestureTwoFingerTap: 'undo',
   gestureThreeFingerTap: 'redo',
+  toolbarPosition: 'bottom',
 };
 
 let cache: AppSettings | null = null;

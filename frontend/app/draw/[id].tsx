@@ -19,7 +19,9 @@ import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
 import { NotesApi, Note } from '@/src/api/client';
-import { useAppSettings, haptic, GestureAction } from '@/src/state/useAppSettings';
+import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
+import { useOpenTabs } from '@/src/state/useOpenTabs';
+import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 
 // ---------- Types ----------
 type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil';
@@ -176,8 +178,10 @@ export default function DrawScreen() {
   const MAX_SCALE = 16;
   const MIN_SCALE = 0.5;
 
-  // App settings (haptics + gestures)
-  const { settings } = useAppSettings();
+  // App settings (haptics + gestures + toolbar)
+  const { settings, update } = useAppSettings();
+  const toolbarPos: ToolbarPosition = settings.toolbarPosition || 'bottom';
+  const { openTab, renameTab } = useOpenTabs();
 
   // Active drawing state (refs to avoid re-renders per touch)
   const livePtsRef = useRef<{ x: number; y: number; t: number }[]>([]);
@@ -193,6 +197,7 @@ export default function DrawScreen() {
       try {
         const n = await NotesApi.get(id as string);
         setNote(n);
+        openTab({ id: n.id, title: n.title || 'Untitled', type: 'handwriting' });
         if (n.drawing_data) {
           try {
             const doc: DrawingDoc = JSON.parse(n.drawing_data);
@@ -383,10 +388,8 @@ export default function DrawScreen() {
     .minPointers(3)
     .onEnd(() => runGestureAction(settings.gestureThreeFingerTap));
 
-  const composedGesture = Gesture.Simultaneous(
-    Gesture.Simultaneous(pinch, twoFingerPan),
-    Gesture.Exclusive(threeTap, twoTap)
-  );
+  const composedGesture = Gesture.Simultaneous(pinch, twoFingerPan);
+  const tapsGesture = Gesture.Exclusive(threeTap, twoTap);
 
   // Convert screen-space gesture coords to world coords accounting for zoom/pan
   const toWorld = (x: number, y: number) => ({
@@ -438,6 +441,8 @@ export default function DrawScreen() {
         setLiveTick((n) => n + 1);
       }
     });
+
+  const finalGesture = Gesture.Simultaneous(pan, composedGesture, tapsGesture);
 
   // ----- Render strokes -----
   const renderStroke = (s: StrokeData, key: string) => {
@@ -553,7 +558,10 @@ export default function DrawScreen() {
   const updateTitle = () => {
     setShowTitleEdit(false);
     persist(items, paper, paperSize, paperColorId, titleDraft);
-    if (note) setNote({ ...note, title: titleDraft });
+    if (note) {
+      setNote({ ...note, title: titleDraft });
+      renameTab(note.id, titleDraft || 'Untitled');
+    }
   };
 
   const exitDelete = async () => {
@@ -593,10 +601,7 @@ export default function DrawScreen() {
           <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
         </Pressable>
         <Pressable
-          onPress={() => {
-            setTitleDraft(note.title);
-            setShowTitleEdit(true);
-          }}
+          onPress={() => { setTitleDraft(note.title); setShowTitleEdit(true); }}
           testID="draw-title"
           style={{ flex: 1, alignItems: 'center' }}
         >
@@ -612,20 +617,16 @@ export default function DrawScreen() {
           <Ionicons name="arrow-redo" size={22} color={colors.onSurface} />
         </Pressable>
         {scale !== 1 && (
-          <Pressable
-            onPress={resetZoom}
-            testID="draw-reset-zoom"
-            style={[styles.zoomPill, { backgroundColor: colors.brand }]}
-          >
-            <Text style={{ color: colors.onBrandPrimary, fontWeight: '700', fontSize: 12 }}>
-              {Math.round(scale * 100)}%
-            </Text>
+          <Pressable onPress={resetZoom} testID="draw-reset-zoom" style={[styles.zoomPill, { backgroundColor: colors.brand }]}>
+            <Text style={{ color: colors.onBrandPrimary, fontWeight: '700', fontSize: 12 }}>{Math.round(scale * 100)}%</Text>
           </Pressable>
         )}
         <Pressable onPress={() => setShowPaperMenu(true)} testID="draw-more" style={styles.topIcon}>
           <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
         </Pressable>
       </View>
+
+      <OpenTabsStrip currentId={id as string} />
 
       {/* Canvas (with paper-size letterbox) */}
       <View style={{ flex: 1, backgroundColor: isDark ? '#08080a' : '#d4d4d4' }}>
