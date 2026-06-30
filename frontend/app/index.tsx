@@ -20,7 +20,7 @@ import { BlurView } from 'expo-blur';
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors } from '@/src/theme/tokens';
 import { NotesApi, FoldersApi, Note, Folder, ChecklistItem, NoteStatus } from '@/src/api/client';
-import { haptic } from '@/src/state/useAppSettings';
+import { haptic, useAppSettings } from '@/src/state/useAppSettings';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 
 type ViewMode = 'grid' | 'list';
@@ -291,19 +291,42 @@ export default function HomeScreen() {
   const [hwCustomW, setHwCustomW] = useState<string>('1024');
   const [hwCustomH, setHwCustomH] = useState<string>('1366');
   const [hwTemplate, setHwTemplate] = useState<'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo'>('blank');
-  const [hwPaperColor, setHwPaperColor] = useState<string>('white');
+  const [hwPaperColor, setHwPaperColor] = useState<string>('#FBFAF6'); // hex, defaults to White
   const [hwLineSpacing, setHwLineSpacing] = useState<number>(32);
+  const [hwTitle, setHwTitle] = useState<string>('');
+  const [hwFolderId, setHwFolderId] = useState<string | null>(null);
+  const [hwOrientation, setHwOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const [showHwColorPicker, setShowHwColorPicker] = useState(false);
+  const [showHwFolderPicker, setShowHwFolderPicker] = useState(false);
 
-  const HW_PAPER_COLORS: { id: string; hex: string; label: string }[] = [
-    { id: 'white',  hex: '#FBFAF6', label: 'White' },
-    { id: 'cream',  hex: '#F4ECDA', label: 'Cream' },
-    { id: 'yellow', hex: '#FFF4C4', label: 'Yellow' },
-    { id: 'mint',   hex: '#E1F0E0', label: 'Mint' },
-    { id: 'sky',    hex: '#DCE6F0', label: 'Sky' },
-    { id: 'rose',   hex: '#F5DDDD', label: 'Rose' },
-    { id: 'gray',   hex: '#ECECEC', label: 'Gray' },
-    { id: 'black',  hex: '#0a0a0a', label: 'Black' },
+  // Persistent favourite colors (3 slots). Read/written via useAppSettings.
+  const { settings, update: updateSettings } = useAppSettings();
+  const favoriteHwColors = useMemo(() => {
+    const arr = (settings.favoriteHwColors || []).slice(0, 3);
+    while (arr.length < 3) arr.push('#FBFAF6');
+    return arr;
+  }, [settings.favoriteHwColors]);
+
+  const HW_PAPER_COLORS: { hex: string; label: string }[] = [
+    { hex: '#FBFAF6', label: 'White' },
+    { hex: '#F4ECDA', label: 'Cream' },
+    { hex: '#FFF4C4', label: 'Yellow' },
+    { hex: '#E1F0E0', label: 'Mint' },
+    { hex: '#DCE6F0', label: 'Sky' },
+    { hex: '#F5DDDD', label: 'Rose' },
+    { hex: '#ECECEC', label: 'Gray' },
+    { hex: '#0a0a0a', label: 'Black' },
+    { hex: '#FFD8A8', label: 'Peach' },
+    { hex: '#D7E9D8', label: 'Sage' },
+    { hex: '#E6DAF8', label: 'Lavender' },
+    { hex: '#FFC8D6', label: 'Pink' },
   ];
+
+  const saveFavoriteHwColor = (hex: string, slot: number) => {
+    const next = [...favoriteHwColors];
+    next[slot] = hex;
+    updateSettings({ favoriteHwColors: next });
+  };
 
   const hwSupportsSpacing = (t: typeof hwTemplate) =>
     t === 'ruled' || t === 'narrow' || t === 'grid' || t === 'dotted' || t === 'cornell' || t === 'planner' || t === 'todo';
@@ -311,6 +334,10 @@ export default function HomeScreen() {
   const createFromTemplate = async (tpl: Template) => {
     setShowTemplate(false);
     if (tpl.mode === 'drawing') {
+      // Reset the prep popup defaults from the current context
+      setHwTitle('');
+      setHwFolderId(folderFilter);
+      setHwPaperColor(favoriteHwColors[0] || '#FBFAF6');
       setShowHwPrep(true);
       return;
     }
@@ -326,29 +353,33 @@ export default function HomeScreen() {
   const startHandwriting = async () => {
     setShowHwPrep(false);
     try {
-      const customSize =
-        hwSize === 'custom'
-          ? {
-              w: Math.max(200, Math.min(8000, parseInt(hwCustomW, 10) || 1024)),
-              h: Math.max(200, Math.min(8000, parseInt(hwCustomH, 10) || 1366)),
-            }
-          : undefined;
-      const pickedHex =
-        HW_PAPER_COLORS.find((c) => c.id === hwPaperColor)?.hex || '#FBFAF6';
+      // For custom or any size, swap W/H if landscape
+      let customSize: { w: number; h: number } | undefined;
+      if (hwSize === 'custom') {
+        const w = Math.max(200, Math.min(8000, parseInt(hwCustomW, 10) || 1024));
+        const h = Math.max(200, Math.min(8000, parseInt(hwCustomH, 10) || 1366));
+        customSize =
+          hwOrientation === 'landscape' && h > w
+            ? { w: h, h: w }
+            : hwOrientation === 'portrait' && w > h
+            ? { w: h, h: w }
+            : { w, h };
+      }
       const drawing_data = JSON.stringify({
         paper: hwTemplate,
         paperSize: hwSize,
         customSize,
-        paperColor: pickedHex, // store the hex directly so the draw screen honors it verbatim
+        paperColor: hwPaperColor, // hex
+        orientation: hwOrientation,
         lineSpacing: hwSupportsSpacing(hwTemplate) ? hwLineSpacing : undefined,
         items: [],
       });
       const note = await NotesApi.create({
-        title: 'Handwritten note',
+        title: hwTitle.trim() || 'Handwritten note',
         content: '',
         note_type: 'handwriting',
         drawing_data,
-        folder_id: folderFilter,
+        folder_id: hwFolderId,
       });
       router.push(`/draw/${note.id}`);
     } catch (e) {
@@ -1178,7 +1209,115 @@ export default function HomeScreen() {
             </Text>
 
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Title */}
               <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+                NOTE NAME
+              </Text>
+              <TextInput
+                testID="hw-title-input"
+                value={hwTitle}
+                onChangeText={setHwTitle}
+                placeholder="Untitled handwritten note"
+                placeholderTextColor={colors.muted}
+                style={[styles.input, { color: colors.onSurface, backgroundColor: colors.surfaceSecondary }]}
+              />
+
+              {/* Folder + Orientation row */}
+              <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+                    SAVE IN
+                  </Text>
+                  <Pressable
+                    testID="hw-folder-btn"
+                    onPress={() => { haptic.selection(); setShowHwFolderPicker(true); }}
+                    style={({ pressed }) => [
+                      styles.input,
+                      {
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: colors.surfaceSecondary,
+                        opacity: pressed ? 0.8 : 1,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="folder-outline"
+                      size={18}
+                      color={
+                        hwFolderId
+                          ? folders.find((f) => f.id === hwFolderId)?.color || colors.brand
+                          : colors.muted
+                      }
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        marginLeft: spacing.sm,
+                        color: colors.onSurface,
+                        fontSize: typeScale.base,
+                        fontWeight: '600',
+                        flex: 1,
+                      }}
+                    >
+                      {hwFolderId
+                        ? folders.find((f) => f.id === hwFolderId)?.name || 'Folder'
+                        : 'No folder'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={16} color={colors.muted} />
+                  </Pressable>
+                </View>
+
+                <View style={{ width: 130 }}>
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+                    ORIENTATION
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <Pressable
+                      testID="hw-orient-portrait"
+                      onPress={() => { haptic.selection(); setHwOrientation('portrait'); }}
+                      style={{
+                        flex: 1,
+                        height: 48,
+                        borderRadius: radius.md,
+                        borderWidth: hwOrientation === 'portrait' ? 2 : 1,
+                        borderColor: hwOrientation === 'portrait' ? colors.brand : colors.border,
+                        backgroundColor: hwOrientation === 'portrait' ? colors.brandTertiary : colors.surfaceSecondary,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Ionicons
+                        name="phone-portrait-outline"
+                        size={22}
+                        color={hwOrientation === 'portrait' ? colors.brand : colors.onSurface}
+                      />
+                    </Pressable>
+                    <Pressable
+                      testID="hw-orient-landscape"
+                      onPress={() => { haptic.selection(); setHwOrientation('landscape'); }}
+                      style={{
+                        flex: 1,
+                        height: 48,
+                        borderRadius: radius.md,
+                        borderWidth: hwOrientation === 'landscape' ? 2 : 1,
+                        borderColor: hwOrientation === 'landscape' ? colors.brand : colors.border,
+                        backgroundColor: hwOrientation === 'landscape' ? colors.brandTertiary : colors.surfaceSecondary,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Ionicons
+                        name="phone-landscape-outline"
+                        size={22}
+                        color={hwOrientation === 'landscape' ? colors.brand : colors.onSurface}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
                 PAPER SIZE
               </Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
@@ -1252,9 +1391,17 @@ export default function HomeScreen() {
                   const active = hwTemplate === t;
                   const previewW = 80;
                   const previewH = 104;
-                  const previewColor =
-                    HW_PAPER_COLORS.find((c) => c.id === hwPaperColor)?.hex || '#FFFFFF';
-                  const previewLine = hwPaperColor === 'black' ? '#3a3a3c' : '#C9D2E0';
+                  const previewColor = hwPaperColor;
+                  // luminance-based line color so the preview matches the canvas behaviour
+                  const lum = (() => {
+                    const h = (hwPaperColor || '#FFFFFF').replace('#', '');
+                    if (h.length < 6) return 1;
+                    const r = parseInt(h.slice(0, 2), 16);
+                    const g = parseInt(h.slice(2, 4), 16);
+                    const b = parseInt(h.slice(4, 6), 16);
+                    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                  })();
+                  const previewLine = lum < 0.45 ? '#7a7a7e' : '#C9D2E0';
                   // Scale spacing down for tiny preview
                   const previewSpacing = hwSupportsSpacing(t)
                     ? Math.max(6, Math.round((hwLineSpacing / 32) * (t === 'narrow' ? 12 : 16)))
@@ -1303,40 +1450,46 @@ export default function HomeScreen() {
               <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
                 PAPER COLOR
               </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-                {HW_PAPER_COLORS.map((c) => {
-                  const active = hwPaperColor === c.id;
+              <View style={{ flexDirection: 'row', gap: spacing.md, alignItems: 'center' }}>
+                {favoriteHwColors.map((hex, idx) => {
+                  const active = hwPaperColor.toLowerCase() === hex.toLowerCase();
                   return (
                     <Pressable
-                      key={c.id}
-                      onPress={() => { haptic.selection(); setHwPaperColor(c.id); }}
-                      testID={`hw-color-${c.id}`}
-                      style={{ alignItems: 'center', width: 56 }}
+                      key={`fav-${idx}`}
+                      onPress={() => { haptic.selection(); setHwPaperColor(hex); }}
+                      testID={`hw-color-fav-${idx}`}
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 24,
+                        backgroundColor: hex,
+                        borderWidth: active ? 3 : 1,
+                        borderColor: active ? colors.brand : colors.border,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
                     >
-                      <View
-                        style={{
-                          width: 40,
-                          height: 40,
-                          borderRadius: 20,
-                          backgroundColor: c.hex,
-                          borderWidth: active ? 3 : 1,
-                          borderColor: active ? colors.brand : colors.border,
-                        }}
-                      />
-                      <Text
-                        numberOfLines={1}
-                        style={{
-                          marginTop: 4,
-                          fontSize: typeScale.sm - 1,
-                          color: active ? colors.brand : colors.muted,
-                          fontWeight: active ? '700' : '500',
-                        }}
-                      >
-                        {c.label}
-                      </Text>
+                      {active && <Ionicons name="checkmark" size={20} color={colors.brand} />}
                     </Pressable>
                   );
                 })}
+                <Pressable
+                  onPress={() => { haptic.selection(); setShowHwColorPicker(true); }}
+                  testID="hw-color-more"
+                  style={({ pressed }) => ({
+                    width: 48,
+                    height: 48,
+                    borderRadius: 24,
+                    backgroundColor: colors.surfaceSecondary,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Ionicons name="color-palette-outline" size={22} color={colors.brand} />
+                </Pressable>
               </View>
 
               {hwSupportsSpacing(hwTemplate) && (
@@ -1399,6 +1552,172 @@ export default function HomeScreen() {
                 <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Start writing</Text>
               </Pressable>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* HW color picker — full palette + "Save as default" */}
+      <Modal visible={showHwColorPicker} transparent animationType="fade" onRequestClose={() => setShowHwColorPicker(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowHwColorPicker(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <Text style={[styles.sheetTitle, { color: colors.onSurface, textAlign: 'center' }]}>
+              Choose paper color
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'center', marginTop: spacing.sm }}>
+              {HW_PAPER_COLORS.map((c) => {
+                const active = hwPaperColor.toLowerCase() === c.hex.toLowerCase();
+                return (
+                  <Pressable
+                    key={c.hex}
+                    onPress={() => { haptic.selection(); setHwPaperColor(c.hex); }}
+                    testID={`hw-color-picker-${c.label.toLowerCase()}`}
+                    style={{ alignItems: 'center', width: 64 }}
+                  >
+                    <View
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 24,
+                        backgroundColor: c.hex,
+                        borderWidth: active ? 3 : 1,
+                        borderColor: active ? colors.brand : colors.border,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {active && <Ionicons name="checkmark" size={20} color={colors.brand} />}
+                    </View>
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        marginTop: 4,
+                        fontSize: typeScale.sm - 1,
+                        color: active ? colors.brand : colors.muted,
+                        fontWeight: active ? '700' : '500',
+                      }}
+                    >
+                      {c.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.lg }} />
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', letterSpacing: 1.2, marginBottom: spacing.sm }}>
+              SAVE AS DEFAULT
+            </Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.sm }}>
+              Tap a slot below to overwrite it with the current colour.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: spacing.md, justifyContent: 'center' }}>
+              {favoriteHwColors.map((hex, idx) => (
+                <Pressable
+                  key={`save-slot-${idx}`}
+                  onPress={() => { haptic.success(); saveFavoriteHwColor(hwPaperColor, idx); }}
+                  testID={`hw-color-save-slot-${idx}`}
+                  style={({ pressed }) => ({
+                    alignItems: 'center',
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <View
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 28,
+                      backgroundColor: hex,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Ionicons name="bookmark" size={18} color={colors.brand} />
+                  </View>
+                  <Text style={{ marginTop: 4, fontSize: typeScale.sm, color: colors.muted, fontWeight: '600' }}>
+                    Slot {idx + 1}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Pressable
+              onPress={() => setShowHwColorPicker(false)}
+              testID="hw-color-picker-close"
+              style={[styles.btn, { marginTop: spacing.lg, backgroundColor: colors.brand }]}
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* HW folder picker */}
+      <Modal visible={showHwFolderPicker} transparent animationType="fade" onRequestClose={() => setShowHwFolderPicker(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowHwFolderPicker(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              maxHeight: '80%',
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <Text style={[styles.sheetTitle, { color: colors.onSurface, textAlign: 'center' }]}>
+              Save in folder
+            </Text>
+            <ScrollView style={{ marginTop: spacing.sm }}>
+              <Pressable
+                onPress={() => { setHwFolderId(null); setShowHwFolderPicker(false); }}
+                style={[styles.folderRow, { borderBottomColor: colors.divider }]}
+                testID="hw-folder-none"
+              >
+                <View style={[styles.folderDot, { backgroundColor: colors.muted }]} />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>No folder</Text>
+                {hwFolderId === null && <Ionicons name="checkmark" size={18} color={colors.brand} />}
+              </Pressable>
+              {tree.map(({ folder: f, depth }) => (
+                <Pressable
+                  key={f.id}
+                  onPress={() => { setHwFolderId(f.id); setShowHwFolderPicker(false); }}
+                  style={[styles.folderRow, { borderBottomColor: colors.divider, paddingLeft: spacing.md + depth * 16 }]}
+                  testID={`hw-folder-${f.id}`}
+                >
+                  <View style={[styles.folderDot, { backgroundColor: f.color }]} />
+                  <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{f.name}</Text>
+                  {hwFolderId === f.id && <Ionicons name="checkmark" size={18} color={colors.brand} />}
+                </Pressable>
+              ))}
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>

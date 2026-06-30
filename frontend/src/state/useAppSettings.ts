@@ -13,6 +13,8 @@ export interface AppSettings {
   gestureThreeFingerTap: GestureAction;
   toolbarPosition: ToolbarPosition;
   palmRejection: boolean;
+  // Favourite paper colors for the handwriting prep popup (hex strings, exactly 3).
+  favoriteHwColors: string[];
 }
 
 const KEY = 'galaxynotes:app-settings';
@@ -23,6 +25,7 @@ const DEFAULTS: AppSettings = {
   gestureThreeFingerTap: 'redo',
   toolbarPosition: 'bottom',
   palmRejection: false,
+  favoriteHwColors: ['#FBFAF6', '#F4ECDA', '#FFF4C4'], // White, Cream, Yellow
 };
 
 let cache: AppSettings | null = null;
