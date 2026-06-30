@@ -16,12 +16,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import * as Haptics from 'expo-haptics';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
 import { NotesApi, FoldersApi, AiApi, Note, Folder, ChecklistItem } from '@/src/api/client';
-import DrawingPad, { DrawingPadHandle } from '@/src/components/DrawingPad';
+import { haptic } from '@/src/state/useAppSettings';
+import DrawingPad from '@/src/components/DrawingPad';
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -44,7 +44,7 @@ export default function NoteEditor() {
   const [aiSummary, setAiSummary] = useState<string | null>(null);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const drawingRef = useRef<DrawingPadHandle | null>(null);
+  const drawingRef = useRef<any | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -133,7 +133,7 @@ export default function NoteEditor() {
 
   const togglePin = () => {
     if (!note) return;
-    Haptics.selectionAsync().catch(() => {});
+    haptic.selection();
     persistImmediately({ pinned: !note.pinned });
   };
 
@@ -264,7 +264,7 @@ export default function NoteEditor() {
               <View key={c.id} style={styles.checkRow} testID={`check-${c.id}`}>
                 <Pressable
                   onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
+                    haptic.selection();
                     updateChecklistItem(c.id, { done: !c.done });
                   }}
                   style={[

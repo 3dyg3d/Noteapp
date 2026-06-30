@@ -14,12 +14,12 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { BlurView } from 'expo-blur';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors } from '@/src/theme/tokens';
 import { NotesApi, FoldersApi, Note, Folder, ChecklistItem, NoteStatus } from '@/src/api/client';
+import { haptic } from '@/src/state/useAppSettings';
 
 type ViewMode = 'grid' | 'list';
 type CategoryKey = 'all' | 'pinned' | 'trash' | string; // string === folder id
@@ -213,7 +213,7 @@ export default function HomeScreen() {
 
   // FAB
   const onFabPress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    haptic.light();
     setShowTemplate(true);
   };
   const createFromTemplate = async (tpl: Template) => {
@@ -233,11 +233,11 @@ export default function HomeScreen() {
 
   // --- Selection ---
   const enterSelectionWith = (note: Note) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    haptic.medium();
     setSelectedIds(new Set([note.id]));
   };
   const toggleSelect = (note: Note) => {
-    Haptics.selectionAsync().catch(() => {});
+    haptic.selection();
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(note.id)) next.delete(note.id);
@@ -453,7 +453,7 @@ export default function HomeScreen() {
           <View style={styles.headerTopRow}>
             <Pressable
               testID="open-drawer-btn"
-              onPress={() => { Haptics.selectionAsync().catch(() => {}); setDrawerOpen(true); }}
+              onPress={() => { haptic.selection(); setDrawerOpen(true); }}
               style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
             >
               <Ionicons name="menu" size={22} color={colors.onSurface} />
@@ -463,7 +463,7 @@ export default function HomeScreen() {
             </Text>
             <Pressable
               testID="toggle-view-btn"
-              onPress={() => { Haptics.selectionAsync().catch(() => {}); setViewMode((v) => (v === 'grid' ? 'list' : 'grid')); }}
+              onPress={() => { haptic.selection(); setViewMode((v) => (v === 'grid' ? 'list' : 'grid')); }}
               style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
             >
               <Ionicons

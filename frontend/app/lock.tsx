@@ -4,10 +4,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Haptics from 'expo-haptics';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
+import { haptic } from '@/src/state/useAppSettings';
 
 const PASS_KEY = 'galaxynotes:passcode';
 
@@ -32,10 +32,10 @@ export default function LockScreen() {
       return;
     }
     if (newCode.length >= 4 && newCode === stored) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      haptic.success();
       router.replace(`/note/${noteId}`);
     } else if (newCode.length === stored.length) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      haptic.error();
       setError(true);
       setTimeout(() => {
         setCode('');
