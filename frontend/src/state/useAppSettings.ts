@@ -15,6 +15,8 @@ export interface AppSettings {
   palmRejection: boolean;
   // Favourite paper colors for the handwriting prep popup (hex strings, exactly 3).
   favoriteHwColors: string[];
+  // Hide the system status bar (time / battery / signal) for a more immersive view.
+  statusBarHidden: boolean;
 }
 
 const KEY = 'galaxynotes:app-settings';
@@ -26,6 +28,7 @@ const DEFAULTS: AppSettings = {
   toolbarPosition: 'left',
   palmRejection: false,
   favoriteHwColors: ['#FBFAF6', '#F4ECDA', '#FFF4C4'], // White, Cream, Yellow
+  statusBarHidden: false,
 };
 
 let cache: AppSettings | null = null;

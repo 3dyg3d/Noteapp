@@ -130,6 +130,23 @@ export default function SettingsScreen() {
           <ThemeOption value="dark" label="Dark" />
         </View>
 
+        <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginTop: spacing.md }]}>
+          <Ionicons name="phone-portrait-outline" size={22} color={colors.onSurface} />
+          <View style={{ flex: 1, marginLeft: spacing.md }}>
+            <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Hide status bar</Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+              Hide the system bar (time / battery / signal) for an immersive view
+            </Text>
+          </View>
+          <Switch
+            testID="toggle-status-bar"
+            value={settings.statusBarHidden}
+            onValueChange={(v) => update({ statusBarHidden: v })}
+            thumbColor={settings.statusBarHidden ? colors.brand : colors.muted}
+            trackColor={{ false: colors.border, true: colors.brandTertiary }}
+          />
+        </View>
+
         <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>FEEDBACK</Text>
         <View style={[styles.row, { backgroundColor: colors.surfaceSecondary }]}>
           <Ionicons name="phone-portrait-outline" size={22} color={colors.onSurface} />

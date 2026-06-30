@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useIconFonts } from '@/src/hooks/use-icon-fonts';
 import { ThemeProvider, useTheme } from '@/src/theme/ThemeContext';
+import { useAppSettings } from '@/src/state/useAppSettings';
 
 LogBox.ignoreAllLogs(true);
 
@@ -16,9 +17,14 @@ SplashScreen.preventAutoHideAsync();
 
 function ThemedStack() {
   const { isDark, colors } = useTheme();
+  const { settings } = useAppSettings();
   return (
     <>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.surface} />
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.surface}
+        hidden={settings.statusBarHidden}
+      />
       <Stack
         screenOptions={{
           headerShown: false,
