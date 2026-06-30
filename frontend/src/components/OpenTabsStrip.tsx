@@ -4,23 +4,53 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale } from '@/src/theme/tokens';
+import { spacing, typeScale } from '@/src/theme/tokens';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 
 interface Props {
   currentId: string;
+  /** Optional element rendered to the LEFT of the tabs (e.g. back button). */
+  leftSlot?: React.ReactNode;
+  /** Optional element rendered to the RIGHT of the tabs (e.g. more / new tab). */
+  rightSlot?: React.ReactNode;
+  /** Hide the strip when only one tab (or none) is open. Default = false (always show). */
+  hideWhenSingle?: boolean;
 }
 
-export default function OpenTabsStrip({ currentId }: Props) {
+/**
+ * Chrome-style open-tabs strip. Each tab has rounded top corners and a flat
+ * bottom so the active tab visually "merges" with the content below.
+ */
+export default function OpenTabsStrip({
+  currentId,
+  leftSlot,
+  rightSlot,
+  hideWhenSingle = false,
+}: Props) {
   const router = useRouter();
   const { colors } = useTheme();
   const { tabs, closeTab } = useOpenTabs();
 
-  if (tabs.length <= 1) return null;
+  if (hideWhenSingle && tabs.length <= 1) return null;
 
   return (
-    <View style={[styles.wrap, { borderBottomColor: colors.divider, backgroundColor: colors.surface }]}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+    <View
+      style={[
+        styles.wrap,
+        {
+          backgroundColor: colors.surfaceSecondary,
+          borderBottomColor: colors.divider,
+        },
+      ]}
+    >
+      {leftSlot ? <View style={styles.slot}>{leftSlot}</View> : null}
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}
+        style={{ flex: 1 }}
+      >
         {tabs.map((t) => {
           const active = t.id === currentId;
           const route = t.type === 'handwriting' ? `/draw/${t.id}` : `/note/${t.id}`;
@@ -30,15 +60,22 @@ export default function OpenTabsStrip({ currentId }: Props) {
               style={[
                 styles.tab,
                 {
-                  backgroundColor: active ? colors.brandTertiary : colors.surfaceSecondary,
-                  borderColor: active ? colors.brand : 'transparent',
+                  backgroundColor: active ? colors.surface : colors.surfaceTertiary,
+                  // Active tab is "lifted" — slight shadow & no bottom corner
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: -1 },
+                  shadowOpacity: active ? 0.12 : 0,
+                  shadowRadius: active ? 3 : 0,
+                  elevation: active ? 3 : 0,
+                  borderTopColor: active ? colors.brand : 'transparent',
+                  borderTopWidth: 2,
                 },
               ]}
             >
               <Pressable
                 testID={`opentab-${t.id}`}
                 onPress={() => { if (!active) router.replace(route as any); }}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.md, paddingRight: spacing.xs }}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingRight: 4, flex: 1 }}
               >
                 <Ionicons
                   name={t.type === 'handwriting' ? 'brush' : 'document-text'}
@@ -49,8 +86,8 @@ export default function OpenTabsStrip({ currentId }: Props) {
                   numberOfLines={1}
                   style={{
                     marginLeft: 6,
-                    maxWidth: 130,
-                    color: active ? colors.brand : colors.onSurface,
+                    maxWidth: 160,
+                    color: active ? colors.onSurface : colors.onSurfaceSecondary,
                     fontWeight: active ? '700' : '500',
                     fontSize: typeScale.sm,
                   }}
@@ -63,7 +100,6 @@ export default function OpenTabsStrip({ currentId }: Props) {
                 onPress={async () => {
                   await closeTab(t.id);
                   if (active) {
-                    // route to most recent remaining tab, or back home
                     const remaining = tabs.filter((x) => x.id !== t.id);
                     const last = remaining[remaining.length - 1];
                     if (last) router.replace((last.type === 'handwriting' ? `/draw/${last.id}` : `/note/${last.id}`) as any);
@@ -73,31 +109,44 @@ export default function OpenTabsStrip({ currentId }: Props) {
                 style={styles.closeBtn}
                 hitSlop={8}
               >
-                <Ionicons name="close" size={14} color={colors.muted} />
+                <Ionicons name="close" size={14} color={active ? colors.muted : colors.muted} />
               </Pressable>
             </View>
           );
         })}
       </ScrollView>
+
+      {rightSlot ? <View style={styles.slot}>{rightSlot}</View> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
     borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingTop: 4,
   },
   scroll: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    gap: 6,
+    paddingHorizontal: 4,
+    gap: 2,
+    alignItems: 'flex-end',
+  },
+  slot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    height: 40,
   },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 32,
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
+    height: 36,
+    minWidth: 140,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    // Flat bottom — merges with the content area below for Chrome-style look
   },
   closeBtn: {
     paddingHorizontal: 8,

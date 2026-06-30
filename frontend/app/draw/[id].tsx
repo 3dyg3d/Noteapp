@@ -23,6 +23,7 @@ import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/st
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import SkiaPaper from '@/src/components/SkiaPaper';
+import PaperPreview from '@/src/components/PaperPreview';
 
 // ---------- Types ----------
 type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil';
@@ -173,6 +174,11 @@ export default function DrawScreen() {
   const [color, setColor] = useState<string>('#1A1A1C');
   const [widthIdx, setWidthIdx] = useState<0 | 1 | 2>(1);
   const [showPaperMenu, setShowPaperMenu] = useState(false);
+  // Sub-menus opened from the main kebab menu
+  const [showSubColor, setShowSubColor] = useState(false);
+  const [showSubTemplate, setShowSubTemplate] = useState(false);
+  const [showSubSize, setShowSubSize] = useState(false);
+  const [showSubSpacing, setShowSubSpacing] = useState(false);
   const [showToolPalette, setShowToolPalette] = useState(false);
   const [showToolOpts, setShowToolOpts] = useState(false);
   const [showTitleEdit, setShowTitleEdit] = useState(false);
@@ -582,6 +588,10 @@ export default function DrawScreen() {
     setPaperColorId(c);
     persist(items, paper, paperSize, c);
   };
+  const handleSetLineSpacing = (val: number) => {
+    setLineSpacing(val);
+    persist(items, paper, paperSize, paperColorId);
+  };
 
   const updateTitle = () => {
     setShowTitleEdit(false);
@@ -623,38 +633,41 @@ export default function DrawScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: paperColor }}>
-      {/* Top bar */}
-      <View style={[styles.topBar, { paddingTop: insets.top + spacing.xs, backgroundColor: colors.surface + 'ee' }]}>
-        <Pressable onPress={() => router.back()} testID="draw-back" style={styles.topIcon}>
-          <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
-        </Pressable>
-        <Pressable
-          onPress={() => { setTitleDraft(note.title); setShowTitleEdit(true); }}
-          testID="draw-title"
-          style={{ flex: 1, alignItems: 'center' }}
-        >
-          <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '600' }}>
-            {note.title || 'Untitled'}
-          </Text>
-          {saving && <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Saving…</Text>}
-        </Pressable>
-        <Pressable onPress={undo} testID="draw-undo" style={styles.topIcon}>
-          <Ionicons name="arrow-undo" size={22} color={colors.onSurface} />
-        </Pressable>
-        <Pressable onPress={redo} testID="draw-redo" style={styles.topIcon}>
-          <Ionicons name="arrow-redo" size={22} color={colors.onSurface} />
-        </Pressable>
-        {scale !== 1 && (
-          <Pressable onPress={resetZoom} testID="draw-reset-zoom" style={[styles.zoomPill, { backgroundColor: colors.brand }]}>
-            <Text style={{ color: colors.onBrandPrimary, fontWeight: '700', fontSize: 12 }}>{Math.round(scale * 100)}%</Text>
-          </Pressable>
-        )}
-        <Pressable onPress={() => setShowPaperMenu(true)} testID="draw-more" style={styles.topIcon}>
-          <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
-        </Pressable>
+      {/* Chrome-style tabs row with back arrow inline */}
+      <View style={{ paddingTop: insets.top, backgroundColor: colors.surfaceSecondary }}>
+        <OpenTabsStrip
+          currentId={id as string}
+          leftSlot={
+            <Pressable
+              testID="draw-back"
+              onPress={() => router.back()}
+              style={styles.tabsRowIcon}
+              hitSlop={6}
+            >
+              <Ionicons name="chevron-back" size={24} color={colors.onSurface} />
+            </Pressable>
+          }
+          rightSlot={
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+              {saving && (
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginRight: 4 }}>
+                  Saving…
+                </Text>
+              )}
+              {scale !== 1 && (
+                <Pressable onPress={resetZoom} testID="draw-reset-zoom" style={[styles.zoomPill, { backgroundColor: colors.brand }]}>
+                  <Text style={{ color: colors.onBrandPrimary, fontWeight: '700', fontSize: 12 }}>
+                    {Math.round(scale * 100)}%
+                  </Text>
+                </Pressable>
+              )}
+              <Pressable onPress={() => setShowPaperMenu(true)} testID="draw-more" style={styles.tabsRowIcon} hitSlop={6}>
+                <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
+              </Pressable>
+            </View>
+          }
+        />
       </View>
-
-      <OpenTabsStrip currentId={id as string} />
 
       {/* Canvas */}
       <View
@@ -881,124 +894,391 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
-      {/* More menu — Paper sheet with Size + Template + Color */}
-      <Modal visible={showPaperMenu} transparent animationType="slide" onRequestClose={() => setShowPaperMenu(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setShowPaperMenu(false)}>
+      {/* More menu — clean iOS-style list */}
+      <Modal visible={showPaperMenu} transparent animationType="fade" onRequestClose={() => setShowPaperMenu(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowPaperMenu(false)}
+        >
           <Pressable
-            style={[
-              styles.sheet,
-              {
-                backgroundColor: colors.surface,
-                paddingBottom: insets.bottom + spacing.lg,
-                maxHeight: '85%',
-              },
-            ]}
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 400,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              paddingVertical: spacing.sm,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
           >
-            <View style={styles.sheetHandle} />
-            <ScrollView>
-              {/* SIZE */}
-              <Text style={[styles.paperSectionTitle, { color: colors.muted }]}>PAPER SIZE</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm, paddingHorizontal: 2 }}>
-                {(Object.keys(PAPER_SIZES) as PaperSize[]).map((s) => (
+            <Text
+              style={{
+                color: colors.muted,
+                fontSize: typeScale.sm,
+                fontWeight: '700',
+                letterSpacing: 1.2,
+                paddingHorizontal: spacing.lg,
+                paddingTop: spacing.sm,
+                paddingBottom: spacing.xs,
+              }}
+            >
+              PAGE
+            </Text>
+            <DrawMenuRow
+              icon="color-palette-outline"
+              label="Page color"
+              valueSwatch={paperColor}
+              onPress={() => { setShowPaperMenu(false); setShowSubColor(true); }}
+              testID="draw-menu-color"
+            />
+            <DrawMenuRow
+              icon="grid-outline"
+              label="Page template"
+              valueText={paper === 'blank' ? 'Blank' : paper.charAt(0).toUpperCase() + paper.slice(1)}
+              onPress={() => { setShowPaperMenu(false); setShowSubTemplate(true); }}
+              testID="draw-menu-template"
+            />
+            <DrawMenuRow
+              icon="resize-outline"
+              label="Page size"
+              valueText={PAPER_SIZES[(paperSize === 'custom' ? 'fit' : paperSize) as Exclude<PaperSize, 'custom'>]?.label || 'Fit'}
+              onPress={() => { setShowPaperMenu(false); setShowSubSize(true); }}
+              testID="draw-menu-size"
+            />
+            {(paper === 'ruled' || paper === 'narrow' || paper === 'grid' || paper === 'dotted' || paper === 'cornell' || paper === 'planner' || paper === 'todo') && (
+              <DrawMenuRow
+                icon="reorder-four-outline"
+                label="Line spacing"
+                valueText={`${lineSpacing ?? 28}px`}
+                onPress={() => { setShowPaperMenu(false); setShowSubSpacing(true); }}
+                testID="draw-menu-spacing"
+              />
+            )}
+
+            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm, marginHorizontal: spacing.lg }} />
+
+            <Text
+              style={{
+                color: colors.muted,
+                fontSize: typeScale.sm,
+                fontWeight: '700',
+                letterSpacing: 1.2,
+                paddingHorizontal: spacing.lg,
+                paddingBottom: spacing.xs,
+              }}
+            >
+              NOTE
+            </Text>
+            <DrawMenuRow
+              icon="create-outline"
+              label="Rename"
+              onPress={() => { setShowPaperMenu(false); setTitleDraft(note.title); setShowTitleEdit(true); }}
+              testID="draw-menu-rename"
+            />
+            <DrawMenuRow
+              icon="arrow-undo-outline"
+              label="Undo"
+              onPress={() => { setShowPaperMenu(false); undo(); }}
+              testID="draw-menu-undo"
+            />
+            <DrawMenuRow
+              icon="arrow-redo-outline"
+              label="Redo"
+              onPress={() => { setShowPaperMenu(false); redo(); }}
+              testID="draw-menu-redo"
+            />
+            <DrawMenuRow
+              icon="refresh"
+              label="Clear canvas"
+              onPress={() => { setShowPaperMenu(false); clearAll(); }}
+              testID="draw-menu-clear"
+            />
+            <DrawMenuRow
+              icon="trash-outline"
+              label="Move to trash"
+              destructive
+              onPress={() => { setShowPaperMenu(false); exitDelete(); }}
+              testID="draw-menu-delete"
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* SUB: Page color */}
+      <Modal visible={showSubColor} transparent animationType="fade" onRequestClose={() => setShowSubColor(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowSubColor(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Pressable onPress={() => { setShowSubColor(false); setShowPaperMenu(true); }} hitSlop={6}>
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+              </Pressable>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+                Page color
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'center' }}>
+              {PAPER_COLORS.map((c) => {
+                const swatch = c.light;
+                const active =
+                  paperColorId === c.id ||
+                  paperColorId.toLowerCase() === c.light.toLowerCase();
+                return (
                   <Pressable
-                    key={s}
-                    onPress={() => handleSetSize(s)}
-                    testID={`size-${s}`}
+                    key={c.id}
+                    onPress={() => { handleSetColor(c.light); haptic.selection(); }}
+                    testID={`sub-color-${c.id}`}
                     style={{
-                      paddingHorizontal: spacing.lg,
-                      paddingVertical: spacing.sm,
-                      borderRadius: radius.pill,
-                      backgroundColor: paperSize === s ? colors.brand : colors.surfaceSecondary,
+                      width: 56,
+                      height: 56,
+                      borderRadius: 28,
+                      backgroundColor: swatch,
+                      borderWidth: active ? 3 : 1,
+                      borderColor: active ? colors.brand : colors.border,
+                      alignItems: 'center',
+                      justifyContent: 'center',
                     }}
                   >
-                    <Text
+                    {active && <Ionicons name="checkmark" size={22} color={colors.brand} />}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* SUB: Page template */}
+      <Modal visible={showSubTemplate} transparent animationType="fade" onRequestClose={() => setShowSubTemplate(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowSubTemplate(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 520,
+              maxHeight: '80%',
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Pressable onPress={() => { setShowSubTemplate(false); setShowPaperMenu(true); }} hitSlop={6}>
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+              </Pressable>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+                Page template
+              </Text>
+            </View>
+            <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, justifyContent: 'center' }}>
+              {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
+                const active = paper === t;
+                return (
+                  <Pressable
+                    key={t}
+                    onPress={() => { handleSetPaper(t); haptic.selection(); }}
+                    testID={`sub-template-${t}`}
+                    style={{ alignItems: 'center' }}
+                  >
+                    <View
                       style={{
-                        color: paperSize === s ? colors.onBrandPrimary : colors.onSurface,
-                        fontWeight: paperSize === s ? '700' : '500',
+                        padding: 4,
+                        borderRadius: radius.md,
+                        backgroundColor: active ? colors.brandTertiary : 'transparent',
+                        borderWidth: 2,
+                        borderColor: active ? colors.brand : colors.border,
                       }}
                     >
+                      <PaperPreview
+                        type={t}
+                        width={86}
+                        height={112}
+                        color={paperColor}
+                        lineColor={paperLine}
+                        borderRadius={6}
+                      />
+                    </View>
+                    <Text
+                      style={{
+                        marginTop: 6,
+                        color: active ? colors.brand : colors.onSurface,
+                        fontWeight: active ? '700' : '500',
+                        fontSize: typeScale.sm,
+                      }}
+                    >
+                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* SUB: Page size */}
+      <Modal visible={showSubSize} transparent animationType="fade" onRequestClose={() => setShowSubSize(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowSubSize(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Pressable onPress={() => { setShowSubSize(false); setShowPaperMenu(true); }} hitSlop={6}>
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+              </Pressable>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+                Page size
+              </Text>
+            </View>
+            <View style={{ gap: spacing.sm }}>
+              {(Object.keys(PAPER_SIZES) as Exclude<PaperSize, 'custom'>[]).map((s) => {
+                const active = paperSize === s;
+                return (
+                  <Pressable
+                    key={s}
+                    onPress={() => { handleSetSize(s); haptic.selection(); }}
+                    testID={`sub-size-${s}`}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: spacing.md,
+                      borderRadius: radius.md,
+                      backgroundColor: active
+                        ? colors.brandTertiary
+                        : pressed
+                        ? colors.surfaceTertiary
+                        : colors.surfaceSecondary,
+                    })}
+                  >
+                    <Ionicons
+                      name={active ? 'radio-button-on' : 'radio-button-off'}
+                      size={20}
+                      color={active ? colors.brand : colors.muted}
+                    />
+                    <Text style={{ flex: 1, marginLeft: spacing.md, fontSize: typeScale.lg, color: colors.onSurface, fontWeight: active ? '700' : '500' }}>
                       {PAPER_SIZES[s].label}
                     </Text>
                   </Pressable>
-                ))}
-              </ScrollView>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
-              {/* TEMPLATE */}
-              <Text style={[styles.paperSectionTitle, { color: colors.muted, marginTop: spacing.lg }]}>
-                TEMPLATE
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-                {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as Paper[]).map((p) => (
-                  <PaperOption key={p} type={p} active={paper === p} onPress={() => handleSetPaper(p)} testID={`paper-${p}`} />
-                ))}
-              </View>
-
-              {/* COLOR */}
-              <Text style={[styles.paperSectionTitle, { color: colors.muted, marginTop: spacing.lg }]}>
-                COLOR
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
-                {PAPER_COLORS.map((c) => {
-                  const swatch = c.light;
-                  const active =
-                    paperColorId === c.id ||
-                    paperColorId.toLowerCase() === c.light.toLowerCase();
-                  return (
-                    <Pressable
-                      key={c.id}
-                      onPress={() => handleSetColor(c.light)}
-                      testID={`paper-color-${c.id}`}
-                      style={{
-                        width: 44,
-                        height: 44,
-                        borderRadius: 22,
-                        backgroundColor: swatch,
-                        borderWidth: active ? 3 : 1,
-                        borderColor: active ? colors.brand : colors.border,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      {active && <Ionicons name="checkmark" size={18} color={colors.brand} />}
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              <View style={{ height: spacing.lg }} />
-              <Pressable
-                testID="draw-clear"
-                onPress={() => {
-                  clearAll();
-                  setShowPaperMenu(false);
-                }}
-                style={({ pressed }) => [
-                  styles.menuRow,
-                  { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary },
-                ]}
-              >
-                <Ionicons name="refresh" size={20} color={colors.onSurface} />
-                <Text style={{ marginLeft: spacing.md, color: colors.onSurface, fontSize: typeScale.lg }}>
-                  Clear canvas
-                </Text>
+      {/* SUB: Line spacing */}
+      <Modal visible={showSubSpacing} transparent animationType="fade" onRequestClose={() => setShowSubSpacing(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowSubSpacing(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Pressable onPress={() => { setShowSubSpacing(false); setShowPaperMenu(true); }} hitSlop={6}>
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
               </Pressable>
-              <Pressable
-                testID="draw-delete-note"
-                onPress={() => {
-                  setShowPaperMenu(false);
-                  exitDelete();
-                }}
-                style={({ pressed }) => [
-                  styles.menuRow,
-                  { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary, marginTop: spacing.sm },
-                ]}
-              >
-                <Ionicons name="trash-outline" size={20} color={colors.error} />
-                <Text style={{ marginLeft: spacing.md, color: colors.error, fontSize: typeScale.lg }}>
-                  Move to trash
-                </Text>
-              </Pressable>
-            </ScrollView>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+                Line spacing
+              </Text>
+            </View>
+            <View style={{ gap: spacing.sm }}>
+              {[
+                { val: 16, label: 'Tight' },
+                { val: 22, label: 'Narrow' },
+                { val: 28, label: 'Normal' },
+                { val: 36, label: 'Wide' },
+                { val: 48, label: 'X-Wide' },
+              ].map((opt) => {
+                const active = (lineSpacing ?? 28) === opt.val;
+                return (
+                  <Pressable
+                    key={opt.val}
+                    onPress={() => { handleSetLineSpacing(opt.val); haptic.selection(); }}
+                    testID={`sub-spacing-${opt.val}`}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: spacing.md,
+                      borderRadius: radius.md,
+                      backgroundColor: active
+                        ? colors.brandTertiary
+                        : pressed
+                        ? colors.surfaceTertiary
+                        : colors.surfaceSecondary,
+                    })}
+                  >
+                    <Ionicons
+                      name={active ? 'radio-button-on' : 'radio-button-off'}
+                      size={20}
+                      color={active ? colors.brand : colors.muted}
+                    />
+                    <Text style={{ flex: 1, marginLeft: spacing.md, fontSize: typeScale.lg, color: colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                      {opt.label}
+                    </Text>
+                    <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600' }}>
+                      {opt.val}px
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1043,6 +1323,64 @@ export default function DrawScreen() {
 }
 
 // ----- Subcomponents -----
+function DrawMenuRow({
+  icon,
+  label,
+  onPress,
+  valueText,
+  valueSwatch,
+  destructive,
+  testID,
+}: {
+  icon: any;
+  label: string;
+  onPress: () => void;
+  valueText?: string;
+  valueSwatch?: string;
+  destructive?: boolean;
+  testID?: string;
+}) {
+  const { colors } = useTheme();
+  const tint = destructive ? colors.error : colors.onSurface;
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: spacing.md,
+        paddingHorizontal: spacing.lg,
+        backgroundColor: pressed ? colors.surfaceSecondary : 'transparent',
+      })}
+    >
+      <Ionicons name={icon} size={20} color={tint} />
+      <Text style={{ flex: 1, marginLeft: spacing.md, fontSize: typeScale.lg, color: tint, fontWeight: '500' }}>
+        {label}
+      </Text>
+      {valueSwatch ? (
+        <View
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: valueSwatch,
+            borderWidth: 1,
+            borderColor: colors.border,
+            marginRight: 6,
+          }}
+        />
+      ) : null}
+      {valueText ? (
+        <Text style={{ color: colors.muted, fontSize: typeScale.base, marginRight: 6 }}>
+          {valueText}
+        </Text>
+      ) : null}
+      {!destructive && <Ionicons name="chevron-forward" size={16} color={colors.muted} />}
+    </Pressable>
+  );
+}
+
 function ToolBtn({
   icon,
   label,
@@ -1372,6 +1710,13 @@ const styles = StyleSheet.create({
     height: 40,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  tabsRowIcon: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 18,
   },
   zoomPill: {
     height: 28,

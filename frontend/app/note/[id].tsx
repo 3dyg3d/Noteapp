@@ -201,42 +201,47 @@ export default function NoteEditor() {
       style={{ flex: 1, backgroundColor: colors.surface }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Top bar */}
-      <View
-        style={[
-          styles.topBar,
-          {
-            paddingTop: insets.top + spacing.xs,
-            backgroundColor: colors.surface,
-            borderBottomColor: colors.divider,
-          },
-        ]}
-      >
-        <Pressable testID="back-btn" onPress={() => router.back()} style={styles.iconBtn}>
-          <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
-        </Pressable>
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          {saving ? (
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Saving…</Text>
-          ) : (
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>
-              {currentFolder?.name || 'No folder'}
-            </Text>
-          )}
-        </View>
-        <Pressable testID="pin-btn" onPress={togglePin} style={styles.iconBtn}>
-          <Ionicons
-            name={note.pinned ? 'pin' : 'pin-outline'}
-            size={22}
-            color={note.pinned ? colors.brand : colors.onSurface}
-          />
-        </Pressable>
-        <Pressable testID="more-btn" onPress={() => setShowMore(true)} style={styles.iconBtn}>
-          <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
-        </Pressable>
+      {/* Chrome-style tabs row with back arrow inline */}
+      <View style={{ paddingTop: insets.top, backgroundColor: colors.surfaceSecondary }}>
+        <OpenTabsStrip
+          currentId={id as string}
+          leftSlot={
+            <Pressable
+              testID="back-btn"
+              onPress={() => router.back()}
+              style={{
+                width: 36,
+                height: 36,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 18,
+              }}
+              hitSlop={6}
+            >
+              <Ionicons name="chevron-back" size={24} color={colors.onSurface} />
+            </Pressable>
+          }
+          rightSlot={
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+              {saving && (
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginRight: 4 }}>
+                  Saving…
+                </Text>
+              )}
+              <Pressable testID="pin-btn" onPress={togglePin} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
+                <Ionicons
+                  name={note.pinned ? 'pin' : 'pin-outline'}
+                  size={20}
+                  color={note.pinned ? colors.brand : colors.onSurface}
+                />
+              </Pressable>
+              <Pressable testID="more-btn" onPress={() => setShowMore(true)} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
+                <Ionicons name="ellipsis-vertical" size={20} color={colors.onSurface} />
+              </Pressable>
+            </View>
+          }
+        />
       </View>
-
-      <OpenTabsStrip currentId={id as string} />
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160 }}
