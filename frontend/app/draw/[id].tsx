@@ -408,17 +408,45 @@ export default function DrawScreen() {
     y: (y - ty) / scale,
   });
 
+  // Track whether the active touch is from a stylus / S-Pen vs a finger.
+  // We set this in onTouchesDown and consult it in every callback so palm
+  // rejection works even when pointerType is not reported (some Android builds).
+  const isStylusRef = useRef<boolean>(true);
+
   const pan = Gesture.Pan()
     .runOnJS(true)
     .minDistance(0)
     .maxPointers(1)
+    .onTouchesDown((event, manager) => {
+      const touch: any = event.allTouches?.[0];
+      // Android exposes `toolType` per-touch: 1=finger, 2=stylus, 3=mouse, 4=eraser.
+      // iOS / web fall back to `pointerType` on the event: 'touch' = finger, 'stylus' / 'pen'.
+      const toolType: number | undefined = touch?.toolType;
+      const pointerType: string | undefined = (event as any).pointerType;
+      const isFinger =
+        toolType === 1 ||
+        (toolType === undefined && pointerType === 'touch');
+      const isStylus =
+        toolType === 2 ||
+        toolType === 4 ||
+        pointerType === 'stylus' ||
+        pointerType === 'pen';
+      // When palm rejection is on and the touch is clearly a finger, abort the gesture entirely.
+      if (settings.palmRejection && isFinger) {
+        isStylusRef.current = false;
+        manager.fail();
+        return;
+      }
+      // Otherwise mark whether this is a stylus (or unknown -> treat as drawable so we don't
+      // accidentally block real input on devices that don't report toolType).
+      isStylusRef.current = isStylus || (toolType === undefined && pointerType === undefined);
+    })
     .onBegin((e) => {
-      const w = toWorld(e.x, e.y);
-      // Palm rejection: touch input is ignored entirely (S Pen / stylus draws normally).
-      if (settings.palmRejection && (e as any).pointerType === 'touch') {
+      if (settings.palmRejection && !isStylusRef.current) {
         livePtsRef.current = [];
         return;
       }
+      const w = toWorld(e.x, e.y);
       if (isPenTool(tool)) {
         livePtsRef.current = [{ x: w.x, y: w.y, t: Date.now() }];
         setLiveTick((n) => n + 1);
@@ -431,11 +459,8 @@ export default function DrawScreen() {
       }
     })
     .onUpdate((e) => {
+      if (settings.palmRejection && !isStylusRef.current) return;
       const w = toWorld(e.x, e.y);
-      // Palm rejection: skip touch updates entirely.
-      if (settings.palmRejection && (e as any).pointerType === 'touch' && livePtsRef.current.length === 0) {
-        return;
-      }
       if (isPenTool(tool)) {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
         if (!last) return;
@@ -451,6 +476,12 @@ export default function DrawScreen() {
       }
     })
     .onEnd(() => {
+      if (settings.palmRejection && !isStylusRef.current) {
+        livePtsRef.current = [];
+        liveShapeRef.current = null;
+        setLiveTick((n) => n + 1);
+        return;
+      }
       if (isPenTool(tool)) {
         finalizeStroke(livePtsRef.current);
         livePtsRef.current = [];

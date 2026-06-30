@@ -116,7 +116,7 @@ frontend:
     implemented: true
     working: "NA"
     file: "/app/frontend/app/draw/[id].tsx"
-    stuck_count: 0
+    stuck_count: 1
     priority: "high"
     needs_retesting: true
     status_history:
@@ -129,6 +129,21 @@ frontend:
             touch events when palmRejection is true, so toggling this button from the toolbar must
             now make finger drags inert while S Pen/stylus continues to draw.
             testID for the new button: `tool-pen-mode`.
+        - working: "NA"
+          agent: "main"
+          comment: |
+            User reported "I'm still able to write with my hands" even after enabling Pen only mode.
+            Rewrote the Pan gesture in `/app/frontend/app/draw/[id].tsx` to use react-native-gesture-handler's
+            `onTouchesDown((event, manager) => ...)` API for reliable cross-platform tool detection:
+              - Reads `event.allTouches[0].toolType` (Android: 1=finger, 2=stylus, 3=mouse, 4=eraser).
+              - Falls back to `event.pointerType` ('touch' / 'stylus' / 'pen') for iOS / web.
+              - When palmRejection is on and the touch is a finger, calls `manager.fail()` to
+                cancel the gesture immediately so onBegin/onUpdate/onEnd never fire and no stroke
+                is created.
+              - A new `isStylusRef` is set in onTouchesDown and consulted in onBegin / onUpdate /
+                onEnd as a safety net so already-running strokes are also discarded if needed.
+            This replaces the earlier `pointerType === 'touch'` check that didn't work reliably on
+            Android (some devices/builds didn't populate that field on Pan events).
 
   - task: "Zoom stays centered on the canvas"
     implemented: true
