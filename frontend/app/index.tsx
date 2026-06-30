@@ -328,11 +328,13 @@ export default function HomeScreen() {
               h: Math.max(200, Math.min(8000, parseInt(hwCustomH, 10) || 1366)),
             }
           : undefined;
+      const pickedHex =
+        HW_PAPER_COLORS.find((c) => c.id === hwPaperColor)?.hex || '#FBFAF6';
       const drawing_data = JSON.stringify({
         paper: hwTemplate,
         paperSize: hwSize,
         customSize,
-        paperColor: hwPaperColor,
+        paperColor: pickedHex, // store the hex directly so the draw screen honors it verbatim
         lineSpacing: hwSupportsSpacing(hwTemplate) ? hwLineSpacing : undefined,
         items: [],
       });

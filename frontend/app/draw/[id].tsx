@@ -562,12 +562,28 @@ export default function DrawScreen() {
     return null;
   })();
 
-  // Paper background colors
-  const paperColor =
-    PAPER_COLORS.find((c) => c.id === paperColorId)?.[isDark ? 'dark' : 'light'] ||
-    (isDark ? '#0a0a0a' : '#FBFAF6');
-  const isDarkPaper = ['black'].includes(paperColorId) || isDark;
-  const paperLine = isDarkPaper ? '#3a3a3c' : '#D1CDC2';
+  // Paper background colors.
+  // We honor whatever the user picked verbatim — if `paperColorId` is a hex value
+  // (newly-created notes store the hex directly), use it. Otherwise fall back to the
+  // legacy lookup. This avoids the theme switching the picked color into something
+  // else (the cream→dark-brown bug).
+  const paperColor = (() => {
+    if (paperColorId.startsWith('#')) return paperColorId;
+    const entry = PAPER_COLORS.find((c) => c.id === paperColorId);
+    if (entry) return entry.light;
+    return isDark ? '#0a0a0a' : '#FBFAF6';
+  })();
+  // Auto-pick a readable line color based on the paper's perceived brightness.
+  const paperLuminance = (() => {
+    const hex = paperColor.replace('#', '');
+    if (hex.length < 6) return 1;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  })();
+  const isDarkPaper = paperLuminance < 0.45;
+  const paperLine = isDarkPaper ? '#5a5a5e' : '#C9C2B0';
 
   const handleSetPaper = (p: Paper) => {
     setPaper(p);
@@ -938,12 +954,14 @@ export default function DrawScreen() {
               </Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
                 {PAPER_COLORS.map((c) => {
-                  const swatch = isDark ? c.dark : c.light;
-                  const active = paperColorId === c.id;
+                  const swatch = c.light;
+                  const active =
+                    paperColorId === c.id ||
+                    paperColorId.toLowerCase() === c.light.toLowerCase();
                   return (
                     <Pressable
                       key={c.id}
-                      onPress={() => handleSetColor(c.id)}
+                      onPress={() => handleSetColor(c.light)}
                       testID={`paper-color-${c.id}`}
                       style={{
                         width: 44,
