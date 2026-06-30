@@ -171,7 +171,12 @@ export default function HomeScreen() {
   const [showSortMenu, setShowSortMenu] = useState(false);
 
   // Modals
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const isTablet = winW >= 720;
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(() => winW >= 720);
+  const closeDrawerIfPhone = useCallback(() => {
+    if (!isTablet) setDrawerOpen(false);
+  }, [isTablet]);
+  const SIDEBAR_WIDTH = 300;
   const [showTemplate, setShowTemplate] = useState(false);
   const [showMovePicker, setShowMovePicker] = useState(false);
   const [folderModal, setFolderModal] = useState<{
@@ -564,8 +569,163 @@ export default function HomeScreen() {
 
   const isEmpty = !loading && notes.length === 0;
 
+  // Shared drawer body (used by both the inline sidebar and the phone modal)
+  const drawerInner = (
+    <>
+      <Text style={[styles.drawerBrand, { color: colors.brand }]}>GalaxyNotes</Text>
+      <Text style={[styles.drawerSub, { color: colors.muted }]}>Your second brain</Text>
+
+      <View style={{ height: spacing.lg }} />
+
+      <DrawerRow
+        icon="document-text-outline"
+        label="All notes"
+        active={category === 'all'}
+        onPress={() => { setCategory('all'); closeDrawerIfPhone(); }}
+        testID="drawer-all"
+      />
+      <DrawerRow
+        icon="star-outline"
+        label="Favorites"
+        active={category === 'pinned'}
+        onPress={() => { setCategory('pinned'); closeDrawerIfPhone(); }}
+        testID="drawer-pinned"
+      />
+      <DrawerRow
+        icon="time-outline"
+        label="Recents"
+        active={category === 'recent'}
+        onPress={() => { setCategory('recent'); closeDrawerIfPhone(); }}
+        testID="drawer-recent"
+      />
+      <DrawerRow
+        icon="grid-outline"
+        label="Folders"
+        active={category === 'folders'}
+        onPress={() => { setCategory('folders'); closeDrawerIfPhone(); }}
+        testID="drawer-folders-view"
+      />
+      <DrawerRow
+        icon="trash-outline"
+        label="Trash"
+        active={category === 'trash'}
+        onPress={() => { setCategory('trash'); closeDrawerIfPhone(); }}
+        testID="drawer-trash"
+      />
+
+      <View style={styles.drawerSectionRow}>
+        <Text style={[styles.drawerSection, { color: colors.muted }]}>FOLDERS</Text>
+        <Pressable
+          testID="drawer-new-folder"
+          onPress={() => setFolderModal({ parentId: null })}
+          style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
+        >
+          <Ionicons name="add" size={16} color={colors.brand} />
+          <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
+            New
+          </Text>
+        </Pressable>
+      </View>
+
+      <ScrollView style={{ flex: 1 }}>
+        {folders.length === 0 && (
+          <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+            No folders yet. Tap "New" to create one.
+          </Text>
+        )}
+        {visibleTree.map(({ folder: f, depth, hasChildren }) => {
+          const isOpen = expanded.has(f.id);
+          const isActive = category === f.id;
+          return (
+            <View key={f.id} style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: depth * 18 }}>
+              <Pressable
+                onPress={() => toggleExpand(f.id)}
+                style={styles.expandBtn}
+                testID={`drawer-expand-${f.id}`}
+              >
+                <Ionicons
+                  name={hasChildren ? (isOpen ? 'chevron-down' : 'chevron-forward') : 'remove'}
+                  size={14}
+                  color={hasChildren ? colors.onSurface : 'transparent'}
+                />
+              </Pressable>
+              <Pressable
+                testID={`drawer-folder-${f.id}`}
+                onPress={() => { setCategory(f.id); closeDrawerIfPhone(); }}
+                onLongPress={() => setFolderModal({ parentId: f.parent_id, folder: f })}
+                delayLongPress={350}
+                style={({ pressed }) => [
+                  styles.drawerRow,
+                  {
+                    flex: 1,
+                    backgroundColor: isActive
+                      ? colors.brandTertiary
+                      : pressed
+                      ? colors.surfaceSecondary
+                      : 'transparent',
+                  },
+                ]}
+              >
+                <View style={[styles.folderDot, { backgroundColor: f.color, marginRight: spacing.md }]} />
+                <Text
+                  numberOfLines={1}
+                  style={{
+                    flex: 1,
+                    fontSize: typeScale.lg,
+                    fontWeight: isActive ? '700' : '500',
+                    color: isActive ? colors.brand : colors.onSurface,
+                  }}
+                >
+                  {f.name}
+                </Text>
+              </Pressable>
+              <Pressable
+                testID={`drawer-subfolder-${f.id}`}
+                onPress={() => setFolderModal({ parentId: f.id })}
+                style={styles.iconBtnSmall}
+              >
+                <Ionicons name="add" size={18} color={colors.muted} />
+              </Pressable>
+            </View>
+          );
+        })}
+      </ScrollView>
+
+      <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.sm, paddingHorizontal: spacing.md }}>
+        Tip: long-press a folder to edit or delete.
+      </Text>
+
+      <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm }} />
+      <DrawerRow
+        icon="settings-outline"
+        label="Settings"
+        onPress={() => { closeDrawerIfPhone(); router.push('/settings'); }}
+        testID="drawer-settings"
+      />
+    </>
+  );
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.surface }]}>
+    <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.surface }}>
+      {/* Persistent inline sidebar on tablets */}
+      {isTablet && drawerOpen && (
+        <View
+          testID="inline-sidebar"
+          style={{
+            width: SIDEBAR_WIDTH,
+            backgroundColor: colors.surface,
+            borderRightWidth: StyleSheet.hairlineWidth,
+            borderRightColor: colors.divider,
+            paddingHorizontal: spacing.lg,
+            paddingTop: insets.top + spacing.lg,
+            paddingBottom: insets.bottom + spacing.lg,
+          }}
+        >
+          {drawerInner}
+        </View>
+      )}
+
+      <View style={[styles.container, { backgroundColor: colors.surface }]}>
       {/* Sticky header */}
       <BlurView
         intensity={isDark ? 40 : 60}
@@ -904,163 +1064,34 @@ export default function HomeScreen() {
 
       {/* Bulk action bar (moved to top header — see selection mode) */}
 
-      {/* Left drawer */}
-      <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
-        <Pressable style={styles.drawerBackdrop} onPress={() => setDrawerOpen(false)}>
-          <Pressable
-            style={[styles.drawerPanel, { backgroundColor: colors.surface, paddingTop: insets.top + spacing.lg }]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <Text style={[styles.drawerBrand, { color: colors.brand }]}>GalaxyNotes</Text>
-            <Text style={[styles.drawerSub, { color: colors.muted }]}>Your second brain</Text>
-
-            <View style={{ height: spacing.lg }} />
-
-            <DrawerRow
-              icon="document-text-outline"
-              label="All notes"
-              active={category === 'all'}
-              onPress={() => { setCategory('all'); setDrawerOpen(false); }}
-              testID="drawer-all"
-            />
-            <DrawerRow
-              icon="star-outline"
-              label="Favorites"
-              active={category === 'pinned'}
-              onPress={() => { setCategory('pinned'); setDrawerOpen(false); }}
-              testID="drawer-pinned"
-            />
-            <DrawerRow
-              icon="time-outline"
-              label="Recents"
-              active={category === 'recent'}
-              onPress={() => { setCategory('recent'); setDrawerOpen(false); }}
-              testID="drawer-recent"
-            />
-            <DrawerRow
-              icon="grid-outline"
-              label="Folders"
-              active={category === 'folders'}
-              onPress={() => { setCategory('folders'); setDrawerOpen(false); }}
-              testID="drawer-folders-view"
-            />
-            <DrawerRow
-              icon="trash-outline"
-              label="Trash"
-              active={category === 'trash'}
-              onPress={() => { setCategory('trash'); setDrawerOpen(false); }}
-              testID="drawer-trash"
-            />
-
-            <View style={styles.drawerSectionRow}>
-              <Text style={[styles.drawerSection, { color: colors.muted }]}>FOLDERS</Text>
-              <Pressable
-                testID="drawer-new-folder"
-                onPress={() => setFolderModal({ parentId: null })}
-                style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
-              >
-                <Ionicons name="add" size={16} color={colors.brand} />
-                <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
-                  New
-                </Text>
-              </Pressable>
-            </View>
-
-            <ScrollView style={{ maxHeight: 360 }}>
-              {folders.length === 0 && (
-                <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
-                  No folders yet. Tap "New" to create one.
-                </Text>
-              )}
-              {visibleTree.map(({ folder: f, depth, hasChildren }) => {
-                const isOpen = expanded.has(f.id);
-                const isActive = category === f.id;
-                return (
-                  <View key={f.id} style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: depth * 18 }}>
-                    <Pressable
-                      onPress={() => toggleExpand(f.id)}
-                      style={styles.expandBtn}
-                      testID={`drawer-expand-${f.id}`}
-                    >
-                      <Ionicons
-                        name={hasChildren ? (isOpen ? 'chevron-down' : 'chevron-forward') : 'remove'}
-                        size={14}
-                        color={hasChildren ? colors.onSurface : 'transparent'}
-                      />
-                    </Pressable>
-                    <Pressable
-                      testID={`drawer-folder-${f.id}`}
-                      onPress={() => { setCategory(f.id); setDrawerOpen(false); }}
-                      onLongPress={() => setFolderModal({ parentId: f.parent_id, folder: f })}
-                      delayLongPress={350}
-                      style={({ pressed }) => [
-                        styles.drawerRow,
-                        {
-                          flex: 1,
-                          backgroundColor: isActive
-                            ? colors.brandTertiary
-                            : pressed
-                            ? colors.surfaceSecondary
-                            : 'transparent',
-                        },
-                      ]}
-                    >
-                      <View style={[styles.folderDot, { backgroundColor: f.color, marginRight: spacing.md }]} />
-                      <Text
-                        numberOfLines={1}
-                        style={{
-                          flex: 1,
-                          fontSize: typeScale.lg,
-                          fontWeight: isActive ? '700' : '500',
-                          color: isActive ? colors.brand : colors.onSurface,
-                        }}
-                      >
-                        {f.name}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      testID={`drawer-subfolder-${f.id}`}
-                      onPress={() => setFolderModal({ parentId: f.id })}
-                      style={styles.iconBtnSmall}
-                    >
-                      <Ionicons name="add" size={18} color={colors.muted} />
-                    </Pressable>
-                  </View>
-                );
-              })}
-            </ScrollView>
-
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.sm, paddingHorizontal: spacing.md }}>
-              Tip: long-press a folder to edit or delete.
-            </Text>
-
-            <View style={{ flex: 1, minHeight: spacing.md }} />
-            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm }} />
-            <DrawerRow
-              icon="settings-outline"
-              label="Settings"
-              onPress={() => { setDrawerOpen(false); router.push('/settings'); }}
-              testID="drawer-settings"
-            />
-            <View style={{ height: insets.bottom + spacing.sm }} />
+      {/* Left drawer (phone only — overlay modal) */}
+      {!isTablet && (
+        <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
+          <Pressable style={styles.drawerBackdrop} onPress={() => setDrawerOpen(false)}>
+            <Pressable
+              style={[styles.drawerPanel, { backgroundColor: colors.surface, paddingTop: insets.top + spacing.lg }]}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {drawerInner}
+              <View style={{ height: insets.bottom + spacing.sm }} />
+            </Pressable>
           </Pressable>
-        </Pressable>
-      </Modal>
+        </Modal>
+      )}
 
-      {/* Template picker — anchored above the FAB */}
+      {/* Template picker — centered modal */}
       <Modal visible={showTemplate} transparent animationType="fade" onRequestClose={() => setShowTemplate(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setShowTemplate(false)}>
+        <Pressable style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]} onPress={() => setShowTemplate(false)}>
           <Pressable
+            onPress={(e) => e.stopPropagation()}
             style={[
-              styles.tplPopup,
+              styles.tplPopupCentered,
               {
                 backgroundColor: colors.surface,
-                right: spacing.lg,
-                bottom: insets.bottom + 70 + 70, // above the FAB
               },
             ]}
           >
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1 }} testID="template-sheet-title">
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1, textAlign: 'center' }} testID="template-sheet-title">
               NEW NOTE
             </Text>
             {TEMPLATES.map((tpl) => (
@@ -1074,11 +1105,16 @@ export default function HomeScreen() {
                 ]}
               >
                 <View style={[styles.tplIconSmall, { backgroundColor: colors.brandTertiary }]}>
-                  <Ionicons name={tpl.icon} size={18} color={colors.brand} />
+                  <Ionicons name={tpl.icon} size={20} color={colors.brand} />
                 </View>
-                <Text style={{ color: colors.onSurface, fontSize: typeScale.base, fontWeight: '600', marginLeft: spacing.sm }}>
-                  {tpl.label}
-                </Text>
+                <View style={{ flex: 1, marginLeft: spacing.md }}>
+                  <Text style={{ color: colors.onSurface, fontSize: typeScale.base, fontWeight: '700' }}>
+                    {tpl.label}
+                  </Text>
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+                    {tpl.description}
+                  </Text>
+                </View>
               </Pressable>
             ))}
           </Pressable>
@@ -1119,24 +1155,28 @@ export default function HomeScreen() {
       </Modal>
 
       {/* Handwriting prep popup */}
-      <Modal visible={showHwPrep} transparent animationType="slide" onRequestClose={() => setShowHwPrep(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setShowHwPrep(false)}>
+      <Modal visible={showHwPrep} transparent animationType="fade" onRequestClose={() => setShowHwPrep(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowHwPrep(false)}
+        >
           <Pressable
-            style={[
-              styles.sheet,
-              {
-                backgroundColor: colors.surface,
-                paddingBottom: insets.bottom + spacing.lg,
-                maxHeight: '88%',
-                maxWidth: 560,
-                alignSelf: 'center',
-                borderRadius: radius.lg,
-                marginBottom: insets.bottom + spacing.md,
-              },
-            ]}
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 560,
+              maxHeight: '88%',
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
           >
-            <View style={styles.sheetHandle} />
-            <Text style={[styles.sheetTitle, { color: colors.onSurface }]} testID="hw-prep-title">
+            <Text style={[styles.sheetTitle, { color: colors.onSurface, textAlign: 'center', marginBottom: spacing.md }]} testID="hw-prep-title">
               Set up your page
             </Text>
 
@@ -1414,6 +1454,7 @@ export default function HomeScreen() {
         onSave={saveFolderModal}
         onDelete={folderModal?.folder ? deleteFolderFromModal : undefined}
       />
+      </View>
     </View>
   );
 }
@@ -1874,6 +1915,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 16,
     elevation: 12,
+  },
+  tplPopupCentered: {
+    width: '100%',
+    maxWidth: 380,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    elevation: 16,
   },
   tplPopupRow: {
     flexDirection: 'row',
