@@ -132,18 +132,14 @@ frontend:
         - working: "NA"
           agent: "main"
           comment: |
-            User reported "I'm still able to write with my hands" even after enabling Pen only mode.
-            Rewrote the Pan gesture in `/app/frontend/app/draw/[id].tsx` to use react-native-gesture-handler's
-            `onTouchesDown((event, manager) => ...)` API for reliable cross-platform tool detection:
-              - Reads `event.allTouches[0].toolType` (Android: 1=finger, 2=stylus, 3=mouse, 4=eraser).
-              - Falls back to `event.pointerType` ('touch' / 'stylus' / 'pen') for iOS / web.
-              - When palmRejection is on and the touch is a finger, calls `manager.fail()` to
-                cancel the gesture immediately so onBegin/onUpdate/onEnd never fire and no stroke
-                is created.
-              - A new `isStylusRef` is set in onTouchesDown and consulted in onBegin / onUpdate /
-                onEnd as a safety net so already-running strokes are also discarded if needed.
-            This replaces the earlier `pointerType === 'touch'` check that didn't work reliably on
-            Android (some devices/builds didn't populate that field on Pan events).
+            Hardened the onTouchesDown logic per testing-agent feedback (some Android devices
+            report `toolType === 0` UNKNOWN for fingers, which the previous version did not
+            reject). New rule: when `palmRejection` is on, ONLY allow strokes that we can
+            POSITIVELY identify as a stylus (toolType === 2 or 4, or pointerType === 'stylus' /
+            'pen'). Everything else — finger, unknown, mouse — is rejected via `manager.fail()`.
+            This is the strictest interpretation of "Pen only" and is the safest behaviour for a
+            user who explicitly enabled the toggle. Native verification on the S25 Ultra is still
+            required.
 
   - task: "Zoom stays centered on the canvas"
     implemented: true

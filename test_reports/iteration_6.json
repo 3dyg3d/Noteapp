@@ -1,0 +1,47 @@
+{
+  "summary": "Re-verification of the hardened palm-rejection fix in /app/frontend/app/draw/[id].tsx. Static wiring matches spec exactly (strictest 'Pen only' check), and full smoke/regression on the Expo web preview passes with zero page errors. Frontend only — backend untouched.",
+  "static_wiring_checks": {
+    "onTouchesDown_block_exists": "PASS (line 420)",
+    "isStylus_definition_correct": "PASS — `const isStylus = toolType === 2 || toolType === 4 || pointerType === 'stylus' || pointerType === 'pen';` (lines 426-430)",
+    "reject_when_palmRejection_and_not_isStylus": "PASS — `if (settings.palmRejection && !isStylus) { isStylusRef.current = false; manager.fail(); return; }` (lines 434-438)",
+    "isFinger_variable_removed": "PASS — grep across /app/frontend returns 0 matches for `isFinger`",
+    "isStylusRef_declared_and_used": "PASS — declared at line 414 (useRef<boolean>(true)), consulted in onBegin (442), onUpdate (459), onEnd (476)",
+    "set_only_when_not_rejecting": "PASS — `isStylusRef.current = isStylus || (toolType === undefined && pointerType === undefined);` only runs when the early-return above did NOT fire (line 439)"
+  },
+  "smoke_regression_checks": {
+    "fab_to_handwriting_to_start_writing": "PASS — navigates to /draw/<uuid>, 0 console errors, 0 pageerrors",
+    "tool_pen_mode_present_and_toggles": "PASS — initial label 'Touch on' → tap → 'Pen only' → tap → 'Touch on' (active state visually green when on)",
+    "draw_more_kebab_rows": "PASS — all 10 expected rows present: Page color, Page template, Page size, Toolbar position, Rename, Settings, Undo, Redo, Clear (rendered as 'Clear canvas'), Move to trash",
+    "draw_menu_toolbar_picker": "PASS — 4-card picker (Left / Right / Top / Bottom) opens. Selecting Right applied without crash; menu closes and 'Toolbar position' row reflects new value. (Note: the `draw-menu-toolbar` testID lives on the kebab ROW that opens the picker, not on the sub-modal itself — confirmed in code at line 1059.)",
+    "text_note_top_tabs_row": "PASS — /note/<id> renders Chrome-style OpenTabsStrip with both open tabs visible (Handwritten note + Untitled), plus `back-btn`, `pin-btn`, `more-btn` in the header. (testIDs are `back-btn`/`pin-btn`/`more-btn`, not `note-back`/`note-pin`/`note-more` — naming difference only, functionality intact.)"
+  },
+  "explicit_callouts": [
+    "WEB FALLBACK LIMITATION: The /draw/ screen shows the 'Stylus / S Pen canvas — Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.' placeholder in the web preview. Browser cannot simulate Android `toolType` values (UNKNOWN/finger/stylus/eraser), so the actual rejection branch in onTouchesDown is NOT exercised by Playwright.",
+    "USER MUST INSTALL A FRESH NATIVE BUILD on the Samsung S25 Ultra to confirm that 'Pen only' mode now blocks finger drawing under real Android touch events. The web preview can only verify wiring + UI surface, not the gesture-level rejection."
+  ],
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_6.json"
+  ],
+  "action_items": [
+    "Ship a fresh native (development) build to the S25 Ultra and verify: (a) with 'Pen only' ON, finger drags produce zero strokes and no live preview; (b) S Pen still draws normally; (c) toggling to 'Touch on' restores finger drawing.",
+    "Optional polish: console still emits deprecation warnings 'shadow* style props are deprecated. Use boxShadow' and 'props.pointerEvents is deprecated. Use style.pointerEvents'. Not blocking — RN-web internals — but worth tracking."
+  ],
+  "critical_code_review_comments": [
+    "Palm-rejection branch in onTouchesDown is now strictly 'pen-only when ON' which matches the spec; isStylusRef is the single source of truth and is consulted in every subsequent callback (onBegin/onUpdate/onEnd) — defensive design is correct.",
+    "Edge case correctly handled: when both `toolType` AND `pointerType` are undefined (e.g. web preview / very old Android), and palm rejection is OFF, the ref defaults to true so drawing still works."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per scope)", "frontend": "100% (all 8 smoke/regression items pass, 0 pageerrors)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 6 verified the hardened palm-rejection logic in /app/frontend/app/draw/[id].tsx onTouchesDown. Strict 'Pen only' check is wired correctly (toolType 2/4 OR pointerType 'stylus'/'pen' required). FAB testID is `fab-create-note`; handwriting entry is text 'Handwriting / S Pen' which opens a setup dialog requiring tap on 'Start writing' to navigate. Note screen header testIDs are `back-btn`, `pin-btn`, `more-btn` (not prefixed). Web preview cannot simulate Android toolType — gesture-level rejection must be validated on a real S Pen device.",
+  "rca_of_issue": "N/A — re-verification only, no bug found."
+}
