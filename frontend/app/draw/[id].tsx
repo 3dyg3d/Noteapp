@@ -458,7 +458,9 @@ export default function DrawScreen() {
     .minDistance(0)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
-      const touch: any = event.allTouches?.[0];
+      const allT = (event.allTouches as any[]) || [];
+      const chgT = (event.changedTouches as any[]) || [];
+      const touch: any = allT[0] ?? chgT[0];
       // Android exposes `toolType` per-touch: 0=UNKNOWN, 1=finger, 2=stylus, 3=mouse, 4=eraser.
       // iOS / web fall back to `pointerType` on the event: 'touch' = finger, 'stylus' / 'pen'.
       const toolType: number | undefined = touch?.toolType;
@@ -469,13 +471,18 @@ export default function DrawScreen() {
         pointerType === 'stylus' ||
         pointerType === 'pen';
       // When palm rejection is on, ONLY allow strokes we can prove are from a stylus.
-      // Anything else (finger / unknown / mouse) is rejected outright. This is the safest
-      // behaviour for users who explicitly turned on "Pen only" mode.
-      if (palmRejectionRef.current && !isStylus) {
-        isStylusRef.current = false;
-        manager.fail();
+      // No neutral fall-through — the user explicitly opted into "Pen only".
+      if (palmRejectionRef.current) {
+        if (!isStylus) {
+          isStylusRef.current = false;
+          manager.fail();
+          return;
+        }
+        isStylusRef.current = true;
         return;
       }
+      // Palm rejection off: be permissive — treat unknown as drawable so devices that don't
+      // report toolType still work.
       isStylusRef.current = isStylus || (toolType === undefined && pointerType === undefined);
     })
     .onBegin((e) => {
