@@ -1,0 +1,186 @@
+{
+  "app_name": "GalaxyNotes",
+  "personality": "1 iOS-Native Clean (Adapted for One UI 6 with bento grids, large reachable headers, and soft pastel accents)",
+  "personality_one_liner": "A clean, highly readable productivity canvas featuring large reachable headers, frosted glass, and rounded bento-style note cards.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#1A1A1C",
+    "surfaceSecondary": "#F5F5F9",
+    "onSurfaceSecondary": "#2C2C2E",
+    "surfaceTertiary": "#EAEAEF",
+    "onSurfaceTertiary": "#3A3A3C",
+    "surfaceInverse": "#1A1A1C",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#7B8C73",
+    "brandPrimary": "#7B8C73",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#A3B19B",
+    "onBrandSecondary": "#1A1A1C",
+    "brandTertiary": "#DCE3D8",
+    "onBrandTertiary": "#2C2C2E",
+    "success": "#638C61",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D4A352",
+    "onWarning": "#FFFFFF",
+    "error": "#B85C5C",
+    "onError": "#FFFFFF",
+    "info": "#6E7A8A",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E5EA",
+    "borderStrong": "#C7C7CC",
+    "divider": "#E5E5EA",
+    "dark": {
+      "surface": "#000000",
+      "onSurface": "#F2F2F7",
+      "surfaceSecondary": "#1C1C1E",
+      "onSurfaceSecondary": "#E5E5EA",
+      "surfaceTertiary": "#2C2C2E",
+      "onSurfaceTertiary": "#D1D1D6",
+      "surfaceInverse": "#FFFFFF",
+      "onSurfaceInverse": "#000000",
+      "brand": "#8CA182",
+      "brandPrimary": "#8CA182",
+      "onBrandPrimary": "#000000",
+      "brandSecondary": "#687A5E",
+      "onBrandSecondary": "#F2F2F7",
+      "brandTertiary": "#3A4533",
+      "onBrandTertiary": "#E5E5EA",
+      "success": "#75A673",
+      "warning": "#DEB36D",
+      "error": "#CC6666",
+      "info": "#8B98A8",
+      "border": "#38383A",
+      "borderStrong": "#48484A",
+      "divider": "#38383A"
+    }
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24,
+      "3xl": 32
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing. Utilize large top margins (3xl) to replicate One UI's reachable header design.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "drawer",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use on the top sticky header when content scrolls behind it",
+      "Use on the bottom floating formatting toolbar in the note editor",
+      "Use on modal scrims and floating context menus"
+    ],
+    "dont's": [
+      "Do not use on individual note cards in lists",
+      "Do not use on the main surface background"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home / All Notes",
+      "purpose": "Main bento grid/list of all user notes with search, sort filters, and a floating FAB for creation.",
+      "states": {
+        "loading": "Centered spinner with a subtle brand tint.",
+        "empty": "Illustration of a blank notebook page, message 'No notes yet', and 'Create Note' CTA.",
+        "error": "Message 'Unable to load notes' with a retry button."
+      },
+      "layout": "Large scrollable area with a 'reachable' top header (large title 'Notes'). Below the header, a toggle for Grid/List view and a Filter icon. Notes are displayed as rounded bento cards (`surfaceSecondary`) with title, preview text, date, and an optional left border stripe indicating folder color. A Floating Action Button (FAB) sits at the bottom right. A sticky frosted glass header appears when scrolled."
+    },
+    {
+      "name": "Note Editor",
+      "purpose": "Full-screen rich text editor and drawing canvas with immersive top and bottom toolbars.",
+      "states": {
+        "loading": "Skeleton of text lines.",
+        "empty": "N/A - Editor is always active.",
+        "error": "Error toast overlay 'Failed to save'."
+      },
+      "layout": "Top sticky toolbar (transparent or frosted if scrolled) with Back, PDF import, Undo/Redo, and More menu. Large title input field, followed by body text input extending flex: 1. Bottom formatting toolbar (keyboard-avoiding) containing bold, italic, list, checklist, and drawing toggle. When drawing mode is active, the bottom toolbar switches to pen, highlighter, eraser, and color picker tools."
+    },
+    {
+      "name": "Drawer / Folders",
+      "purpose": "Slide-out navigation for organizing notes by folders, tags, and accessing settings.",
+      "states": {
+        "loading": "Spinner.",
+        "empty": "List only shows 'All Notes' and 'Uncategorized'.",
+        "error": "N/A"
+      },
+      "layout": "Standard drawer layout. Top section shows user profile or app logo. List items for 'All Notes', 'Shared Notes', 'Trash', and user-created folders. Folders have a small colored dot indicator (`brandTertiary`, `warning`, `info`, etc.). Bottom link to Settings."
+    },
+    {
+      "name": "Note Lock Modal",
+      "purpose": "Passcode or biometric prompt to unlock secured notes.",
+      "states": {
+        "loading": "Validating passcode...",
+        "empty": "N/A",
+        "error": "Shake animation on text input with 'Incorrect passcode' red text."
+      },
+      "layout": "Full screen overlay with a frosted glass backdrop. Minimal 3D lock illustration centered. Large typography prompt 'Enter passcode'. Pin pad or numeric input below. 'Cancel' button below the pad."
+    }
+  ],
+  "images": {
+    "empty_notes": {
+      "url": "https://images.unsplash.com/photo-1612367980327-7454a7276aa7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA4Mzl8MHwxfHNlYXJjaHwxfHxibGFuayUyMG5vdGVib29rJTIwcGFnZSUyMG1pbmltYWx8ZW58MHx8fHwxNzgyODM2MTI4fDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1612367980327-7454a7276aa7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA4Mzl8MHwxfHNlYXJjaHwxfHxibGFuayUyMG5vdGVib29rJTIwcGFnZSUyMG1pbmltYWx8ZW58MHx8fHwxNzgyODM2MTI4fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimal blank notebook on wooden desk"
+    },
+    "lock_illustration": {
+      "url": "https://images.unsplash.com/photo-1587195399841-fc7174360a86?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODF8MHwxfHNlYXJjaHwxfHxzZWN1cml0eSUyMGxvY2slMjBtaW5pbWFsJTIwM2R8ZW58MHx8fHwxNzgyODM2MTI4fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimalist gold lock"
+    },
+    "drawer_header_bg": {
+      "url": "https://images.unsplash.com/photo-1689001164659-aa239f92853e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwxfHxjb2xvcmVkJTIwZm9sZGVycyUyMG1pbmltYWwlMjBkZXNrfGVufDB8fHx8MTc4MjgzNjEyOHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimal notebook folder leaning on surface"
+    }
+  },
+  "haptics": {
+    "create_note_fab": "impactLight",
+    "toggle_view_grid_list": "impactLight",
+    "format_text_bold_italic": "selection",
+    "switch_folder": "impactLight",
+    "lock_error_shake": "notificationError",
+    "save_note_success": "notificationSuccess"
+  },
+  "instructions_to_main_agent": [
+    "Adhere strictly to the monochromatic/botanical palette (`#7B8C73` Sage Green). Do NOT use orange, blue, indigo, purple, or terracotta anywhere in the app, as these are strictly banned by the system rules.",
+    "Replicate the One UI 6 aesthetic: use generous spacing (large `3xl` top margin for the 'Notes' header so it's thumb-reachable), highly rounded corners on note cards (`lg` or `xl`), and clean, legible typography.",
+    "For the Home screen bento cards, use `surfaceSecondary` with `lg` padding. If a note belongs to a folder, show a small left-border vertical stripe or a colored dot using subtle pastel tokens or the folder's assigned color.",
+    "Implement frosted glass (`expo-blur`) heavily on the sticky top header when scrolling the list, and on the floating bottom formatting toolbar in the note editor.",
+    "Ensure the Note Editor uses `KeyboardAvoidingView` perfectly so the bottom toolbar rests directly on top of the virtual keyboard.",
+    "Do NOT use drop shadows on individual bento cards; rely on `surfaceSecondary` color contrast against the pure white/black `surface` canvas. Only use shadows for the FAB and bottom sheets.",
+    "Use standard Ionicons but prefer rounded/outline variants. Keep weights consistent across all icons."
+  ]
+}
