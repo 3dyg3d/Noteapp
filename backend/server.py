@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,7 +6,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 
@@ -38,8 +38,8 @@ class NoteBase(BaseModel):
     title: str = ""
     content: str = ""
     checklist: List[ChecklistItem] = Field(default_factory=list)
-    images: List[str] = Field(default_factory=list)   # base64 data URIs
-    drawings: List[str] = Field(default_factory=list) # base64 data URIs
+    images: List[str] = Field(default_factory=list)
+    drawings: List[str] = Field(default_factory=list)
     folder_id: Optional[str] = None
     color: Optional[str] = None
     pinned: bool = False
@@ -66,6 +66,7 @@ class Note(NoteBase):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
+    deleted_at: Optional[str] = None  # soft-delete timestamp
 
 
 class FolderBase(BaseModel):
@@ -95,13 +96,6 @@ class SummarizeResponse(BaseModel):
     summary: str
 
 
-# ----- Helpers -----
-def strip_id(doc: dict) -> dict:
-    if doc and "_id" in doc:
-        doc.pop("_id", None)
-    return doc
-
-
 # ----- Routes -----
 @api_router.get("/")
 async def root():
@@ -110,10 +104,21 @@ async def root():
 
 # Notes CRUD
 @api_router.get("/notes", response_model=List[Note])
-async def list_notes(folder_id: Optional[str] = None, q: Optional[str] = None):
+async def list_notes(
+    folder_id: Optional[str] = None,
+    q: Optional[str] = None,
+    status: str = Query("active", pattern="^(active|trash)$"),
+    pinned: Optional[bool] = None,
+):
     query: dict = {}
+    if status == "active":
+        query["deleted_at"] = None
+    else:
+        query["deleted_at"] = {"$ne": None}
     if folder_id:
         query["folder_id"] = folder_id
+    if pinned is not None:
+        query["pinned"] = pinned
     if q:
         query["$or"] = [
             {"title": {"$regex": q, "$options": "i"}},
@@ -146,7 +151,6 @@ async def update_note(note_id: str, payload: NoteUpdate):
         raise HTTPException(404, "Note not found")
     update_data: dict = {k: v for k, v in payload.dict().items() if v is not None}
     update_data["updated_at"] = now_iso()
-    # Convert checklist items
     if "checklist" in update_data:
         update_data["checklist"] = [
             (item if isinstance(item, dict) else item.dict())
@@ -158,11 +162,37 @@ async def update_note(note_id: str, payload: NoteUpdate):
 
 
 @api_router.delete("/notes/{note_id}")
-async def delete_note(note_id: str):
-    result = await db.notes.delete_one({"id": note_id})
-    if result.deleted_count == 0:
+async def delete_note(note_id: str, permanent: bool = False):
+    existing = await db.notes.find_one({"id": note_id})
+    if not existing:
         raise HTTPException(404, "Note not found")
+    if permanent or existing.get("deleted_at"):
+        await db.notes.delete_one({"id": note_id})
+    else:
+        await db.notes.update_one(
+            {"id": note_id},
+            {"$set": {"deleted_at": now_iso(), "updated_at": now_iso()}},
+        )
     return {"ok": True}
+
+
+@api_router.post("/notes/{note_id}/restore", response_model=Note)
+async def restore_note(note_id: str):
+    existing = await db.notes.find_one({"id": note_id})
+    if not existing:
+        raise HTTPException(404, "Note not found")
+    await db.notes.update_one(
+        {"id": note_id},
+        {"$set": {"deleted_at": None, "updated_at": now_iso()}},
+    )
+    doc = await db.notes.find_one({"id": note_id}, {"_id": 0})
+    return Note(**doc)
+
+
+@api_router.post("/notes/trash/empty")
+async def empty_trash():
+    result = await db.notes.delete_many({"deleted_at": {"$ne": None}})
+    return {"ok": True, "deleted": result.deleted_count}
 
 
 # Folders CRUD
@@ -196,12 +226,11 @@ async def delete_folder(folder_id: str):
     result = await db.folders.delete_one({"id": folder_id})
     if result.deleted_count == 0:
         raise HTTPException(404, "Folder not found")
-    # Detach notes from this folder
     await db.notes.update_many({"folder_id": folder_id}, {"$set": {"folder_id": None}})
     return {"ok": True}
 
 
-# AI Summarize
+# AI
 @api_router.post("/ai/summarize", response_model=SummarizeResponse)
 async def ai_summarize(payload: SummarizeRequest):
     text = (payload.text or "").strip()
@@ -239,10 +268,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 

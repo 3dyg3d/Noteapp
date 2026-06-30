@@ -28,7 +28,7 @@ function uid() {
 }
 
 export default function NoteEditor() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, mode: queryMode } = useLocalSearchParams<{ id: string; mode?: string }>();
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
@@ -37,7 +37,7 @@ export default function NoteEditor() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [showDrawing, setShowDrawing] = useState(false);
+  const [showDrawing, setShowDrawing] = useState(queryMode === 'drawing');
   const [showMore, setShowMore] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);

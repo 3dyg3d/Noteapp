@@ -19,6 +19,7 @@ export interface Note {
   locked: boolean;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null;
 }
 
 export interface Folder {
@@ -40,11 +41,15 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type NoteStatus = 'active' | 'trash';
+
 export const NotesApi = {
-  list: (q?: string, folderId?: string | null) => {
+  list: (opts: { q?: string; folderId?: string | null; status?: NoteStatus; pinned?: boolean } = {}) => {
     const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    if (folderId) params.set('folder_id', folderId);
+    if (opts.q) params.set('q', opts.q);
+    if (opts.folderId) params.set('folder_id', opts.folderId);
+    if (opts.status) params.set('status', opts.status);
+    if (typeof opts.pinned === 'boolean') params.set('pinned', String(opts.pinned));
     const qs = params.toString();
     return http<Note[]>(`/notes${qs ? `?${qs}` : ''}`);
   },
@@ -53,7 +58,12 @@ export const NotesApi = {
     http<Note>('/notes', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<Note>) =>
     http<Note>(`/notes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  remove: (id: string) => http<{ ok: boolean }>(`/notes/${id}`, { method: 'DELETE' }),
+  remove: (id: string, permanent = false) =>
+    http<{ ok: boolean }>(`/notes/${id}${permanent ? '?permanent=true' : ''}`, { method: 'DELETE' }),
+  restore: (id: string) =>
+    http<Note>(`/notes/${id}/restore`, { method: 'POST' }),
+  emptyTrash: () =>
+    http<{ ok: boolean; deleted: number }>('/notes/trash/empty', { method: 'POST' }),
 };
 
 export const FoldersApi = {
