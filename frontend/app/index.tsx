@@ -1079,19 +1079,21 @@ export default function HomeScreen() {
         </Modal>
       )}
 
-      {/* Template picker — centered modal */}
+      {/* Template picker — anchored above the FAB */}
       <Modal visible={showTemplate} transparent animationType="fade" onRequestClose={() => setShowTemplate(false)}>
-        <Pressable style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]} onPress={() => setShowTemplate(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowTemplate(false)}>
           <Pressable
             onPress={(e) => e.stopPropagation()}
             style={[
-              styles.tplPopupCentered,
+              styles.tplPopup,
               {
                 backgroundColor: colors.surface,
+                right: spacing.lg,
+                bottom: insets.bottom + spacing.lg + 70, // just above the FAB
               },
             ]}
           >
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1, textAlign: 'center' }} testID="template-sheet-title">
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1 }} testID="template-sheet-title">
               NEW NOTE
             </Text>
             {TEMPLATES.map((tpl) => (
@@ -1105,16 +1107,11 @@ export default function HomeScreen() {
                 ]}
               >
                 <View style={[styles.tplIconSmall, { backgroundColor: colors.brandTertiary }]}>
-                  <Ionicons name={tpl.icon} size={20} color={colors.brand} />
+                  <Ionicons name={tpl.icon} size={18} color={colors.brand} />
                 </View>
-                <View style={{ flex: 1, marginLeft: spacing.md }}>
-                  <Text style={{ color: colors.onSurface, fontSize: typeScale.base, fontWeight: '700' }}>
-                    {tpl.label}
-                  </Text>
-                  <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
-                    {tpl.description}
-                  </Text>
-                </View>
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.base, fontWeight: '600', marginLeft: spacing.sm }}>
+                  {tpl.label}
+                </Text>
               </Pressable>
             ))}
           </Pressable>
