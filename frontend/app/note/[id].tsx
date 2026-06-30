@@ -21,7 +21,7 @@ import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
 import { NotesApi, FoldersApi, AiApi, Note, Folder, ChecklistItem } from '@/src/api/client';
-import DrawingPad from '@/src/components/DrawingPad';
+import DrawingPad, { DrawingPadHandle } from '@/src/components/DrawingPad';
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -44,6 +44,7 @@ export default function NoteEditor() {
   const [aiSummary, setAiSummary] = useState<string | null>(null);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const drawingRef = useRef<DrawingPadHandle | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -321,7 +322,84 @@ export default function NoteEditor() {
         )}
 
         {/* Drawing pad */}
-        {showDrawing && <DrawingPad />}
+        {showDrawing && (
+          <View>
+            <View style={styles.drawingHeaderRow}>
+              <Text
+                style={{
+                  color: colors.onSurface,
+                  fontSize: typeScale.lg,
+                  fontWeight: '700',
+                }}
+              >
+                Handwriting
+              </Text>
+              <Pressable
+                testID="save-drawing-btn"
+                onPress={async () => {
+                  const b64 = drawingRef.current?.snapshotBase64();
+                  if (b64 && note) {
+                    persistImmediately({ drawings: [...note.drawings, b64] });
+                    drawingRef.current?.clear();
+                  }
+                }}
+                style={[styles.savePenBtn, { backgroundColor: colors.brand }]}
+              >
+                <Ionicons name="save-outline" size={16} color={colors.onBrandPrimary} />
+                <Text
+                  style={{
+                    color: colors.onBrandPrimary,
+                    marginLeft: 6,
+                    fontWeight: '700',
+                  }}
+                >
+                  Save page
+                </Text>
+              </Pressable>
+            </View>
+            <DrawingPad ref={drawingRef} height={420} />
+          </View>
+        )}
+
+        {/* Saved drawing pages */}
+        {note.drawings.length > 0 && (
+          <View style={{ marginTop: spacing.lg }}>
+            <Text
+              style={{
+                color: colors.muted,
+                fontSize: typeScale.sm,
+                fontWeight: '600',
+                textTransform: 'uppercase',
+                letterSpacing: 1.2,
+                marginBottom: spacing.sm,
+              }}
+            >
+              Handwritten Pages
+            </Text>
+            {note.drawings.map((src, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.drawingThumb,
+                  { backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
+                ]}
+              >
+                <Image source={{ uri: src }} style={styles.drawingThumbImg} contentFit="contain" />
+                <Pressable
+                  testID={`drawing-del-${i}`}
+                  onPress={() =>
+                    persistImmediately({
+                      drawings: note.drawings.filter((_, idx) => idx !== i),
+                    })
+                  }
+                  style={styles.drawingDel}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#fff" />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* AI summary card */}
         {!!aiSummary && (
@@ -600,6 +678,39 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  drawingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.lg,
+  },
+  savePenBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    height: 36,
+    borderRadius: radius.pill,
+  },
+  drawingThumb: {
+    height: 200,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginBottom: spacing.sm,
+    padding: 6,
+  },
+  drawingThumbImg: { width: '100%', height: '100%' },
+  drawingDel: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',

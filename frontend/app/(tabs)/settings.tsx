@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch } from 'react-native';
-import { useRouter } from 'expo-router';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ScrollView,
+  TextInput,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -11,8 +17,7 @@ import { spacing, radius, typeScale } from '@/src/theme/tokens';
 const PASS_KEY = 'galaxynotes:passcode';
 
 export default function SettingsScreen() {
-  const router = useRouter();
-  const { mode, setMode, colors, isDark } = useTheme();
+  const { mode, setMode, colors } = useTheme();
   const insets = useSafeAreaInsets();
 
   const [passcode, setPasscode] = useState('');
@@ -42,23 +47,29 @@ export default function SettingsScreen() {
     right,
     onPress,
     testID,
+    danger,
   }: {
     label: string;
     icon: any;
     right?: React.ReactNode;
     onPress?: () => void;
     testID?: string;
+    danger?: boolean;
   }) => (
     <Pressable
       testID={testID}
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
-        { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary },
+        {
+          backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary,
+        },
       ]}
     >
-      <Ionicons name={icon} size={22} color={colors.onSurface} />
-      <Text style={[styles.label, { color: colors.onSurface }]}>{label}</Text>
+      <Ionicons name={icon} size={22} color={danger ? colors.error : colors.onSurface} />
+      <Text style={[styles.label, { color: danger ? colors.error : colors.onSurface }]}>
+        {label}
+      </Text>
       <View style={{ flex: 1 }} />
       {right}
     </Pressable>
@@ -72,9 +83,7 @@ export default function SettingsScreen() {
         onPress={() => setMode(value)}
         style={[
           styles.themeBtn,
-          {
-            backgroundColor: active ? colors.brand : colors.surfaceSecondary,
-          },
+          { backgroundColor: active ? colors.brand : colors.surfaceSecondary },
         ]}
       >
         <Text
@@ -91,15 +100,11 @@ export default function SettingsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={() => router.back()} testID="settings-back" style={styles.iconBtn}>
-          <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
-        </Pressable>
+      <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
         <Text style={[styles.title, { color: colors.onSurface }]}>Settings</Text>
-        <View style={styles.iconBtn} />
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 40 }}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 100 }}>
         <Text style={[styles.section, { color: colors.muted }]}>APPEARANCE</Text>
         <View style={styles.themeRow}>
           <ThemeOption value="system" label="System" />
@@ -130,30 +135,29 @@ export default function SettingsScreen() {
               testID="change-passcode"
               style={({ pressed }) => [
                 styles.row,
-                { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary, marginTop: spacing.sm },
+                {
+                  backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary,
+                  marginTop: spacing.sm,
+                },
               ]}
             >
               <Ionicons name="key-outline" size={22} color={colors.onSurface} />
               <Text style={[styles.label, { color: colors.onSurface }]}>Change passcode</Text>
             </Pressable>
-            <Pressable
+            <Item
+              label="Remove passcode"
+              icon="trash-outline"
+              danger
               onPress={removePasscode}
               testID="remove-passcode"
-              style={({ pressed }) => [
-                styles.row,
-                { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary, marginTop: spacing.sm },
-              ]}
-            >
-              <Ionicons name="trash-outline" size={22} color={colors.error} />
-              <Text style={[styles.label, { color: colors.error }]}>Remove passcode</Text>
-            </Pressable>
+            />
           </>
         )}
 
         {editing && (
           <View style={[styles.passBox, { backgroundColor: colors.surfaceSecondary }]}>
             <Text style={{ color: colors.muted, marginBottom: spacing.sm }}>
-              Enter a 4-8 digit passcode
+              Enter a 4–8 digit passcode
             </Text>
             <TextInput
               testID="passcode-input"
@@ -163,7 +167,10 @@ export default function SettingsScreen() {
               secureTextEntry
               placeholder="••••"
               placeholderTextColor={colors.muted}
-              style={[styles.input, { color: colors.onSurface, backgroundColor: colors.surface }]}
+              style={[
+                styles.input,
+                { color: colors.onSurface, backgroundColor: colors.surface },
+              ]}
             />
             <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
               <Pressable
@@ -171,7 +178,10 @@ export default function SettingsScreen() {
                   setEditing(false);
                   setPasscode('');
                 }}
-                style={[styles.btn, { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }]}
+                style={[
+                  styles.btn,
+                  { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 },
+                ]}
               >
                 <Text style={{ color: colors.onSurface }}>Cancel</Text>
               </Pressable>
@@ -186,6 +196,27 @@ export default function SettingsScreen() {
           </View>
         )}
 
+        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>STYLUS</Text>
+        <View style={[styles.passBox, { backgroundColor: colors.surfaceSecondary }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="pencil" size={22} color={colors.brand} />
+            <Text
+              style={{
+                marginLeft: spacing.sm,
+                fontSize: typeScale.lg,
+                fontWeight: '700',
+                color: colors.onSurface,
+              }}
+            >
+              S Pen ready
+            </Text>
+          </View>
+          <Text style={{ color: colors.muted, marginTop: spacing.sm, lineHeight: 20 }}>
+            Open any note, tap the brush icon, and start writing with your S Pen or any stylus.
+            Strokes are pressure-aware: write softly for thin lines, press harder for thick ones.
+          </Text>
+        </View>
+
         <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>ABOUT</Text>
         <Item label="GalaxyNotes v1.0" icon="information-circle-outline" />
       </ScrollView>
@@ -195,13 +226,10 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
   },
-  iconBtn: { padding: spacing.sm, minWidth: 40, alignItems: 'center' },
-  title: { flex: 1, textAlign: 'center', fontSize: typeScale.xl, fontWeight: '700' },
+  title: { fontSize: typeScale.xxxl, fontWeight: '700' },
   section: {
     fontSize: typeScale.sm,
     letterSpacing: 1.2,
@@ -223,6 +251,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderRadius: radius.md,
     gap: spacing.md,
+    marginBottom: spacing.sm,
   },
   label: { fontSize: typeScale.lg },
   passBox: {

@@ -1,68 +1,136 @@
 import React, { useRef, useState } from 'react';
-import { View, StyleSheet, Pressable, Text, ScrollView } from 'react-native';
+import { View, StyleSheet, Pressable, Text, ScrollView, Platform } from 'react-native';
 import { Canvas, Path, Skia, SkPath } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius } from '@/src/theme/tokens';
+import { spacing, radius, typeScale } from '@/src/theme/tokens';
 
-interface PathItem {
+// A stylus-friendly drawing pad with velocity-based variable stroke width.
+// Each stroke is broken into short segments whose width is determined by the
+// instantaneous drawing speed -- mimicking S Pen pressure: slow = thick, fast = thin.
+
+interface Segment {
   path: SkPath;
   color: string;
   width: number;
+}
+
+// We group segments per-stroke so undo can pop the whole stroke at once.
+interface Stroke {
+  segments: Segment[];
 }
 
 const COLORS = ['#1A1A1C', '#B85C5C', '#7B8C73', '#D4A352', '#6E7A8A', '#8B7AA8'];
 
 interface DrawingPadProps {
   height?: number;
-  onChange?: (paths: PathItem[]) => void;
-  initialPaths?: PathItem[];
 }
 
 export default function DrawingPad({ height = 360 }: DrawingPadProps) {
+  const { colors } = useTheme();
+
+  if (Platform.OS === 'web') {
+    return (
+      <View
+        style={[
+          styles.canvasWrap,
+          {
+            backgroundColor: colors.surfaceSecondary,
+            borderColor: colors.border,
+            height,
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: spacing.lg,
+          },
+        ]}
+      >
+        <Ionicons name="brush-outline" size={36} color={colors.brand} />
+        <Text style={{ color: colors.onSurface, marginTop: spacing.md, fontWeight: '600' }}>
+          Stylus / S Pen canvas
+        </Text>
+        <Text style={{ color: colors.muted, marginTop: 4, textAlign: 'center', fontSize: typeScale.sm }}>
+          Available on Android & iOS — open in Expo Go to draw with your finger or S Pen.
+        </Text>
+      </View>
+    );
+  }
+
+  return <NativeDrawingPad height={height} />;
+}
+
+function NativeDrawingPad({ height = 360 }: DrawingPadProps) {
   const { colors, isDark } = useTheme();
-  const [paths, setPaths] = useState<PathItem[]>([]);
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [color, setColor] = useState<string>(isDark ? '#F2F2F7' : '#1A1A1C');
-  const [width, setWidth] = useState<number>(3);
+  const [baseWidth, setBaseWidth] = useState<number>(3);
   const [mode, setMode] = useState<'pen' | 'highlight' | 'eraser'>('pen');
-  const currentPathRef = useRef<SkPath | null>(null);
-  const [currentPath, setCurrentPath] = useState<SkPath | null>(null);
+
+  // Refs for the live stroke being drawn (don't trigger re-render per point)
+  const currentStrokeRef = useRef<Stroke | null>(null);
+  const lastPointRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const [liveStroke, setLiveStroke] = useState<Stroke | null>(null);
 
   const strokeColor = mode === 'highlight' ? `${color}66` : color;
-  const strokeWidth = mode === 'highlight' ? 14 : mode === 'eraser' ? 16 : width;
+  const baseW = mode === 'highlight' ? 14 : mode === 'eraser' ? 18 : baseWidth;
   const usedColor = mode === 'eraser' ? (isDark ? '#000000' : '#FFFFFF') : strokeColor;
+
+  // Convert velocity (px/ms) into a multiplier in [0.55, 1.6]
+  // Slow strokes (≤ 0.2 px/ms) → 1.6x, fast (≥ 1.6 px/ms) → 0.55x
+  const widthFromSpeed = (speed: number) => {
+    const SLOW = 0.2;
+    const FAST = 1.6;
+    const t = Math.min(1, Math.max(0, (speed - SLOW) / (FAST - SLOW)));
+    return baseW * (1.6 - t * (1.6 - 0.55));
+  };
 
   const pan = Gesture.Pan()
     .runOnJS(true)
     .minDistance(0)
+    .maxPointers(1)
     .onBegin((e) => {
-      const p = Skia.Path.Make();
-      p.moveTo(e.x, e.y);
-      currentPathRef.current = p;
-      setCurrentPath(p.copy());
+      const stroke: Stroke = { segments: [] };
+      currentStrokeRef.current = stroke;
+      lastPointRef.current = { x: e.x, y: e.y, t: Date.now() };
+      setLiveStroke({ segments: [] });
     })
     .onUpdate((e) => {
-      if (currentPathRef.current) {
-        currentPathRef.current.lineTo(e.x, e.y);
-        setCurrentPath(currentPathRef.current.copy());
-      }
+      const last = lastPointRef.current;
+      const stroke = currentStrokeRef.current;
+      if (!last || !stroke) return;
+      const now = Date.now();
+      const dx = e.x - last.x;
+      const dy = e.y - last.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 1.2) return; // ignore tiny jitter
+      const dt = Math.max(1, now - last.t);
+      const speed = dist / dt;
+      const w = widthFromSpeed(speed);
+
+      const p = Skia.Path.Make();
+      p.moveTo(last.x, last.y);
+      // quadratic-ish smoothing: line to mid + line to current gives smoother feel
+      const midX = (last.x + e.x) / 2;
+      const midY = (last.y + e.y) / 2;
+      p.quadTo(last.x, last.y, midX, midY);
+      p.lineTo(e.x, e.y);
+
+      stroke.segments.push({ path: p, color: usedColor, width: w });
+      lastPointRef.current = { x: e.x, y: e.y, t: now };
+      setLiveStroke({ segments: [...stroke.segments] });
     })
     .onEnd(() => {
-      if (currentPathRef.current) {
-        const finished: PathItem = {
-          path: currentPathRef.current,
-          color: usedColor,
-          width: strokeWidth,
-        };
-        setPaths((prev) => [...prev, finished]);
-        currentPathRef.current = null;
-        setCurrentPath(null);
+      const stroke = currentStrokeRef.current;
+      if (stroke && stroke.segments.length > 0) {
+        setStrokes((prev) => [...prev, stroke]);
       }
+      currentStrokeRef.current = null;
+      lastPointRef.current = null;
+      setLiveStroke(null);
     });
 
-  const undo = () => setPaths((p) => p.slice(0, -1));
-  const clear = () => setPaths([]);
+  const undo = () => setStrokes((p) => p.slice(0, -1));
+  const clear = () => setStrokes([]);
 
   return (
     <View style={{ marginVertical: spacing.md }}>
@@ -74,43 +142,38 @@ export default function DrawingPad({ height = 360 }: DrawingPadProps) {
       >
         <GestureDetector gesture={pan}>
           <Canvas style={{ width: '100%', height }}>
-            {paths.map((p, i) => (
-              <Path key={i} path={p.path} color={p.color} style="stroke" strokeWidth={p.width} strokeCap="round" strokeJoin="round" />
-            ))}
-            {currentPath && (
+            {strokes.map((stroke, si) =>
+              stroke.segments.map((seg, segi) => (
+                <Path
+                  key={`${si}-${segi}`}
+                  path={seg.path}
+                  color={seg.color}
+                  style="stroke"
+                  strokeWidth={seg.width}
+                  strokeCap="round"
+                  strokeJoin="round"
+                />
+              ))
+            )}
+            {liveStroke?.segments.map((seg, i) => (
               <Path
-                path={currentPath}
-                color={usedColor}
+                key={`live-${i}`}
+                path={seg.path}
+                color={seg.color}
                 style="stroke"
-                strokeWidth={strokeWidth}
+                strokeWidth={seg.width}
                 strokeCap="round"
                 strokeJoin="round"
               />
-            )}
+            ))}
           </Canvas>
         </GestureDetector>
       </View>
 
-      {/* Tool row */}
       <View style={[styles.toolRow, { backgroundColor: colors.surfaceSecondary }]}>
-        <ToolBtn
-          icon="brush"
-          active={mode === 'pen'}
-          onPress={() => setMode('pen')}
-          testID="tool-pen"
-        />
-        <ToolBtn
-          icon="color-wand"
-          active={mode === 'highlight'}
-          onPress={() => setMode('highlight')}
-          testID="tool-highlight"
-        />
-        <ToolBtn
-          icon="trash-bin-outline"
-          active={mode === 'eraser'}
-          onPress={() => setMode('eraser')}
-          testID="tool-eraser"
-        />
+        <ToolBtn icon="brush" active={mode === 'pen'} onPress={() => setMode('pen')} testID="tool-pen" />
+        <ToolBtn icon="color-wand" active={mode === 'highlight'} onPress={() => setMode('highlight')} testID="tool-highlight" />
+        <ToolBtn icon="trash-bin-outline" active={mode === 'eraser'} onPress={() => setMode('eraser')} testID="tool-eraser" />
         <View style={{ width: 1, height: 24, backgroundColor: colors.divider, marginHorizontal: 4 }} />
         <Pressable onPress={undo} style={styles.toolIcon} testID="tool-undo">
           <Ionicons name="arrow-undo" size={20} color={colors.onSurface} />
@@ -120,37 +183,33 @@ export default function DrawingPad({ height = 360 }: DrawingPadProps) {
         </Pressable>
       </View>
 
-      {/* Color palette */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colorRow}>
         {COLORS.map((c) => (
           <Pressable
             key={c}
             testID={`color-${c}`}
             onPress={() => setColor(c)}
-            style={[
-              styles.colorDot,
-              { backgroundColor: c, borderColor: color === c ? colors.brand : 'transparent' },
-            ]}
+            style={[styles.colorDot, { backgroundColor: c, borderColor: color === c ? colors.brand : 'transparent' }]}
           />
         ))}
-        {/* width */}
         {[2, 4, 8].map((w) => (
           <Pressable
             key={`w-${w}`}
             testID={`width-${w}`}
-            onPress={() => setWidth(w)}
+            onPress={() => setBaseWidth(w)}
             style={[
               styles.widthBtn,
-              {
-                backgroundColor: colors.surface,
-                borderColor: width === w ? colors.brand : colors.border,
-              },
+              { backgroundColor: colors.surface, borderColor: baseWidth === w ? colors.brand : colors.border },
             ]}
           >
             <View style={{ width: 22, height: w, backgroundColor: colors.onSurface, borderRadius: 999 }} />
           </Pressable>
         ))}
       </ScrollView>
+
+      <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.xs, textAlign: 'center' }}>
+        Tip: Draw slowly for thicker strokes — works great with S Pen.
+      </Text>
     </View>
   );
 }
@@ -171,10 +230,7 @@ function ToolBtn({
     <Pressable
       testID={testID}
       onPress={onPress}
-      style={[
-        styles.toolIcon,
-        { backgroundColor: active ? colors.brand : 'transparent' },
-      ]}
+      style={[styles.toolIcon, { backgroundColor: active ? colors.brand : 'transparent' }]}
     >
       <Ionicons name={icon} size={20} color={active ? colors.onBrandPrimary : colors.onSurface} />
     </Pressable>
@@ -182,11 +238,7 @@ function ToolBtn({
 }
 
 const styles = StyleSheet.create({
-  canvasWrap: {
-    borderRadius: radius.md,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
+  canvasWrap: { borderRadius: radius.md, borderWidth: 1, overflow: 'hidden' },
   toolRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -196,25 +248,9 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     gap: spacing.xs,
   },
-  toolIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  colorRow: {
-    marginTop: spacing.sm,
-    gap: spacing.sm,
-    paddingVertical: spacing.xs,
-    alignItems: 'center',
-  },
-  colorDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-  },
+  toolIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  colorRow: { marginTop: spacing.sm, gap: spacing.sm, paddingVertical: spacing.xs, alignItems: 'center' },
+  colorDot: { width: 28, height: 28, borderRadius: 14, borderWidth: 2 },
   widthBtn: {
     paddingHorizontal: spacing.sm,
     height: 28,

@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
   Modal,
 } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -18,7 +18,6 @@ import { spacing, radius, typeScale, folderColors } from '@/src/theme/tokens';
 import { FoldersApi, Folder } from '@/src/api/client';
 
 export default function FoldersScreen() {
-  const router = useRouter();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -86,13 +85,14 @@ export default function FoldersScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.surface }]}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={() => router.back()} testID="folders-back" style={styles.iconBtn}>
-          <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
-        </Pressable>
+      <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
         <Text style={[styles.title, { color: colors.onSurface }]}>Folders</Text>
-        <Pressable onPress={openAdd} testID="folders-add" style={styles.iconBtn}>
-          <Ionicons name="add" size={26} color={colors.brand} />
+        <Pressable
+          onPress={openAdd}
+          testID="folders-add"
+          style={[styles.addBtn, { backgroundColor: colors.brand }]}
+        >
+          <Ionicons name="add" size={22} color={colors.onBrandPrimary} />
         </Pressable>
       </View>
 
@@ -101,11 +101,23 @@ export default function FoldersScreen() {
           <ActivityIndicator color={colors.brand} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 80 }}>
+        <ScrollView
+          contentContainerStyle={{
+            padding: spacing.lg,
+            paddingBottom: insets.bottom + 100,
+          }}
+        >
           {folders.length === 0 && (
             <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
               <Ionicons name="folder-open-outline" size={48} color={colors.brand} />
-              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, marginTop: spacing.md, fontWeight: '600' }}>
+              <Text
+                style={{
+                  color: colors.onSurface,
+                  fontSize: typeScale.lg,
+                  marginTop: spacing.md,
+                  fontWeight: '600',
+                }}
+              >
                 No folders yet
               </Text>
               <Text style={{ color: colors.muted, marginTop: 6, textAlign: 'center' }}>
@@ -123,10 +135,18 @@ export default function FoldersScreen() {
               <Text style={[styles.rowName, { color: colors.onSurface }]} numberOfLines={1}>
                 {f.name}
               </Text>
-              <Pressable onPress={() => openEdit(f)} style={styles.smallBtn} testID={`folder-edit-${f.id}`}>
+              <Pressable
+                onPress={() => openEdit(f)}
+                style={styles.smallBtn}
+                testID={`folder-edit-${f.id}`}
+              >
                 <Ionicons name="create-outline" size={20} color={colors.onSurface} />
               </Pressable>
-              <Pressable onPress={() => remove(f)} style={styles.smallBtn} testID={`folder-del-${f.id}`}>
+              <Pressable
+                onPress={() => remove(f)}
+                style={styles.smallBtn}
+                testID={`folder-del-${f.id}`}
+              >
                 <Ionicons name="trash-outline" size={20} color={colors.error} />
               </Pressable>
             </View>
@@ -134,10 +154,27 @@ export default function FoldersScreen() {
         </ScrollView>
       )}
 
-      <Modal visible={showAdd} transparent animationType="slide" onRequestClose={() => setShowAdd(false)}>
+      <Modal
+        visible={showAdd}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAdd(false)}
+      >
         <Pressable style={styles.backdrop} onPress={() => setShowAdd(false)}>
-          <Pressable style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]}>
-            <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.lg }}>
+          <Pressable
+            style={[
+              styles.sheet,
+              { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg },
+            ]}
+          >
+            <Text
+              style={{
+                fontSize: typeScale.xl,
+                fontWeight: '700',
+                color: colors.onSurface,
+                marginBottom: spacing.lg,
+              }}
+            >
               {editing ? 'Edit folder' : 'New folder'}
             </Text>
             <TextInput
@@ -152,7 +189,9 @@ export default function FoldersScreen() {
               ]}
               autoFocus
             />
-            <Text style={{ color: colors.muted, marginTop: spacing.lg, marginBottom: spacing.sm }}>Color</Text>
+            <Text style={{ color: colors.muted, marginTop: spacing.lg, marginBottom: spacing.sm }}>
+              Color
+            </Text>
             <View style={styles.colorRow}>
               {folderColors.map((c) => (
                 <Pressable
@@ -170,11 +209,17 @@ export default function FoldersScreen() {
               ))}
             </View>
             <Pressable
-              testID="folder-save"
+              testID="folder-save-btn"
               onPress={save}
               style={[styles.saveBtn, { backgroundColor: colors.brand }]}
             >
-              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700', fontSize: typeScale.lg }}>
+              <Text
+                style={{
+                  color: colors.onBrandPrimary,
+                  fontWeight: '700',
+                  fontSize: typeScale.lg,
+                }}
+              >
                 {editing ? 'Save' : 'Create'}
               </Text>
             </Pressable>
@@ -190,13 +235,25 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
   },
-  iconBtn: { padding: spacing.sm, minWidth: 40, alignItems: 'center' },
-  title: { flex: 1, textAlign: 'center', fontSize: typeScale.xl, fontWeight: '700' },
+  title: { fontSize: typeScale.xxxl, fontWeight: '700' },
+  addBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  empty: { alignItems: 'center', padding: spacing.xxl, borderRadius: radius.lg, marginTop: spacing.xl },
+  empty: {
+    alignItems: 'center',
+    padding: spacing.xxl,
+    borderRadius: radius.lg,
+    marginTop: spacing.xl,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

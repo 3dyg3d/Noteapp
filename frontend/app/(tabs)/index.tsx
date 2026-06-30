@@ -206,20 +206,6 @@ export default function HomeScreen() {
                 color={colors.onSurface}
               />
             </Pressable>
-            <Pressable
-              testID="folders-btn"
-              onPress={() => router.push('/folders')}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
-            >
-              <Ionicons name="folder-outline" size={20} color={colors.onSurface} />
-            </Pressable>
-            <Pressable
-              testID="settings-btn"
-              onPress={() => router.push('/settings')}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
-            >
-              <Ionicons name="settings-outline" size={20} color={colors.onSurface} />
-            </Pressable>
           </View>
         </View>
 
@@ -290,7 +276,7 @@ export default function HomeScreen() {
         }
         contentContainerStyle={{
           paddingTop: 200, // space below sticky header
-          paddingBottom: insets.bottom + 100,
+          paddingBottom: insets.bottom + 160,
           paddingHorizontal: spacing.lg,
         }}
         ListHeaderComponent={
@@ -347,7 +333,7 @@ export default function HomeScreen() {
           styles.fab,
           {
             backgroundColor: colors.brand,
-            bottom: insets.bottom + spacing.lg,
+            bottom: insets.bottom + 56 + spacing.md,
             transform: [{ scale: pressed ? 0.95 : 1 }],
           },
         ]}
