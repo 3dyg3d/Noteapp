@@ -900,17 +900,20 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
-      {/* More menu — clean iOS-style list */}
+      {/* More menu — clean iOS-style list, anchored top-right under the kebab */}
       <Modal visible={showPaperMenu} transparent animationType="fade" onRequestClose={() => setShowPaperMenu(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={styles.backdrop}
           onPress={() => setShowPaperMenu(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
             style={{
-              width: '100%',
-              maxWidth: 400,
+              position: 'absolute',
+              top: insets.top + 52,
+              right: spacing.sm,
+              width: 280,
+              maxHeight: '80%',
               backgroundColor: colors.surface,
               borderRadius: radius.lg,
               paddingVertical: spacing.sm,
@@ -984,6 +987,12 @@ export default function DrawScreen() {
               label="Rename"
               onPress={() => { setShowPaperMenu(false); setTitleDraft(note.title); setShowTitleEdit(true); }}
               testID="draw-menu-rename"
+            />
+            <DrawMenuRow
+              icon="settings-outline"
+              label="Settings"
+              onPress={() => { setShowPaperMenu(false); router.push('/settings'); }}
+              testID="draw-menu-settings"
             />
             <DrawMenuRow
               icon="arrow-undo-outline"

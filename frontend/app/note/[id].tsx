@@ -502,6 +502,15 @@ export default function NoteEditor() {
               }}
               testID="menu-delete"
             />
+            <MenuItem
+              icon="settings-outline"
+              label="Settings"
+              onPress={() => {
+                setShowMore(false);
+                router.push('/settings');
+              }}
+              testID="menu-settings"
+            />
           </View>
         </Pressable>
       </Modal>
