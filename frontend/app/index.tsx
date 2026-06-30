@@ -1389,8 +1389,8 @@ export default function HomeScreen() {
               >
                 {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
                   const active = hwTemplate === t;
-                  const previewW = 80;
-                  const previewH = 104;
+                  const previewW = hwOrientation === 'landscape' ? 130 : 80;
+                  const previewH = hwOrientation === 'landscape' ? 80 : 104;
                   const previewColor = hwPaperColor;
                   // luminance-based line color so the preview matches the canvas behaviour
                   const lum = (() => {
