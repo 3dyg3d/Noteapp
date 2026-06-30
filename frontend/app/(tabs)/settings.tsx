@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,6 +14,9 @@ export default function SettingsScreen() {
   const { mode, setMode, colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { settings, update } = useAppSettings();
+  const { width: winW } = useWindowDimensions();
+  const wide = winW >= 720;
+  const contentMaxW = wide ? 560 : winW;
 
   const [passcode, setPasscode] = useState('');
   const [hasPasscode, setHasPasscode] = useState(false);
@@ -108,14 +111,18 @@ export default function SettingsScreen() {
   ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface }}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+    <View style={{ flex: 1, backgroundColor: colors.surface, alignItems: 'center' }}>
+      <View style={[styles.header, { paddingTop: insets.top + spacing.sm, width: '100%', maxWidth: contentMaxW }]}>
         <Text style={[styles.title, { color: colors.onSurface }]} testID="settings-title">
           Settings
         </Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 100 }}>
+      <ScrollView
+        style={{ width: '100%' }}
+        contentContainerStyle={{ alignItems: 'center', paddingBottom: insets.bottom + 100 }}
+      >
+        <View style={{ width: '100%', maxWidth: contentMaxW, padding: spacing.lg }}>
         <Text style={[styles.section, { color: colors.muted }]}>APPEARANCE</Text>
         <View style={styles.themeRow}>
           <ThemeOption value="system" label="System" />
@@ -254,6 +261,7 @@ export default function SettingsScreen() {
         <View style={[styles.row, { backgroundColor: colors.surfaceSecondary }]}>
           <Ionicons name="information-circle-outline" size={22} color={colors.onSurface} />
           <Text style={[styles.label, { color: colors.onSurface, marginLeft: spacing.md }]}>GalaxyNotes v1.0</Text>
+        </View>
         </View>
       </ScrollView>
     </View>

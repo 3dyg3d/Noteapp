@@ -10,6 +10,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -141,6 +142,21 @@ export default function HomeScreen() {
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
+
+  // Responsive column count: phones=2, tablets scale up
+  const numColumns = useMemo(() => {
+    if (winW >= 1400) return 6;
+    if (winW >= 1100) return 5;
+    if (winW >= 850) return 4;
+    if (winW >= 620) return 3;
+    return 2;
+  }, [winW]);
+  const cardPxWidth = useMemo(() => {
+    const horizPad = spacing.lg * 2;
+    const totalGap = spacing.md * (numColumns - 1);
+    return (winW - horizPad - totalGap) / numColumns;
+  }, [winW, numColumns]);
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -367,7 +383,7 @@ export default function HomeScreen() {
   // --- Card renderer ---
   const renderNoteCard = (note: Note) => {
     const folder = folderById(note.folder_id);
-    const cardWidth = viewMode === 'grid' ? '48%' : '100%';
+    const cardWidth = viewMode === 'grid' ? cardPxWidth : undefined;
     const isSelected = selectedIds.has(note.id);
     return (
       <Pressable
@@ -386,7 +402,8 @@ export default function HomeScreen() {
           styles.card,
           {
             backgroundColor: isSelected ? colors.brandTertiary : colors.surfaceSecondary,
-            width: cardWidth as any,
+            width: cardWidth,
+            alignSelf: viewMode === 'list' ? 'stretch' : 'flex-start',
             borderLeftColor: folder?.color || 'transparent',
             borderLeftWidth: folder ? 3 : 0,
             borderWidth: isSelected ? 2 : 0,
@@ -1090,7 +1107,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     marginTop: spacing.sm,
   },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: spacing.md },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    gap: spacing.md,
+  },
   card: { padding: spacing.lg, borderRadius: radius.lg, marginBottom: spacing.md, minHeight: 120 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
   cardDate: { fontSize: typeScale.sm },
