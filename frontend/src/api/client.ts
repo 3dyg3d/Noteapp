@@ -13,6 +13,8 @@ export interface Note {
   checklist: ChecklistItem[];
   images: string[];
   drawings: string[];
+  drawing_data?: string | null;
+  note_type?: 'text' | 'handwriting';
   folder_id: string | null;
   color: string | null;
   pinned: boolean;
@@ -26,6 +28,7 @@ export interface Folder {
   id: string;
   name: string;
   color: string;
+  parent_id: string | null;
   created_at: string;
 }
 
@@ -68,7 +71,7 @@ export const NotesApi = {
 
 export const FoldersApi = {
   list: () => http<Folder[]>('/folders'),
-  create: (data: { name: string; color: string }) =>
+  create: (data: { name: string; color: string; parent_id?: string | null }) =>
     http<Folder>('/folders', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<Folder>) =>
     http<Folder>(`/folders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

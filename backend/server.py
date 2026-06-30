@@ -40,6 +40,8 @@ class NoteBase(BaseModel):
     checklist: List[ChecklistItem] = Field(default_factory=list)
     images: List[str] = Field(default_factory=list)
     drawings: List[str] = Field(default_factory=list)
+    drawing_data: Optional[str] = None  # JSON blob for full handwritten canvas
+    note_type: str = "text"             # "text" | "handwriting"
     folder_id: Optional[str] = None
     color: Optional[str] = None
     pinned: bool = False
@@ -56,6 +58,8 @@ class NoteUpdate(BaseModel):
     checklist: Optional[List[ChecklistItem]] = None
     images: Optional[List[str]] = None
     drawings: Optional[List[str]] = None
+    drawing_data: Optional[str] = None
+    note_type: Optional[str] = None
     folder_id: Optional[str] = None
     color: Optional[str] = None
     pinned: Optional[bool] = None
@@ -72,6 +76,7 @@ class Note(NoteBase):
 class FolderBase(BaseModel):
     name: str
     color: str = "#7B8C73"
+    parent_id: Optional[str] = None
 
 
 class FolderCreate(FolderBase):
@@ -81,6 +86,7 @@ class FolderCreate(FolderBase):
 class FolderUpdate(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
+    parent_id: Optional[str] = None
 
 
 class Folder(FolderBase):
@@ -226,7 +232,9 @@ async def delete_folder(folder_id: str):
     result = await db.folders.delete_one({"id": folder_id})
     if result.deleted_count == 0:
         raise HTTPException(404, "Folder not found")
+    # Detach notes & promote children to root
     await db.notes.update_many({"folder_id": folder_id}, {"$set": {"folder_id": None}})
+    await db.folders.update_many({"parent_id": folder_id}, {"$set": {"parent_id": None}})
     return {"ok": True}
 
 
