@@ -12,6 +12,7 @@ export interface AppSettings {
   gestureTwoFingerTap: GestureAction;
   gestureThreeFingerTap: GestureAction;
   toolbarPosition: ToolbarPosition;
+  palmRejection: boolean;
 }
 
 const KEY = 'galaxynotes:app-settings';
@@ -21,6 +22,7 @@ const DEFAULTS: AppSettings = {
   gestureTwoFingerTap: 'undo',
   gestureThreeFingerTap: 'redo',
   toolbarPosition: 'bottom',
+  palmRejection: false,
 };
 
 let cache: AppSettings | null = null;

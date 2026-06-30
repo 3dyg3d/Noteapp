@@ -249,16 +249,38 @@ export default function HomeScreen() {
     haptic.light();
     setShowTemplate(true);
   };
+  // Handwriting prep popup (paper size + template before opening canvas)
+  const [showHwPrep, setShowHwPrep] = useState(false);
+  const [hwSize, setHwSize] = useState<'fit' | 'a4' | 'a5' | 'letter' | 'index'>('fit');
+  const [hwTemplate, setHwTemplate] = useState<'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo'>('blank');
+
   const createFromTemplate = async (tpl: Template) => {
     setShowTemplate(false);
+    if (tpl.mode === 'drawing') {
+      setShowHwPrep(true);
+      return;
+    }
     try {
       const seed = tpl.apply();
       const note = await NotesApi.create({ ...seed, folder_id: folderFilter });
-      if (tpl.mode === 'drawing') {
-        router.push(`/draw/${note.id}`);
-      } else {
-        router.push(`/note/${note.id}`);
-      }
+      router.push(`/note/${note.id}`);
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  const startHandwriting = async () => {
+    setShowHwPrep(false);
+    try {
+      const drawing_data = JSON.stringify({ paper: hwTemplate, paperSize: hwSize, paperColor: 'white', items: [] });
+      const note = await NotesApi.create({
+        title: 'Handwritten note',
+        content: '',
+        note_type: 'handwriting',
+        drawing_data,
+        folder_id: folderFilter,
+      });
+      router.push(`/draw/${note.id}`);
     } catch (e) {
       console.warn(e);
     }
@@ -497,6 +519,13 @@ export default function HomeScreen() {
               {categoryLabel}
             </Text>
             <Pressable
+              testID="sort-btn"
+              onPress={() => setShowSortMenu(true)}
+              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+            >
+              <Ionicons name="swap-vertical-outline" size={20} color={colors.onSurface} />
+            </Pressable>
+            <Pressable
               testID="toggle-view-btn"
               onPress={() => { haptic.selection(); setViewMode((v) => (v === 'grid' ? 'list' : 'grid')); }}
               style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
@@ -506,6 +535,13 @@ export default function HomeScreen() {
                 size={20}
                 color={colors.onSurface}
               />
+            </Pressable>
+            <Pressable
+              testID="settings-btn"
+              onPress={() => router.push('/settings')}
+              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+            >
+              <Ionicons name="settings-outline" size={20} color={colors.onSurface} />
             </Pressable>
           </View>
         ) : (
@@ -816,6 +852,16 @@ export default function HomeScreen() {
             <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.sm, paddingHorizontal: spacing.md }}>
               Tip: long-press a folder to edit or delete.
             </Text>
+
+            <View style={{ flex: 1, minHeight: spacing.md }} />
+            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm }} />
+            <DrawerRow
+              icon="settings-outline"
+              label="Settings"
+              onPress={() => { setDrawerOpen(false); router.push('/settings'); }}
+              testID="drawer-settings"
+            />
+            <View style={{ height: insets.bottom + spacing.sm }} />
           </Pressable>
         </Pressable>
       </Modal>
@@ -887,6 +933,103 @@ export default function HomeScreen() {
                 </Pressable>
               ))}
             </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Handwriting prep popup */}
+      <Modal visible={showHwPrep} transparent animationType="slide" onRequestClose={() => setShowHwPrep(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowHwPrep(false)}>
+          <Pressable
+            style={[
+              styles.sheet,
+              {
+                backgroundColor: colors.surface,
+                paddingBottom: insets.bottom + spacing.lg,
+                maxHeight: '80%',
+                maxWidth: 560,
+                alignSelf: 'center',
+                borderRadius: radius.lg,
+                marginBottom: insets.bottom + spacing.md,
+              },
+            ]}
+          >
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: colors.onSurface }]} testID="hw-prep-title">
+              Set up your page
+            </Text>
+
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+              PAPER SIZE
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+              {(['fit', 'a4', 'a5', 'letter', 'index'] as const).map((s) => {
+                const label = s === 'fit' ? 'Fit' : s === 'a4' ? 'A4' : s === 'a5' ? 'A5' : s === 'letter' ? 'Letter' : 'Index';
+                const active = hwSize === s;
+                return (
+                  <Pressable
+                    key={s}
+                    onPress={() => setHwSize(s)}
+                    testID={`hw-size-${s}`}
+                    style={{
+                      paddingHorizontal: spacing.lg,
+                      paddingVertical: spacing.sm,
+                      borderRadius: radius.pill,
+                      backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                    }}
+                  >
+                    <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+              TEMPLATE
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+              {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
+                const active = hwTemplate === t;
+                return (
+                  <Pressable
+                    key={t}
+                    onPress={() => setHwTemplate(t)}
+                    testID={`hw-template-${t}`}
+                    style={{
+                      paddingHorizontal: spacing.md,
+                      paddingVertical: spacing.sm,
+                      borderRadius: radius.md,
+                      backgroundColor: active ? colors.brandTertiary : colors.surfaceSecondary,
+                      borderWidth: active ? 2 : 1,
+                      borderColor: active ? colors.brand : 'transparent',
+                    }}
+                  >
+                    <Text style={{ color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                      {t[0].toUpperCase() + t.slice(1)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl }}>
+              <Pressable
+                onPress={() => setShowHwPrep(false)}
+                testID="hw-cancel"
+                style={[styles.btn, { flex: 1, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }]}
+              >
+                <Text style={{ color: colors.onSurface }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                testID="hw-create"
+                onPress={startHandwriting}
+                style={[styles.btn, { flex: 2, backgroundColor: colors.brand }]}
+              >
+                <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Start writing</Text>
+              </Pressable>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>

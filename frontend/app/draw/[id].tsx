@@ -13,7 +13,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { Canvas, Path, Skia, SkPath } from '@shopify/react-native-skia';
+import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 
 import { useTheme } from '@/src/theme/ThemeContext';
@@ -403,6 +403,12 @@ export default function DrawScreen() {
     .maxPointers(1)
     .onBegin((e) => {
       const w = toWorld(e.x, e.y);
+      // Palm rejection: touch input pans canvas instead of drawing (S Pen / stylus draws normally)
+      if (settings.palmRejection && (e as any).pointerType === 'touch') {
+        panStartRef.current = { x: tx, y: ty };
+        livePtsRef.current = []; // signal: panning, not drawing
+        return;
+      }
       if (isPenTool(tool)) {
         livePtsRef.current = [{ x: w.x, y: w.y, t: Date.now() }];
         setLiveTick((n) => n + 1);
@@ -416,6 +422,12 @@ export default function DrawScreen() {
     })
     .onUpdate((e) => {
       const w = toWorld(e.x, e.y);
+      if (settings.palmRejection && (e as any).pointerType === 'touch' && livePtsRef.current.length === 0) {
+        // Continue panning the canvas with the touch
+        setTx(panStartRef.current.x + e.translationX);
+        setTy(panStartRef.current.y + e.translationY);
+        return;
+      }
       if (isPenTool(tool)) {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
         if (!last) return;
@@ -639,12 +651,14 @@ export default function DrawScreen() {
           />
           {Platform.OS !== 'web' ? (
             <GestureDetector gesture={finalGesture}>
-              <View style={{ flex: 1, transform: [{ translateX: tx }, { translateY: ty }, { scale }] }}>
+              <View style={{ flex: 1 }}>
                 <Canvas style={StyleSheet.absoluteFill}>
-                  {items.map((it, i) =>
-                    it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
-                  )}
-                  {livePreview}
+                  <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
+                    {items.map((it, i) =>
+                      it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
+                    )}
+                    {livePreview}
+                  </Group>
                 </Canvas>
               </View>
             </GestureDetector>

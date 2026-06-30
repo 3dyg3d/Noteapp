@@ -236,6 +236,8 @@ export default function NoteEditor() {
         </Pressable>
       </View>
 
+      <OpenTabsStrip currentId={id as string} />
+
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160 }}
         keyboardShouldPersistTaps="handled"

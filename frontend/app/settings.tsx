@@ -150,6 +150,23 @@ export default function SettingsScreen() {
 
         <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>S PEN & GESTURES</Text>
 
+        <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md }]}>
+          <Ionicons name="hand-left-outline" size={22} color={colors.onSurface} />
+          <View style={{ flex: 1, marginLeft: spacing.md }}>
+            <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Palm rejection</Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+              Single-finger touch scrolls the canvas; S Pen / stylus draws
+            </Text>
+          </View>
+          <Switch
+            testID="toggle-palm-rejection"
+            value={settings.palmRejection}
+            onValueChange={(v) => update({ palmRejection: v })}
+            thumbColor={settings.palmRejection ? colors.brand : colors.muted}
+            trackColor={{ false: colors.border, true: colors.brandTertiary }}
+          />
+        </View>
+
         <ActionPicker
           label="S Pen button"
           value={settings.sPenButton}
