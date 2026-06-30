@@ -110,6 +110,15 @@ export default function SettingsScreen() {
     { id: 'none', label: 'Off' },
   ];
 
+  type TabKey = 'general' | 'pen' | 'security' | 'about';
+  const [activeTab, setActiveTab] = useState<TabKey>('general');
+  const tabs: { key: TabKey; label: string; icon: any }[] = [
+    { key: 'general', label: 'General', icon: 'options-outline' },
+    { key: 'pen', label: 'Pen & Gestures', icon: 'hand-left-outline' },
+    { key: 'security', label: 'Security', icon: 'lock-closed-outline' },
+    { key: 'about', label: 'About', icon: 'information-circle-outline' },
+  ];
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface, alignItems: 'center' }}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm, width: '100%', maxWidth: contentMaxW }]}>
@@ -118,11 +127,56 @@ export default function SettingsScreen() {
         </Text>
       </View>
 
+      {/* Tab bar */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.sm }}
+        style={{ width: '100%', maxWidth: contentMaxW, flexGrow: 0, marginBottom: spacing.sm }}
+      >
+        {tabs.map((t) => {
+          const active = activeTab === t.key;
+          return (
+            <Pressable
+              key={t.key}
+              onPress={() => setActiveTab(t.key)}
+              testID={`settings-tab-${t.key}`}
+              style={({ pressed }) => [
+                styles.tab,
+                {
+                  backgroundColor: active
+                    ? colors.brand
+                    : pressed
+                    ? colors.surfaceTertiary
+                    : colors.surfaceSecondary,
+                },
+              ]}
+            >
+              <Ionicons
+                name={t.icon}
+                size={16}
+                color={active ? colors.onBrandPrimary : colors.onSurface}
+              />
+              <Text
+                style={{
+                  color: active ? colors.onBrandPrimary : colors.onSurface,
+                  fontWeight: active ? '700' : '500',
+                  marginLeft: 6,
+                }}
+              >
+                {t.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
       <ScrollView
         style={{ width: '100%' }}
         contentContainerStyle={{ alignItems: 'center', paddingBottom: insets.bottom + 100 }}
       >
         <View style={{ width: '100%', maxWidth: contentMaxW, padding: spacing.lg }}>
+        {activeTab === 'general' && (<>
         <Text style={[styles.section, { color: colors.muted }]}>APPEARANCE</Text>
         <View style={styles.themeRow}>
           <ThemeOption value="system" label="System" />
@@ -164,8 +218,10 @@ export default function SettingsScreen() {
             trackColor={{ false: colors.border, true: colors.brandTertiary }}
           />
         </View>
+        </>)}
 
-        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>S PEN & GESTURES</Text>
+        {activeTab === 'pen' && (<>
+        <Text style={[styles.section, { color: colors.muted }]}>S PEN & GESTURES</Text>
 
         <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md }]}>
           <Ionicons name="hand-left-outline" size={22} color={colors.onSurface} />
@@ -209,8 +265,10 @@ export default function SettingsScreen() {
           onChange={(v: GestureAction) => update({ gestureThreeFingerTap: v })}
           testID="gesture-three-finger"
         />
+        </>)}
 
-        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>SECURITY</Text>
+        {activeTab === 'security' && (<>
+        <Text style={[styles.section, { color: colors.muted }]}>SECURITY</Text>
 
         {!hasPasscode && !editing && (
           <Pressable
@@ -290,12 +348,15 @@ export default function SettingsScreen() {
             </View>
           </View>
         )}
+        </>)}
 
-        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>ABOUT</Text>
+        {activeTab === 'about' && (<>
+        <Text style={[styles.section, { color: colors.muted }]}>ABOUT</Text>
         <View style={[styles.row, { backgroundColor: colors.surfaceSecondary }]}>
           <Ionicons name="information-circle-outline" size={22} color={colors.onSurface} />
           <Text style={[styles.label, { color: colors.onSurface, marginLeft: spacing.md }]}>GalaxyNotes v1.0</Text>
         </View>
+        </>)}
         </View>
       </ScrollView>
     </View>
@@ -307,6 +368,13 @@ const styles = StyleSheet.create({
   title: { fontSize: typeScale.xxxl, fontWeight: '700' },
   section: { fontSize: typeScale.sm, letterSpacing: 1.2, fontWeight: '600', marginBottom: spacing.sm },
   themeRow: { flexDirection: 'row', gap: spacing.sm },
+  tab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+  },
   themeBtn: {
     flex: 1,
     height: 44,

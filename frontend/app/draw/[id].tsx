@@ -694,10 +694,10 @@ export default function DrawScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={
             vertical
-              ? { alignItems: 'center', gap: 4, paddingHorizontal: 4 }
+              ? { alignItems: 'center', gap: 4, paddingHorizontal: 4, paddingBottom: spacing.sm }
               : { alignItems: 'center', gap: 2, paddingHorizontal: spacing.xs }
           }
-          style={{ flexGrow: 0 }}
+          style={{ flexGrow: 1 }}
         >
           <ToolBtn
             icon={settings.palmRejection ? 'hand-left' : 'hand-left-outline'}
@@ -715,66 +715,51 @@ export default function DrawScreen() {
           <Divider vertical={vertical} />
           <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
           <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={() => handleToolTap('eraser')} testID="tool-eraser" />
-        </ScrollView>
-
-        {/* Color + width row */}
-        <View
-          style={
-            vertical
-              ? { flexDirection: 'column', alignItems: 'center', paddingTop: spacing.sm, gap: 8 }
-              : styles.optRow
-          }
-        >
-          <ScrollView
-            horizontal={!vertical}
-            showsHorizontalScrollIndicator={false}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={
-              vertical
-                ? { gap: 6, alignItems: 'center' }
-                : { gap: spacing.xs, paddingHorizontal: spacing.sm }
-            }
-            style={{ flexGrow: 0, maxHeight: vertical ? 180 : undefined }}
-          >
-            {PALETTE.map((c) => (
-              <Pressable
-                key={c}
-                onPress={() => setColor(c)}
-                testID={`color-${c}`}
-                style={[
-                  styles.colorDot,
-                  {
-                    backgroundColor: c,
-                    borderColor: color === c ? colors.brand : colors.border,
-                    borderWidth: color === c ? 3 : 1,
-                  },
-                ]}
+          <Divider vertical={vertical} />
+          {/* Color swatches — inline in the same single line */}
+          {PALETTE.map((c) => (
+            <Pressable
+              key={c}
+              onPress={() => setColor(c)}
+              testID={`color-${c}`}
+              style={[
+                styles.colorDot,
+                {
+                  backgroundColor: c,
+                  borderColor: color === c ? colors.brand : colors.border,
+                  borderWidth: color === c ? 3 : 1,
+                  marginHorizontal: 2,
+                },
+              ]}
+            />
+          ))}
+          <Divider vertical={vertical} />
+          {/* Width buttons — also inline */}
+          {[0, 1, 2].map((i) => (
+            <Pressable
+              key={`w-${i}`}
+              onPress={() => setWidthIdx(i as 0 | 1 | 2)}
+              testID={`width-${i}`}
+              style={[
+                styles.widthBtn,
+                {
+                  borderColor: widthIdx === i ? colors.brand : colors.border,
+                  backgroundColor: colors.surfaceSecondary,
+                  marginHorizontal: 2,
+                },
+              ]}
+            >
+              <View
+                style={{
+                  width: 18,
+                  height: 2 + i * 3,
+                  backgroundColor: colors.onSurface,
+                  borderRadius: 999,
+                }}
               />
-            ))}
-          </ScrollView>
-          <View style={{ flexDirection: vertical ? 'column' : 'row', gap: 4, paddingHorizontal: vertical ? 0 : spacing.sm }}>
-            {[0, 1, 2].map((i) => (
-              <Pressable
-                key={i}
-                onPress={() => setWidthIdx(i as 0 | 1 | 2)}
-                testID={`width-${i}`}
-                style={[
-                  styles.widthBtn,
-                  { borderColor: widthIdx === i ? colors.brand : colors.border, backgroundColor: colors.surfaceSecondary },
-                ]}
-              >
-                <View
-                  style={{
-                    width: 18,
-                    height: 2 + i * 3,
-                    backgroundColor: colors.onSurface,
-                    borderRadius: 999,
-                  }}
-                />
-              </Pressable>
-            ))}
-          </View>
-        </View>
+            </Pressable>
+          ))}
+        </ScrollView>
       </View>
     );
   };
@@ -1392,17 +1377,19 @@ export default function DrawScreen() {
       {/* SUB: Toolbar position */}
       <Modal visible={showSubToolbar} transparent animationType="fade" onRequestClose={() => setShowSubToolbar(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={styles.backdrop}
           onPress={() => setShowSubToolbar(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
             style={{
-              width: '100%',
-              maxWidth: 420,
+              position: 'absolute',
+              top: insets.top + 52,
+              right: spacing.sm,
+              width: 280,
               backgroundColor: colors.surface,
               borderRadius: radius.lg,
-              padding: spacing.lg,
+              padding: spacing.md,
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 10 },
               shadowOpacity: 0.22,
@@ -1410,15 +1397,15 @@ export default function DrawScreen() {
               elevation: 16,
             }}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm }}>
               <Pressable onPress={() => { setShowSubToolbar(false); setShowPaperMenu(true); }} hitSlop={6}>
-                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+                <Ionicons name="chevron-back" size={20} color={colors.onSurface} />
               </Pressable>
-              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.base, fontWeight: '700', marginLeft: spacing.sm }}>
                 Toolbar position
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, justifyContent: 'center' }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'center' }}>
               {(['left', 'right', 'top', 'bottom'] as ToolbarPosition[]).map((pos) => {
                 const active = toolbarPos === pos;
                 const iconName: any =
@@ -1435,8 +1422,8 @@ export default function DrawScreen() {
                     testID={`sub-toolbar-${pos}`}
                     onPress={() => { haptic.selection(); update({ toolbarPosition: pos }); }}
                     style={({ pressed }) => ({
-                      width: 140,
-                      paddingVertical: spacing.lg,
+                      width: 110,
+                      paddingVertical: spacing.md,
                       borderRadius: radius.md,
                       backgroundColor: active
                         ? colors.brandTertiary
@@ -1447,11 +1434,11 @@ export default function DrawScreen() {
                       borderColor: active ? colors.brand : 'transparent',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: 6,
+                      gap: 4,
                     })}
                   >
-                    <Ionicons name={iconName} size={32} color={active ? colors.brand : colors.onSurface} />
-                    <Text style={{ color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                    <Ionicons name={iconName} size={24} color={active ? colors.brand : colors.onSurface} />
+                    <Text style={{ color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500', fontSize: typeScale.sm }}>
                       {pos.charAt(0).toUpperCase() + pos.slice(1)}
                     </Text>
                   </Pressable>
