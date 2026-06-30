@@ -370,25 +370,13 @@ export default function DrawScreen() {
     else if (action === 'eraser') { haptic.medium(); setTool('eraser'); }
   };
 
-  // Pinch zoom (2 fingers)
+  // Pinch zoom (2 fingers) — panning has been intentionally removed; zoom only.
   const pinch = Gesture.Pinch()
     .runOnJS(true)
     .onStart(() => { scaleStartRef.current = scale; })
     .onUpdate((e) => {
       const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleStartRef.current * e.scale));
       setScale(next);
-    });
-
-  // Two-finger pan (canvas pan)
-  const twoFingerPan = Gesture.Pan()
-    .runOnJS(true)
-    .minPointers(2)
-    .maxPointers(2)
-    .averageTouches(true)
-    .onStart(() => { panStartRef.current = { x: tx, y: ty }; })
-    .onUpdate((e) => {
-      setTx(panStartRef.current.x + e.translationX);
-      setTy(panStartRef.current.y + e.translationY);
     });
 
   const twoTap = Gesture.Tap()
@@ -403,10 +391,10 @@ export default function DrawScreen() {
     .minPointers(3)
     .onEnd(() => runGestureAction(settings.gestureThreeFingerTap));
 
-  const composedGesture = Gesture.Simultaneous(pinch, twoFingerPan);
+  const composedGesture = pinch;
   const tapsGesture = Gesture.Exclusive(threeTap, twoTap);
 
-  // Convert screen-space gesture coords to world coords accounting for zoom/pan
+  // Convert screen-space gesture coords to world coords accounting for zoom only (no pan).
   const toWorld = (x: number, y: number) => ({
     x: (x - tx) / scale,
     y: (y - ty) / scale,
@@ -418,10 +406,9 @@ export default function DrawScreen() {
     .maxPointers(1)
     .onBegin((e) => {
       const w = toWorld(e.x, e.y);
-      // Palm rejection: touch input pans canvas instead of drawing (S Pen / stylus draws normally)
+      // Palm rejection: touch input is ignored entirely (S Pen / stylus draws normally).
       if (settings.palmRejection && (e as any).pointerType === 'touch') {
-        panStartRef.current = { x: tx, y: ty };
-        livePtsRef.current = []; // signal: panning, not drawing
+        livePtsRef.current = [];
         return;
       }
       if (isPenTool(tool)) {
@@ -437,10 +424,8 @@ export default function DrawScreen() {
     })
     .onUpdate((e) => {
       const w = toWorld(e.x, e.y);
+      // Palm rejection: skip touch updates entirely.
       if (settings.palmRejection && (e as any).pointerType === 'touch' && livePtsRef.current.length === 0) {
-        // Continue panning the canvas with the touch
-        setTx(panStartRef.current.x + e.translationX);
-        setTy(panStartRef.current.y + e.translationY);
         return;
       }
       if (isPenTool(tool)) {
