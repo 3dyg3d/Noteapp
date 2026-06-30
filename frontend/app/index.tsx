@@ -739,7 +739,7 @@ export default function HomeScreen() {
               onPress={
                 insideFolder
                   ? goBack
-                  : () => { haptic.selection(); setDrawerOpen(true); }
+                  : () => { haptic.selection(); setDrawerOpen((o) => !o); }
               }
               style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
             >
