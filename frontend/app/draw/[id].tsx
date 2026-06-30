@@ -184,14 +184,14 @@ export default function DrawScreen() {
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
-  // Zoom & pan
+  // Zoom (panning removed) — translation is derived to keep canvas centered while zooming.
   const [scale, setScale] = useState(1);
-  const [tx, setTx] = useState(0);
-  const [ty, setTy] = useState(0);
   const scaleStartRef = useRef(1);
-  const panStartRef = useRef({ x: 0, y: 0 });
   const MAX_SCALE = 16;
   const MIN_SCALE = 0.5;
+  // Derived translation so the canvas center stays pinned to the screen center at any scale.
+  const tx = (pageDims.w / 2) * (1 - scale);
+  const ty = (pageDims.h / 2) * (1 - scale);
 
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
@@ -619,8 +619,6 @@ export default function DrawScreen() {
 
   const resetZoom = () => {
     setScale(1);
-    setTx(0);
-    setTy(0);
   };
 
   if (loading || !note) {
@@ -720,6 +718,14 @@ export default function DrawScreen() {
         ]}
       >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', gap: 2, paddingHorizontal: spacing.xs }}>
+          <ToolBtn
+            icon={settings.palmRejection ? 'hand-left' : 'hand-left-outline'}
+            label={settings.palmRejection ? 'Pen only' : 'Touch on'}
+            active={settings.palmRejection}
+            onPress={() => { haptic.selection(); update({ palmRejection: !settings.palmRejection }); }}
+            testID="tool-pen-mode"
+          />
+          <Divider />
           <ToolBtn icon="brush" label="Pen" active={tool === 'pen'} onPress={() => handleToolTap('pen')} testID="tool-pen" />
           <ToolBtn icon="create-outline" label="Fountain" active={tool === 'fountain'} onPress={() => handleToolTap('fountain')} testID="tool-fountain" />
           <ToolBtn icon="color-wand" label="Marker" active={tool === 'marker'} onPress={() => handleToolTap('marker')} testID="tool-marker" />

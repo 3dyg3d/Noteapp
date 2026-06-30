@@ -101,3 +101,79 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  Bug report from user on the handwriting canvas screen:
+  1. "I'm still able to write with my finger" — even after the previous palm-rejection wiring,
+     the user wants an explicit Pen-Only toggle in the draw screen so finger touches do NOT
+     create strokes.
+  2. "The zoom out is going to the left, it should be centered always" — pinch-zoom on the
+     canvas was translating content toward the top-left of the screen instead of keeping the
+     page centered.
+
+frontend:
+  - task: "Pen-only mode toggle in handwriting toolbar"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/draw/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Added a new ToolBtn at the very start of the bottom toolbar in `app/draw/[id].tsx` that
+            toggles `settings.palmRejection`. The icon switches between filled `hand-left` (Pen only)
+            and outlined `hand-left-outline` (Touch on). Existing pan-gesture handler already drops
+            touch events when palmRejection is true, so toggling this button from the toolbar must
+            now make finger drags inert while S Pen/stylus continues to draw.
+            testID for the new button: `tool-pen-mode`.
+
+  - task: "Zoom stays centered on the canvas"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/draw/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Removed `tx`/`ty` state and replaced them with derived values:
+              tx = (pageDims.w / 2) * (1 - scale);
+              ty = (pageDims.h / 2) * (1 - scale);
+            so the canvas center stays anchored to the screen center regardless of scale. The
+            pinch gesture only updates `scale`; the Skia Group uses [tx, ty, scale] for transform
+            and `toWorld` uses the same tx/ty to convert pointer coordinates. resetZoom() now
+            just sets scale back to 1.
+
+metadata:
+  created_by: main_agent
+  test_sequence: 4
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "Pen-only mode toggle in handwriting toolbar"
+    - "Zoom stays centered on the canvas"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Two related bug fixes on `/app/frontend/app/draw/[id].tsx`:
+      (1) New `tool-pen-mode` ToolBtn at the start of the bottom toolbar that toggles
+          `settings.palmRejection`. When active, finger touches must NOT draw on the Skia canvas
+          (only the S Pen/stylus should). Existing palm-rejection logic in the Pan gesture
+          (`if (settings.palmRejection && pointerType === 'touch') return;`) handles the ignore.
+      (2) Zoom centering: tx/ty are now derived from `scale` and `pageDims` so the canvas
+          stays centered at any zoom level (no more drift to the left).
+      Please test by opening a handwriting note (web preview shows the "Stylus / S Pen canvas"
+      fallback, but you can still verify the button toggles `Pen only` ↔ `Touch on`, the
+      `tool-pen-mode` testID is present, and the Skia native code paths are wired). Native
+      verification of the finger-rejection and zoom centering must be flagged as
+      `requires_native_build` if it cannot be performed on the web preview.
