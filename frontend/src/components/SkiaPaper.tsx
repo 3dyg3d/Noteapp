@@ -9,48 +9,57 @@ interface Props {
   lineColor: string;
   width: number;
   height: number;
+  /**
+   * Spacing in pixels for ruled / narrow / grid / dotted templates.
+   * If omitted, sensible defaults are used per template.
+   */
+  lineSpacing?: number;
 }
 
 /**
  * Skia-based paper background. Renders inside a transformed Group so it
  * zooms / pans together with the user's strokes.
  */
-export default function SkiaPaper({ type, color, lineColor, width, height }: Props) {
+export default function SkiaPaper({ type, color, lineColor, width, height, lineSpacing }: Props) {
   const fill = <Rect x={0} y={0} width={width} height={height} color={color} />;
 
   if (type === 'blank') return fill;
 
   if (type === 'ruled') {
+    const step = Math.max(8, lineSpacing ?? 32);
     const lines = [];
-    for (let y = 40; y < height; y += 32) {
+    for (let y = step; y < height; y += step) {
       lines.push(<Line key={`r-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={1} />);
     }
     return <Group>{fill}{lines}</Group>;
   }
 
   if (type === 'narrow') {
+    const step = Math.max(6, lineSpacing ?? 20);
     const lines = [];
-    for (let y = 28; y < height; y += 20) {
+    for (let y = step; y < height; y += step) {
       lines.push(<Line key={`n-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={1} />);
     }
     return <Group>{fill}{lines}</Group>;
   }
 
   if (type === 'grid') {
+    const step = Math.max(8, lineSpacing ?? 24);
     const lines = [];
-    for (let y = 0; y < height; y += 24) {
+    for (let y = 0; y < height; y += step) {
       lines.push(<Line key={`gh-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={1} />);
     }
-    for (let x = 0; x < width; x += 24) {
+    for (let x = 0; x < width; x += step) {
       lines.push(<Line key={`gv-${x}`} p1={vec(x, 0)} p2={vec(x, height)} color={lineColor} strokeWidth={1} />);
     }
     return <Group>{fill}{lines}</Group>;
   }
 
   if (type === 'dotted') {
+    const step = Math.max(8, lineSpacing ?? 24);
     const dots = [];
-    for (let y = 12; y < height; y += 24) {
-      for (let x = 12; x < width; x += 24) {
+    for (let y = step / 2; y < height; y += step) {
+      for (let x = step / 2; x < width; x += step) {
         dots.push(<Circle key={`d-${x}-${y}`} cx={x} cy={y} r={1.4} color={lineColor} />);
       }
     }
@@ -58,9 +67,10 @@ export default function SkiaPaper({ type, color, lineColor, width, height }: Pro
   }
 
   if (type === 'cornell') {
+    const step = Math.max(10, lineSpacing ?? 28);
     const lines = [];
     // ruled
-    for (let y = 120; y < height - 80; y += 28) {
+    for (let y = 120; y < height - 80; y += step) {
       lines.push(<Line key={`cr-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={1} />);
     }
     // cue column
@@ -73,18 +83,20 @@ export default function SkiaPaper({ type, color, lineColor, width, height }: Pro
   }
 
   if (type === 'planner') {
+    const step = Math.max(10, lineSpacing ?? 30);
     const els = [];
     els.push(<Line key="ph" p1={vec(0, 90)} p2={vec(width, 90)} color={lineColor} strokeWidth={1.5} />);
     els.push(<Line key="pd" p1={vec(20, 50)} p2={vec(width - 20, 50)} color={lineColor} strokeWidth={1} />);
-    for (let y = 100; y < height; y += 30) {
+    for (let y = 100; y < height; y += step) {
       els.push(<Line key={`pl-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={1} />);
     }
     return <Group>{fill}{els}</Group>;
   }
 
   // todo
+  const step = Math.max(12, lineSpacing ?? 30);
   const els = [];
-  for (let y = 30; y < height; y += 30) {
+  for (let y = step; y < height; y += step) {
     // checkbox stroke (square outline)
     els.push(
       <Rect

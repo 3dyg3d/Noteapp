@@ -18,6 +18,8 @@ interface Props {
   color?: string;
   lineColor?: string;
   borderRadius?: number;
+  /** Optional spacing override (in preview pixels) for ruled/grid/dotted templates. */
+  lineSpacing?: number;
 }
 
 /**
@@ -33,6 +35,7 @@ function PaperPreviewInner({
   color = '#FFFFFF',
   lineColor = '#C9D2E0',
   borderRadius = 8,
+  lineSpacing,
 }: Props) {
   const nodes = useMemo<React.ReactNode[]>(() => {
     const arr: React.ReactNode[] = [];
@@ -42,7 +45,7 @@ function PaperPreviewInner({
     }
 
     if (type === 'ruled') {
-      const step = Math.max(8, Math.round(height / 7));
+      const step = Math.max(6, lineSpacing ?? Math.round(height / 7));
       for (let y = step; y < height - 2; y += step) {
         arr.push(
           <View
@@ -55,7 +58,7 @@ function PaperPreviewInner({
     }
 
     if (type === 'narrow') {
-      const step = Math.max(5, Math.round(height / 11));
+      const step = Math.max(4, lineSpacing ?? Math.round(height / 11));
       for (let y = step; y < height - 2; y += step) {
         arr.push(
           <View
@@ -68,8 +71,8 @@ function PaperPreviewInner({
     }
 
     if (type === 'grid') {
-      const stepY = Math.max(6, Math.round(height / 7));
-      const stepX = Math.max(6, Math.round(width / 6));
+      const stepY = Math.max(5, lineSpacing ?? Math.round(height / 7));
+      const stepX = Math.max(5, lineSpacing ?? Math.round(width / 6));
       for (let y = stepY; y < height - 1; y += stepY) {
         arr.push(
           <View
@@ -90,8 +93,8 @@ function PaperPreviewInner({
     }
 
     if (type === 'dotted') {
-      const stepY = Math.max(6, Math.round(height / 7));
-      const stepX = Math.max(6, Math.round(width / 6));
+      const stepY = Math.max(5, lineSpacing ?? Math.round(height / 7));
+      const stepX = Math.max(5, lineSpacing ?? Math.round(width / 6));
       for (let y = stepY; y < height - 2; y += stepY) {
         for (let x = stepX; x < width - 2; x += stepX) {
           arr.push(
@@ -226,7 +229,7 @@ function PaperPreviewInner({
     }
 
     return arr;
-  }, [type, width, height, lineColor]);
+  }, [type, width, height, lineColor, lineSpacing]);
 
   return (
     <View

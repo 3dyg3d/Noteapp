@@ -22,6 +22,7 @@ import { NotesApi, Note } from '@/src/api/client';
 import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
+import SkiaPaper from '@/src/components/SkiaPaper';
 
 // ---------- Types ----------
 type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil';
@@ -47,18 +48,20 @@ interface ShapeData {
 type Item = StrokeData | ShapeData;
 
 type Paper = 'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo';
-type PaperSize = 'fit' | 'a4' | 'a5' | 'letter' | 'index';
+type PaperSize = 'fit' | 'a4' | 'a5' | 'letter' | 'index' | 'custom';
 
 interface DrawingDoc {
   paper: Paper;
   paperSize?: PaperSize;
+  customSize?: { w: number; h: number }; // pixel dimensions used when paperSize === 'custom'
   paperColor?: string;
   canvasColor?: string;
+  lineSpacing?: number; // pixel spacing for ruled / grid / dotted templates
   items: Item[];
 }
 
 // Ratio = width / height of the page in PORTRAIT
-const PAPER_SIZES: Record<PaperSize, { ratio: number; label: string }> = {
+const PAPER_SIZES: Record<Exclude<PaperSize, 'custom'>, { ratio: number; label: string }> = {
   fit:    { ratio: 0,      label: 'Fit screen' }, // 0 = fill
   a4:     { ratio: 1 / 1.4142, label: 'A4' },
   a5:     { ratio: 1 / 1.4142, label: 'A5' },
@@ -157,7 +160,9 @@ export default function DrawScreen() {
   const [items, setItems] = useState<Item[]>([]);
   const [paper, setPaper] = useState<Paper>('blank');
   const [paperSize, setPaperSize] = useState<PaperSize>('fit');
+  const [customSize, setCustomSize] = useState<{ w: number; h: number } | null>(null);
   const [paperColorId, setPaperColorId] = useState<string>('white');
+  const [lineSpacing, setLineSpacing] = useState<number | undefined>(undefined);
   const [canvasColorHex, setCanvasColorHex] = useState<string>('#d4d4d4');
   // page size in world units (matches the visible page area, lets paper lines be Skia-rendered)
   const [pageDims, setPageDims] = useState<{ w: number; h: number }>({ w: 1024, h: 1366 });
@@ -208,8 +213,10 @@ export default function DrawScreen() {
             setItems(doc.items || []);
             setPaper(doc.paper || 'blank');
             if (doc.paperSize) setPaperSize(doc.paperSize);
+            if (doc.customSize) setCustomSize(doc.customSize);
             if (doc.paperColor) setPaperColorId(doc.paperColor);
             if (doc.canvasColor) setCanvasColorHex(doc.canvasColor);
+            if (typeof doc.lineSpacing === 'number') setLineSpacing(doc.lineSpacing);
           } catch {}
         }
       } catch (e) {
@@ -231,8 +238,10 @@ export default function DrawScreen() {
             drawing_data: JSON.stringify({
               paper: nextPaper,
               paperSize: nextSize,
+              customSize: customSize ?? undefined,
               paperColor: nextColor,
               canvasColor: canvasColorHex,
+              lineSpacing,
               items: nextItems,
             } as DrawingDoc),
             note_type: 'handwriting',
@@ -246,7 +255,7 @@ export default function DrawScreen() {
         }
       }, 500);
     },
-    [id]
+    [id, canvasColorHex, lineSpacing, customSize]
   );
 
   const pushHistory = useCallback((prev: Item[]) => {
@@ -662,6 +671,7 @@ export default function DrawScreen() {
                     lineColor={paperLine}
                     width={pageDims.w}
                     height={pageDims.h}
+                    lineSpacing={lineSpacing}
                   />
                   {items.map((it, i) =>
                     it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)

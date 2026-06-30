@@ -280,10 +280,28 @@ export default function HomeScreen() {
     haptic.light();
     setShowTemplate(true);
   };
-  // Handwriting prep popup (paper size + template before opening canvas)
+  // Handwriting prep popup (paper size + template + color + line spacing before opening canvas)
   const [showHwPrep, setShowHwPrep] = useState(false);
-  const [hwSize, setHwSize] = useState<'fit' | 'a4' | 'a5' | 'letter' | 'index'>('fit');
+  const [hwSize, setHwSize] = useState<'fit' | 'a4' | 'a5' | 'letter' | 'index' | 'custom'>('fit');
+  const [hwCustomW, setHwCustomW] = useState<string>('1024');
+  const [hwCustomH, setHwCustomH] = useState<string>('1366');
   const [hwTemplate, setHwTemplate] = useState<'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo'>('blank');
+  const [hwPaperColor, setHwPaperColor] = useState<string>('white');
+  const [hwLineSpacing, setHwLineSpacing] = useState<number>(32);
+
+  const HW_PAPER_COLORS: { id: string; hex: string; label: string }[] = [
+    { id: 'white',  hex: '#FBFAF6', label: 'White' },
+    { id: 'cream',  hex: '#F4ECDA', label: 'Cream' },
+    { id: 'yellow', hex: '#FFF4C4', label: 'Yellow' },
+    { id: 'mint',   hex: '#E1F0E0', label: 'Mint' },
+    { id: 'sky',    hex: '#DCE6F0', label: 'Sky' },
+    { id: 'rose',   hex: '#F5DDDD', label: 'Rose' },
+    { id: 'gray',   hex: '#ECECEC', label: 'Gray' },
+    { id: 'black',  hex: '#0a0a0a', label: 'Black' },
+  ];
+
+  const hwSupportsSpacing = (t: typeof hwTemplate) =>
+    t === 'ruled' || t === 'narrow' || t === 'grid' || t === 'dotted' || t === 'cornell' || t === 'planner' || t === 'todo';
 
   const createFromTemplate = async (tpl: Template) => {
     setShowTemplate(false);
@@ -303,7 +321,21 @@ export default function HomeScreen() {
   const startHandwriting = async () => {
     setShowHwPrep(false);
     try {
-      const drawing_data = JSON.stringify({ paper: hwTemplate, paperSize: hwSize, paperColor: 'white', items: [] });
+      const customSize =
+        hwSize === 'custom'
+          ? {
+              w: Math.max(200, Math.min(8000, parseInt(hwCustomW, 10) || 1024)),
+              h: Math.max(200, Math.min(8000, parseInt(hwCustomH, 10) || 1366)),
+            }
+          : undefined;
+      const drawing_data = JSON.stringify({
+        paper: hwTemplate,
+        paperSize: hwSize,
+        customSize,
+        paperColor: hwPaperColor,
+        lineSpacing: hwSupportsSpacing(hwTemplate) ? hwLineSpacing : undefined,
+        items: [],
+      });
       const note = await NotesApi.create({
         title: 'Handwritten note',
         content: '',
@@ -1093,7 +1125,7 @@ export default function HomeScreen() {
               {
                 backgroundColor: colors.surface,
                 paddingBottom: insets.bottom + spacing.lg,
-                maxHeight: '80%',
+                maxHeight: '88%',
                 maxWidth: 560,
                 alignSelf: 'center',
                 borderRadius: radius.lg,
@@ -1106,88 +1138,213 @@ export default function HomeScreen() {
               Set up your page
             </Text>
 
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1.2 }}>
-              PAPER SIZE
-            </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
-              {(['fit', 'a4', 'a5', 'letter', 'index'] as const).map((s) => {
-                const label = s === 'fit' ? 'Fit' : s === 'a4' ? 'A4' : s === 'a5' ? 'A5' : s === 'letter' ? 'Letter' : 'Index';
-                const active = hwSize === s;
-                return (
-                  <Pressable
-                    key={s}
-                    onPress={() => setHwSize(s)}
-                    testID={`hw-size-${s}`}
-                    style={{
-                      paddingHorizontal: spacing.lg,
-                      paddingVertical: spacing.sm,
-                      borderRadius: radius.pill,
-                      backgroundColor: active ? colors.brand : colors.surfaceSecondary,
-                    }}
-                  >
-                    <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500' }}>
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
-              TEMPLATE
-            </Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: spacing.md, paddingVertical: spacing.xs, paddingRight: spacing.md }}
-            >
-              {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
-                const active = hwTemplate === t;
-                const previewW = 80;
-                const previewH = 104;
-                return (
-                  <Pressable
-                    key={t}
-                    onPress={() => { haptic.selection(); setHwTemplate(t); }}
-                    testID={`hw-template-${t}`}
-                    style={{
-                      alignItems: 'center',
-                    }}
-                  >
-                    <View
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+                PAPER SIZE
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+                {(['fit', 'a4', 'a5', 'letter', 'index', 'custom'] as const).map((s) => {
+                  const label =
+                    s === 'fit' ? 'Fit' :
+                    s === 'a4' ? 'A4' :
+                    s === 'a5' ? 'A5' :
+                    s === 'letter' ? 'Letter' :
+                    s === 'index' ? 'Index' : 'Custom';
+                  const active = hwSize === s;
+                  return (
+                    <Pressable
+                      key={s}
+                      onPress={() => { haptic.selection(); setHwSize(s); }}
+                      testID={`hw-size-${s}`}
                       style={{
-                        padding: 4,
-                        borderRadius: radius.md,
-                        backgroundColor: active ? colors.brandTertiary : 'transparent',
-                        borderWidth: 2,
-                        borderColor: active ? colors.brand : colors.border,
+                        paddingHorizontal: spacing.lg,
+                        paddingVertical: spacing.sm,
+                        borderRadius: radius.pill,
+                        backgroundColor: active ? colors.brand : colors.surfaceSecondary,
                       }}
                     >
-                      <PaperPreview
-                        type={t as PaperType}
-                        width={previewW}
-                        height={previewH}
-                        color="#FFFFFF"
-                        lineColor="#C9D2E0"
-                        borderRadius={6}
+                      <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                        {label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
+              {hwSize === 'custom' && (
+                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md, alignItems: 'center' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 4 }}>Width (px)</Text>
+                    <TextInput
+                      testID="hw-custom-w"
+                      value={hwCustomW}
+                      onChangeText={(t) => setHwCustomW(t.replace(/[^0-9]/g, ''))}
+                      keyboardType="number-pad"
+                      placeholder="1024"
+                      placeholderTextColor={colors.muted}
+                      style={[styles.input, { color: colors.onSurface, backgroundColor: colors.surfaceSecondary }]}
+                    />
+                  </View>
+                  <Text style={{ color: colors.muted, fontSize: typeScale.xl, marginTop: spacing.lg }}>×</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 4 }}>Height (px)</Text>
+                    <TextInput
+                      testID="hw-custom-h"
+                      value={hwCustomH}
+                      onChangeText={(t) => setHwCustomH(t.replace(/[^0-9]/g, ''))}
+                      keyboardType="number-pad"
+                      placeholder="1366"
+                      placeholderTextColor={colors.muted}
+                      style={[styles.input, { color: colors.onSurface, backgroundColor: colors.surfaceSecondary }]}
+                    />
+                  </View>
+                </View>
+              )}
+
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+                TEMPLATE
+              </Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: spacing.md, paddingVertical: spacing.xs, paddingRight: spacing.md }}
+              >
+                {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
+                  const active = hwTemplate === t;
+                  const previewW = 80;
+                  const previewH = 104;
+                  const previewColor =
+                    HW_PAPER_COLORS.find((c) => c.id === hwPaperColor)?.hex || '#FFFFFF';
+                  const previewLine = hwPaperColor === 'black' ? '#3a3a3c' : '#C9D2E0';
+                  // Scale spacing down for tiny preview
+                  const previewSpacing = hwSupportsSpacing(t)
+                    ? Math.max(6, Math.round((hwLineSpacing / 32) * (t === 'narrow' ? 12 : 16)))
+                    : undefined;
+                  return (
+                    <Pressable
+                      key={t}
+                      onPress={() => { haptic.selection(); setHwTemplate(t); }}
+                      testID={`hw-template-${t}`}
+                      style={{ alignItems: 'center' }}
+                    >
+                      <View
+                        style={{
+                          padding: 4,
+                          borderRadius: radius.md,
+                          backgroundColor: active ? colors.brandTertiary : 'transparent',
+                          borderWidth: 2,
+                          borderColor: active ? colors.brand : colors.border,
+                        }}
+                      >
+                        <PaperPreview
+                          type={t as PaperType}
+                          width={previewW}
+                          height={previewH}
+                          color={previewColor}
+                          lineColor={previewLine}
+                          lineSpacing={previewSpacing}
+                          borderRadius={6}
+                        />
+                      </View>
+                      <Text
+                        style={{
+                          marginTop: 6,
+                          color: active ? colors.brand : colors.onSurface,
+                          fontWeight: active ? '700' : '500',
+                          fontSize: typeScale.sm,
+                        }}
+                      >
+                        {t[0].toUpperCase() + t.slice(1)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
+                PAPER COLOR
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+                {HW_PAPER_COLORS.map((c) => {
+                  const active = hwPaperColor === c.id;
+                  return (
+                    <Pressable
+                      key={c.id}
+                      onPress={() => { haptic.selection(); setHwPaperColor(c.id); }}
+                      testID={`hw-color-${c.id}`}
+                      style={{ alignItems: 'center', width: 56 }}
+                    >
+                      <View
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 20,
+                          backgroundColor: c.hex,
+                          borderWidth: active ? 3 : 1,
+                          borderColor: active ? colors.brand : colors.border,
+                        }}
                       />
-                    </View>
-                    <Text
-                      style={{
-                        marginTop: 6,
-                        color: active ? colors.brand : colors.onSurface,
-                        fontWeight: active ? '700' : '500',
-                        fontSize: typeScale.sm,
-                      }}
-                    >
-                      {t[0].toUpperCase() + t.slice(1)}
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          marginTop: 4,
+                          fontSize: typeScale.sm - 1,
+                          color: active ? colors.brand : colors.muted,
+                          fontWeight: active ? '700' : '500',
+                        }}
+                      >
+                        {c.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {hwSupportsSpacing(hwTemplate) && (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.lg, marginBottom: spacing.sm }}>
+                    <Text style={{ flex: 1, color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', letterSpacing: 1.2 }}>
+                      LINE SPACING
                     </Text>
-                  </Pressable>
-                );
-              })}
+                    <Text style={{ color: colors.brand, fontWeight: '700', fontSize: typeScale.sm }}>
+                      {hwLineSpacing}px
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+                    {[
+                      { val: 16, label: 'Tight' },
+                      { val: 22, label: 'Narrow' },
+                      { val: 28, label: 'Normal' },
+                      { val: 36, label: 'Wide' },
+                      { val: 48, label: 'X-Wide' },
+                    ].map((opt) => {
+                      const active = hwLineSpacing === opt.val;
+                      return (
+                        <Pressable
+                          key={opt.val}
+                          onPress={() => { haptic.selection(); setHwLineSpacing(opt.val); }}
+                          testID={`hw-spacing-${opt.val}`}
+                          style={{
+                            paddingHorizontal: spacing.md,
+                            paddingVertical: spacing.sm,
+                            borderRadius: radius.pill,
+                            backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                          }}
+                        >
+                          <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500', fontSize: typeScale.sm }}>
+                            {opt.label} · {opt.val}px
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
+              <View style={{ height: spacing.lg }} />
             </ScrollView>
 
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl }}>
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
               <Pressable
                 onPress={() => setShowHwPrep(false)}
                 testID="hw-cancel"
