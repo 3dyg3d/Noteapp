@@ -903,38 +903,124 @@ export default function DrawScreen() {
               </Text>
             </View>
           )}
-          {/* Manual "Add page" FAB (only when auto-add is off) */}
-          {!settings.autoAddPage && (
-            <Pressable
-              testID="add-page-btn"
-              onPress={() => {
-                haptic.success();
-                setPageCount((c) => c + 1);
-                // Scroll to the bottom of the new page so the user sees the new space.
-                const newMax = Math.max(0, (pageCount + 1 - 1) * basePageH);
-                setScrollY(newMax);
-              }}
-              style={({ pressed }) => ({
+          {/* Vertical scroll thumb (right edge) — stylus-friendly, works regardless of palm rejection */}
+          {pageCount > 1 && (
+            <View
+              testID="scroll-thumb-track"
+              style={{
                 position: 'absolute',
-                right: spacing.lg,
-                bottom: insets.bottom + spacing.lg,
-                width: 52,
-                height: 52,
-                borderRadius: 26,
-                backgroundColor: colors.brand,
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: pressed ? 0.85 : 1,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.25,
-                shadowRadius: 8,
-                elevation: 8,
-              })}
+                top: spacing.sm,
+                bottom: spacing.sm,
+                right: 2,
+                width: 6,
+                backgroundColor: colors.surfaceSecondary,
+                borderRadius: 3,
+                opacity: 0.7,
+              }}
             >
-              <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
-            </Pressable>
+              <Pressable
+                testID="scroll-thumb"
+                onTouchStart={(e) => { (e as any)._sy = scrollY; (e as any)._py = e.nativeEvent.pageY; }}
+                onTouchMove={(e) => {
+                  const startY: number = (e as any)._py ?? e.nativeEvent.pageY;
+                  const startScroll: number = (e as any)._sy ?? scrollY;
+                  const dy = e.nativeEvent.pageY - startY;
+                  // Map thumb drag to canvas scroll.
+                  const trackH = pageDims.h - 2 * spacing.sm;
+                  const ratio = totalPageH / Math.max(1, basePageH);
+                  const maxScroll = Math.max(0, totalPageH - basePageH);
+                  const next = Math.max(0, Math.min(maxScroll, startScroll + dy * ratio));
+                  setScrollY(next);
+                }}
+                style={{
+                  position: 'absolute',
+                  left: -8,
+                  width: 22,
+                  height: Math.max(40, (basePageH / Math.max(1, totalPageH)) * (pageDims.h - 2 * spacing.sm)),
+                  top: (scrollY / Math.max(1, totalPageH)) * (pageDims.h - 2 * spacing.sm),
+                  backgroundColor: colors.brand,
+                  borderRadius: 11,
+                  opacity: 0.9,
+                }}
+              />
+            </View>
           )}
+          {/* Manual "Add page" FAB + page jump buttons (stack vertically, bottom-right) */}
+          <View style={{ position: 'absolute', right: spacing.lg, bottom: insets.bottom + spacing.lg, alignItems: 'center', gap: spacing.sm }}>
+            {pageCount > 1 && (
+              <>
+                <Pressable
+                  testID="page-up-btn"
+                  onPress={() => {
+                    haptic.selection();
+                    const currentPage = Math.floor(scrollY / Math.max(1, basePageH));
+                    setScrollY(Math.max(0, (currentPage - 1) * basePageH));
+                  }}
+                  style={({ pressed }) => ({
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: colors.surface,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Ionicons name="chevron-up" size={22} color={colors.onSurface} />
+                </Pressable>
+                <Pressable
+                  testID="page-down-btn"
+                  onPress={() => {
+                    haptic.selection();
+                    const currentPage = Math.floor(scrollY / Math.max(1, basePageH));
+                    const maxScroll = Math.max(0, totalPageH - basePageH);
+                    setScrollY(Math.min(maxScroll, (currentPage + 1) * basePageH));
+                  }}
+                  style={({ pressed }) => ({
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: colors.surface,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Ionicons name="chevron-down" size={22} color={colors.onSurface} />
+                </Pressable>
+              </>
+            )}
+            {!settings.autoAddPage && (
+              <Pressable
+                testID="add-page-btn"
+                onPress={() => {
+                  haptic.success();
+                  setPageCount((c) => c + 1);
+                  setScrollY(pageCount * basePageH);
+                }}
+                style={({ pressed }) => ({
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: colors.brand,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: pressed ? 0.85 : 1,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 8,
+                  elevation: 8,
+                })}
+              >
+                <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
+              </Pressable>
+            )}
+          </View>
           {/* Page indicator */}
           {pageCount > 1 && (
             <View
