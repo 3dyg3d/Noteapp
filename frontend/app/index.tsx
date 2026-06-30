@@ -21,9 +21,10 @@ import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors } from '@/src/theme/tokens';
 import { NotesApi, FoldersApi, Note, Folder, ChecklistItem, NoteStatus } from '@/src/api/client';
 import { haptic } from '@/src/state/useAppSettings';
+import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 
 type ViewMode = 'grid' | 'list';
-type CategoryKey = 'all' | 'pinned' | 'recent' | 'trash' | string;
+type CategoryKey = 'all' | 'pinned' | 'recent' | 'trash' | 'folders' | string;
 type SortBy = 'updated' | 'created' | 'title';
 
 interface Template {
@@ -187,7 +188,7 @@ export default function HomeScreen() {
 
   const status: NoteStatus = category === 'trash' ? 'trash' : 'active';
   const folderFilter = useMemo(() => {
-    if (category === 'all' || category === 'pinned' || category === 'recent' || category === 'trash') return null;
+    if (category === 'all' || category === 'pinned' || category === 'recent' || category === 'trash' || category === 'folders') return null;
     return category;
   }, [category]);
 
@@ -243,6 +244,36 @@ export default function HomeScreen() {
 
   const folderById = (id: string | null | undefined) =>
     id ? folders.find((f) => f.id === id) : undefined;
+
+  // ---- File-manager-style folder navigation ----
+  const currentFolder = useMemo(
+    () => folders.find((f) => f.id === category),
+    [category, folders]
+  );
+  const insideFolder = !!currentFolder;
+  const childFoldersOf = useCallback(
+    (parentId: string | null) =>
+      folders
+        .filter((f) => (f.parent_id ?? null) === parentId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [folders]
+  );
+  const folderViewChildren = useMemo(() => {
+    if (category === 'folders') return childFoldersOf(null);
+    if (insideFolder) return childFoldersOf(category as string);
+    return [];
+  }, [category, insideFolder, childFoldersOf]);
+  const isFileManagerView = category === 'folders' || insideFolder;
+  // At folder view root, also list notes that don't belong to any folder
+  const folderViewNotes = useMemo(
+    () => (category === 'folders' ? sortedNotes.filter((n) => !n.folder_id) : []),
+    [sortedNotes, category]
+  );
+  const goBack = () => {
+    haptic.selection();
+    if (currentFolder?.parent_id) setCategory(currentFolder.parent_id);
+    else setCategory('folders');
+  };
 
   // FAB
   const onFabPress = () => {
@@ -361,6 +392,7 @@ export default function HomeScreen() {
     if (category === 'pinned') return 'Pinned';
     if (category === 'recent') return 'Recents';
     if (category === 'trash') return 'Trash';
+    if (category === 'folders') return 'Folders';
     return folderById(category)?.name || 'Notes';
   }, [category, folders]);
 
@@ -509,11 +541,15 @@ export default function HomeScreen() {
         {!selectionMode ? (
           <View style={styles.headerTopRow}>
             <Pressable
-              testID="open-drawer-btn"
-              onPress={() => { haptic.selection(); setDrawerOpen(true); }}
+              testID={insideFolder ? 'header-back-btn' : 'open-drawer-btn'}
+              onPress={
+                insideFolder
+                  ? goBack
+                  : () => { haptic.selection(); setDrawerOpen(true); }
+              }
               style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
             >
-              <Ionicons name="menu" size={22} color={colors.onSurface} />
+              <Ionicons name={insideFolder ? 'arrow-back' : 'menu'} size={22} color={colors.onSurface} />
             </Pressable>
             <Text style={[styles.bigTitle, { color: colors.onSurface }]} testID="home-title">
               {categoryLabel}
@@ -545,29 +581,56 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         ) : (
-          <View style={styles.headerTopRow}>
-            <Pressable
-              testID="selection-close-btn"
-              onPress={clearSelection}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+          <>
+            <View style={styles.headerTopRow}>
+              <Pressable
+                testID="selection-close-btn"
+                onPress={clearSelection}
+                style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+              >
+                <Ionicons name="close" size={22} color={colors.onSurface} />
+              </Pressable>
+              <Text style={[styles.bigTitle, { color: colors.onSurface }]} testID="selection-count">
+                {selectedIds.size} selected
+              </Text>
+              <Pressable
+                testID="select-all-btn"
+                onPress={() => (allSelected ? clearSelection() : selectAllVisible())}
+                style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+              >
+                <Ionicons
+                  name={allSelected ? 'checkbox' : 'checkbox-outline'}
+                  size={20}
+                  color={allSelected ? colors.brand : colors.onSurface}
+                />
+              </Pressable>
+            </View>
+            {/* Inline bulk actions row at the top */}
+            <View
+              testID="bulk-action-bar"
+              style={[styles.topActionRow, { backgroundColor: colors.surfaceSecondary }]}
             >
-              <Ionicons name="close" size={22} color={colors.onSurface} />
-            </Pressable>
-            <Text style={[styles.bigTitle, { color: colors.onSurface }]} testID="selection-count">
-              {selectedIds.size} selected
-            </Text>
-            <Pressable
-              testID="select-all-btn"
-              onPress={() => (allSelected ? clearSelection() : selectAllVisible())}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
-            >
-              <Ionicons
-                name={allSelected ? 'checkbox' : 'checkbox-outline'}
-                size={20}
-                color={allSelected ? colors.brand : colors.onSurface}
-              />
-            </Pressable>
-          </View>
+              {category !== 'trash' ? (
+                <>
+                  <TopBulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
+                  <TopBulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
+                  <TopBulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
+                  <TopBulkBtn icon="trash-outline" label="Trash" onPress={bulkDelete} destructive testID="bulk-delete" />
+                </>
+              ) : (
+                <>
+                  <TopBulkBtn icon="refresh" label="Restore" onPress={bulkRestore} testID="bulk-restore" />
+                  <TopBulkBtn
+                    icon="trash-bin-outline"
+                    label="Delete forever"
+                    onPress={bulkDelete}
+                    destructive
+                    testID="bulk-delete-forever"
+                  />
+                </>
+              )}
+            </View>
+          </>
         )}
 
         {!selectionMode && (
@@ -629,7 +692,7 @@ export default function HomeScreen() {
                 <ActivityIndicator color={colors.brand} />
               </View>
             )}
-            {isEmpty && !selectionMode && (
+            {isEmpty && !selectionMode && !isFileManagerView && (
               <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
                 <Ionicons
                   name={category === 'trash' ? 'trash-outline' : 'document-text-outline'}
@@ -655,13 +718,129 @@ export default function HomeScreen() {
                 )}
               </View>
             )}
-            {!!pinnedNotes.length && (
+            {isFileManagerView && (
+              <View>
+                {/* Breadcrumb / current location when inside a folder */}
+                {insideFolder && (
+                  <View style={styles.breadcrumbRow}>
+                    <Pressable
+                      testID="breadcrumb-root"
+                      onPress={() => { haptic.selection(); setCategory('folders'); }}
+                      style={({ pressed }) => [styles.breadcrumbChip, { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary }]}
+                    >
+                      <Ionicons name="folder-open-outline" size={14} color={colors.brand} />
+                      <Text style={[styles.breadcrumbText, { color: colors.brand }]}>Folders</Text>
+                    </Pressable>
+                    <Ionicons name="chevron-forward" size={14} color={colors.muted} style={{ marginHorizontal: 4 }} />
+                    <Text numberOfLines={1} style={[styles.breadcrumbText, { color: colors.onSurface, fontWeight: '700' }]}>
+                      {currentFolder?.name}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Folder tiles grid */}
+                <View style={styles.grid}>
+                  <Pressable
+                    testID="folder-tile-add"
+                    onPress={() =>
+                      setFolderModal({ parentId: insideFolder ? (category as string) : null })
+                    }
+                    style={({ pressed }) => [
+                      styles.folderTile,
+                      {
+                        width: cardPxWidth,
+                        backgroundColor: colors.brandTertiary,
+                        opacity: pressed ? 0.8 : 1,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="add-circle-outline" size={40} color={colors.brand} />
+                    <Text style={{ color: colors.brand, fontWeight: '700', marginTop: spacing.sm }}>
+                      New folder
+                    </Text>
+                  </Pressable>
+                  {folderViewChildren.map((f) => (
+                    <Pressable
+                      key={f.id}
+                      testID={`folder-tile-${f.id}`}
+                      onPress={() => { haptic.selection(); setCategory(f.id); }}
+                      onLongPress={() => setFolderModal({ parentId: f.parent_id, folder: f })}
+                      delayLongPress={350}
+                      style={({ pressed }) => [
+                        styles.folderTile,
+                        {
+                          width: cardPxWidth,
+                          backgroundColor: colors.surfaceSecondary,
+                          borderTopWidth: 6,
+                          borderTopColor: f.color,
+                          opacity: pressed ? 0.85 : 1,
+                        },
+                      ]}
+                    >
+                      <Ionicons name="folder" size={36} color={f.color} />
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          marginTop: spacing.sm,
+                          fontWeight: '700',
+                          color: colors.onSurface,
+                          fontSize: typeScale.base,
+                          maxWidth: '100%',
+                        }}
+                      >
+                        {f.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {/* Notes section (unfiled at root, in-folder notes when inside) */}
+                {category === 'folders' && folderViewNotes.length > 0 && (
+                  <>
+                    <SectionLabel label="Notes" color={colors.muted} />
+                    <View style={styles.grid}>{folderViewNotes.map(renderNoteCard)}</View>
+                  </>
+                )}
+                {insideFolder && otherNotes.length > 0 && (
+                  <>
+                    {folderViewChildren.length > 0 && (
+                      <SectionLabel label="Notes" color={colors.muted} />
+                    )}
+                    <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
+                  </>
+                )}
+
+                {/* Empty hint for file manager views */}
+                {folderViewChildren.length === 0 &&
+                  (category === 'folders'
+                    ? folderViewNotes.length === 0
+                    : otherNotes.length === 0) && (
+                    <View
+                      style={[
+                        styles.empty,
+                        { backgroundColor: colors.surfaceSecondary, marginTop: spacing.lg },
+                      ]}
+                    >
+                      <Ionicons name="folder-open-outline" size={48} color={colors.brand} />
+                      <Text style={[styles.emptyTitle, { color: colors.onSurface }]}>
+                        {category === 'folders' ? 'No folders yet' : 'This folder is empty'}
+                      </Text>
+                      <Text style={[styles.emptySub, { color: colors.muted }]}>
+                        {category === 'folders'
+                          ? 'Tap "New folder" to create one, or use + to add an unfiled note.'
+                          : 'Tap + to add a note, or create a sub-folder.'}
+                      </Text>
+                    </View>
+                  )}
+              </View>
+            )}
+            {!isFileManagerView && !!pinnedNotes.length && (
               <>
                 <SectionLabel label="Pinned" color={colors.muted} />
                 <View style={styles.grid}>{pinnedNotes.map(renderNoteCard)}</View>
               </>
             )}
-            {!!otherNotes.length && (
+            {!isFileManagerView && !!otherNotes.length && (
               <>
                 {!!pinnedNotes.length && <SectionLabel label="Others" color={colors.muted} />}
                 <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
@@ -680,7 +859,7 @@ export default function HomeScreen() {
             styles.fab,
             {
               backgroundColor: colors.brand,
-              bottom: insets.bottom + 70,
+              bottom: insets.bottom + spacing.lg,
               transform: [{ scale: pressed ? 0.95 : 1 }],
             },
           ]}
@@ -689,46 +868,7 @@ export default function HomeScreen() {
         </Pressable>
       )}
 
-      {/* Bulk action bar */}
-      {selectionMode && (
-        <View
-          testID="bulk-action-bar"
-          style={[
-            styles.bulkBar,
-            {
-              backgroundColor: colors.surface,
-              borderTopColor: colors.divider,
-              paddingBottom: insets.bottom + spacing.sm,
-            },
-          ]}
-        >
-          {category !== 'trash' ? (
-            <>
-              <BulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
-              <BulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
-              <BulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
-              <BulkBtn
-                icon="trash-outline"
-                label="Trash"
-                onPress={bulkDelete}
-                destructive
-                testID="bulk-delete"
-              />
-            </>
-          ) : (
-            <>
-              <BulkBtn icon="refresh" label="Restore" onPress={bulkRestore} testID="bulk-restore" />
-              <BulkBtn
-                icon="trash-bin-outline"
-                label="Delete forever"
-                onPress={bulkDelete}
-                destructive
-                testID="bulk-delete-forever"
-              />
-            </>
-          )}
-        </View>
-      )}
+      {/* Bulk action bar (moved to top header — see selection mode) */}
 
       {/* Left drawer */}
       <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
@@ -762,6 +902,13 @@ export default function HomeScreen() {
               active={category === 'recent'}
               onPress={() => { setCategory('recent'); setDrawerOpen(false); }}
               testID="drawer-recent"
+            />
+            <DrawerRow
+              icon="grid-outline"
+              label="Folders"
+              active={category === 'folders'}
+              onPress={() => { setCategory('folders'); setDrawerOpen(false); }}
+              testID="drawer-folders-view"
             />
             <DrawerRow
               icon="trash-outline"
@@ -989,30 +1136,56 @@ export default function HomeScreen() {
             <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 1.2 }}>
               TEMPLATE
             </Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: spacing.md, paddingVertical: spacing.xs, paddingRight: spacing.md }}
+            >
               {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
                 const active = hwTemplate === t;
+                const previewW = 80;
+                const previewH = 104;
                 return (
                   <Pressable
                     key={t}
-                    onPress={() => setHwTemplate(t)}
+                    onPress={() => { haptic.selection(); setHwTemplate(t); }}
                     testID={`hw-template-${t}`}
                     style={{
-                      paddingHorizontal: spacing.md,
-                      paddingVertical: spacing.sm,
-                      borderRadius: radius.md,
-                      backgroundColor: active ? colors.brandTertiary : colors.surfaceSecondary,
-                      borderWidth: active ? 2 : 1,
-                      borderColor: active ? colors.brand : 'transparent',
+                      alignItems: 'center',
                     }}
                   >
-                    <Text style={{ color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                    <View
+                      style={{
+                        padding: 4,
+                        borderRadius: radius.md,
+                        backgroundColor: active ? colors.brandTertiary : 'transparent',
+                        borderWidth: 2,
+                        borderColor: active ? colors.brand : colors.border,
+                      }}
+                    >
+                      <PaperPreview
+                        type={t as PaperType}
+                        width={previewW}
+                        height={previewH}
+                        color="#FFFFFF"
+                        lineColor="#C9D2E0"
+                        borderRadius={6}
+                      />
+                    </View>
+                    <Text
+                      style={{
+                        marginTop: 6,
+                        color: active ? colors.brand : colors.onSurface,
+                        fontWeight: active ? '700' : '500',
+                        fontSize: typeScale.sm,
+                      }}
+                    >
                       {t[0].toUpperCase() + t.slice(1)}
                     </Text>
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
 
             <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl }}>
               <Pressable
@@ -1238,6 +1411,41 @@ function DrawerRow({
   );
 }
 
+function TopBulkBtn({
+  icon,
+  label,
+  onPress,
+  destructive,
+  testID,
+}: {
+  icon: any;
+  label: string;
+  onPress: () => void;
+  destructive?: boolean;
+  testID?: string;
+}) {
+  const { colors } = useTheme();
+  const c = destructive ? colors.error : colors.brand;
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: spacing.sm,
+        paddingHorizontal: spacing.xs,
+        opacity: pressed ? 0.6 : 1,
+      })}
+    >
+      <Ionicons name={icon} size={18} color={c} />
+      <Text style={{ marginLeft: 6, fontSize: typeScale.sm, color: c, fontWeight: '700' }}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function BulkBtn({
   icon,
   label,
@@ -1314,6 +1522,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconBtnSmall: { padding: spacing.xs },
+  folderTile: {
+    height: 130,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+  },
+  topActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    padding: 2,
+    marginBottom: spacing.sm,
+  },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1336,6 +1559,24 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'flex-start',
     gap: spacing.md,
+  },
+  breadcrumbRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.xs,
+  },
+  breadcrumbChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    gap: 4,
+  },
+  breadcrumbText: {
+    fontSize: typeScale.sm,
+    fontWeight: '600',
   },
   card: { padding: spacing.lg, borderRadius: radius.lg, marginBottom: spacing.md, minHeight: 120 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },

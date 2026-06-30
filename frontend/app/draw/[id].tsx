@@ -53,6 +53,7 @@ interface DrawingDoc {
   paper: Paper;
   paperSize?: PaperSize;
   paperColor?: string;
+  canvasColor?: string;
   items: Item[];
 }
 
@@ -157,6 +158,9 @@ export default function DrawScreen() {
   const [paper, setPaper] = useState<Paper>('blank');
   const [paperSize, setPaperSize] = useState<PaperSize>('fit');
   const [paperColorId, setPaperColorId] = useState<string>('white');
+  const [canvasColorHex, setCanvasColorHex] = useState<string>('#d4d4d4');
+  // page size in world units (matches the visible page area, lets paper lines be Skia-rendered)
+  const [pageDims, setPageDims] = useState<{ w: number; h: number }>({ w: 1024, h: 1366 });
   const historyRef = useRef<{ undo: Item[][]; redo: Item[][] }>({ undo: [], redo: [] });
 
   // Tool state
@@ -205,6 +209,7 @@ export default function DrawScreen() {
             setPaper(doc.paper || 'blank');
             if (doc.paperSize) setPaperSize(doc.paperSize);
             if (doc.paperColor) setPaperColorId(doc.paperColor);
+            if (doc.canvasColor) setCanvasColorHex(doc.canvasColor);
           } catch {}
         }
       } catch (e) {
@@ -227,6 +232,7 @@ export default function DrawScreen() {
               paper: nextPaper,
               paperSize: nextSize,
               paperColor: nextColor,
+              canvasColor: canvasColorHex,
               items: nextItems,
             } as DrawingDoc),
             note_type: 'handwriting',
@@ -640,40 +646,42 @@ export default function DrawScreen() {
 
       <OpenTabsStrip currentId={id as string} />
 
-      {/* Canvas (with paper-size letterbox) */}
-      <View style={{ flex: 1, backgroundColor: isDark ? '#08080a' : '#d4d4d4' }}>
-        <PaperFrame size={paperSize}>
-          <PaperBackground
-            type={paper}
-            color={paperColor}
-            lineColor={paperLine}
-            textColor={isDarkPaper ? '#888' : '#888'}
-          />
-          {Platform.OS !== 'web' ? (
-            <GestureDetector gesture={finalGesture}>
-              <View style={{ flex: 1 }}>
-                <Canvas style={StyleSheet.absoluteFill}>
-                  <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
-                    {items.map((it, i) =>
-                      it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
-                    )}
-                    {livePreview}
-                  </Group>
-                </Canvas>
-              </View>
-            </GestureDetector>
-          ) : (
-            <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-              <Ionicons name="brush-outline" size={48} color={colors.brand} />
-              <Text style={{ color: colors.onSurface, marginTop: spacing.md, fontWeight: '700' }}>
-                Stylus / S Pen canvas
-              </Text>
-              <Text style={{ color: colors.muted, marginTop: 4, paddingHorizontal: spacing.xl, textAlign: 'center' }}>
-                Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.
-              </Text>
+      {/* Canvas */}
+      <View
+        style={{ flex: 1, backgroundColor: canvasColorHex }}
+        onLayout={(e) => setPageDims({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+      >
+        {Platform.OS !== 'web' ? (
+          <GestureDetector gesture={finalGesture}>
+            <View style={{ flex: 1 }}>
+              <Canvas style={StyleSheet.absoluteFill}>
+                <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
+                  <SkiaPaper
+                    type={paper}
+                    color={paperColor}
+                    lineColor={paperLine}
+                    width={pageDims.w}
+                    height={pageDims.h}
+                  />
+                  {items.map((it, i) =>
+                    it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
+                  )}
+                  {livePreview}
+                </Group>
+              </Canvas>
             </View>
-          )}
-        </PaperFrame>
+          </GestureDetector>
+        ) : (
+          <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+            <Ionicons name="brush-outline" size={48} color={colors.brand} />
+            <Text style={{ color: colors.onSurface, marginTop: spacing.md, fontWeight: '700' }}>
+              Stylus / S Pen canvas
+            </Text>
+            <Text style={{ color: colors.muted, marginTop: 4, paddingHorizontal: spacing.xl, textAlign: 'center' }}>
+              Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Bottom toolbar */}
