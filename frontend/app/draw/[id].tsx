@@ -531,6 +531,8 @@ export default function DrawScreen() {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
         if (last && last.y > pageCount * basePageH - 120) {
           setPageCount((c) => c + 1);
+          // Scroll the indicator forward to the new page so the user sees the new space.
+          setScrollY(pageCount * basePageH);
         }
       }
       if (isPenTool(tool)) {
