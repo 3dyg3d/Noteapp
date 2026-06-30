@@ -58,6 +58,7 @@ interface DrawingDoc {
   paperColor?: string;
   canvasColor?: string;
   lineSpacing?: number; // pixel spacing for ruled / grid / dotted templates
+  pageCount?: number;   // number of stacked pages in this note
   items: Item[];
 }
 
@@ -187,18 +188,34 @@ export default function DrawScreen() {
 
   // Zoom (panning removed) — translation is derived to keep canvas centered while zooming.
   const [scale, setScale] = useState(1);
+  const [scrollY, setScrollY] = useState(0); // vertical scroll across multi-page canvas
+  const scrollYStartRef = useRef(0);
   const scaleStartRef = useRef(1);
   const MAX_SCALE = 16;
   const MIN_SCALE = 0.5;
-  // Derived translation so the canvas center stays pinned to the screen center at any scale.
+
+  // Multi-page support
+  const [pageCount, setPageCount] = useState(1);
+
+  // Derived translation so the canvas center stays pinned to the screen center at any scale,
+  // plus the user's vertical scroll offset across pages.
+  const basePageH = pageDims.h;
+  const totalPageH = basePageH * pageCount;
   const tx = (pageDims.w / 2) * (1 - scale);
-  const ty = (pageDims.h / 2) * (1 - scale);
+  const ty = (pageDims.h / 2) * (1 - scale) - scrollY * scale;
 
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
   const toolbarPos: ToolbarPosition = settings.toolbarPosition || 'left';
   const isVerticalToolbar = toolbarPos === 'left' || toolbarPos === 'right';
   const { openTab, renameTab } = useOpenTabs();
+
+  // Ref mirrors of settings so gesture handlers always read the latest value
+  // (avoids stale closures that made palm rejection unreliable).
+  const palmRejectionRef = useRef(settings.palmRejection);
+  palmRejectionRef.current = settings.palmRejection;
+  const autoAddPageRef = useRef(settings.autoAddPage);
+  autoAddPageRef.current = settings.autoAddPage;
 
   // Active drawing state (refs to avoid re-renders per touch)
   const livePtsRef = useRef<{ x: number; y: number; t: number }[]>([]);
@@ -225,6 +242,7 @@ export default function DrawScreen() {
             if (doc.paperColor) setPaperColorId(doc.paperColor);
             if (doc.canvasColor) setCanvasColorHex(doc.canvasColor);
             if (typeof doc.lineSpacing === 'number') setLineSpacing(doc.lineSpacing);
+            if (typeof doc.pageCount === 'number') setPageCount(Math.max(1, doc.pageCount));
           } catch {}
         }
       } catch (e) {
@@ -250,6 +268,7 @@ export default function DrawScreen() {
               paperColor: nextColor,
               canvasColor: canvasColorHex,
               lineSpacing,
+              pageCount,
               items: nextItems,
             } as DrawingDoc),
             note_type: 'handwriting',
@@ -263,8 +282,16 @@ export default function DrawScreen() {
         }
       }, 500);
     },
-    [id, canvasColorHex, lineSpacing, customSize]
+    [id, canvasColorHex, lineSpacing, customSize, pageCount]
   );
+
+  // Persist when pageCount changes (debounced via persist())
+  useEffect(() => {
+    if (!loading && note) {
+      persist(items, paper, paperSize, paperColorId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageCount]);
 
   const pushHistory = useCallback((prev: Item[]) => {
     historyRef.current.undo.push(prev);
@@ -378,13 +405,26 @@ export default function DrawScreen() {
     else if (action === 'eraser') { haptic.medium(); setTool('eraser'); }
   };
 
-  // Pinch zoom (2 fingers) — panning has been intentionally removed; zoom only.
+  // Pinch zoom (2 fingers) — and 2-finger vertical pan for scrolling across multi-page canvas.
   const pinch = Gesture.Pinch()
     .runOnJS(true)
     .onStart(() => { scaleStartRef.current = scale; })
     .onUpdate((e) => {
       const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleStartRef.current * e.scale));
       setScale(next);
+    });
+
+  const twoFingerPanY = Gesture.Pan()
+    .runOnJS(true)
+    .minPointers(2)
+    .maxPointers(2)
+    .averageTouches(true)
+    .onStart(() => { scrollYStartRef.current = scrollY; })
+    .onUpdate((e) => {
+      // Only vertical pan — horizontal translation is ignored.
+      const maxScroll = Math.max(0, totalPageH - basePageH);
+      const next = Math.max(0, Math.min(maxScroll, scrollYStartRef.current - e.translationY / Math.max(0.5, scale)));
+      setScrollY(next);
     });
 
   const twoTap = Gesture.Tap()
@@ -399,7 +439,7 @@ export default function DrawScreen() {
     .minPointers(3)
     .onEnd(() => runGestureAction(settings.gestureThreeFingerTap));
 
-  const composedGesture = pinch;
+  const composedGesture = Gesture.Simultaneous(pinch, twoFingerPanY);
   const tapsGesture = Gesture.Exclusive(threeTap, twoTap);
 
   // Convert screen-space gesture coords to world coords accounting for zoom only (no pan).
@@ -431,7 +471,7 @@ export default function DrawScreen() {
       // When palm rejection is on, ONLY allow strokes we can prove are from a stylus.
       // Anything else (finger / unknown / mouse) is rejected outright. This is the safest
       // behaviour for users who explicitly turned on "Pen only" mode.
-      if (settings.palmRejection && !isStylus) {
+      if (palmRejectionRef.current && !isStylus) {
         isStylusRef.current = false;
         manager.fail();
         return;
@@ -439,7 +479,7 @@ export default function DrawScreen() {
       isStylusRef.current = isStylus || (toolType === undefined && pointerType === undefined);
     })
     .onBegin((e) => {
-      if (settings.palmRejection && !isStylusRef.current) {
+      if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
         return;
       }
@@ -456,7 +496,7 @@ export default function DrawScreen() {
       }
     })
     .onUpdate((e) => {
-      if (settings.palmRejection && !isStylusRef.current) return;
+      if (palmRejectionRef.current && !isStylusRef.current) return;
       const w = toWorld(e.x, e.y);
       if (isPenTool(tool)) {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
@@ -473,11 +513,18 @@ export default function DrawScreen() {
       }
     })
     .onEnd(() => {
-      if (settings.palmRejection && !isStylusRef.current) {
+      if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
         setLiveTick((n) => n + 1);
         return;
+      }
+      // Auto-add a page when the last stroke approaches the bottom of the current pages.
+      if (autoAddPageRef.current && isPenTool(tool) && livePtsRef.current.length > 0) {
+        const last = livePtsRef.current[livePtsRef.current.length - 1];
+        if (last && last.y > pageCount * basePageH - 120) {
+          setPageCount((c) => c + 1);
+        }
       }
       if (isPenTool(tool)) {
         finalizeStroke(livePtsRef.current);
@@ -816,14 +863,18 @@ export default function DrawScreen() {
               <View style={{ flex: 1 }}>
                 <Canvas style={StyleSheet.absoluteFill}>
                   <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
-                    <SkiaPaper
-                      type={paper}
-                      color={paperColor}
-                      lineColor={paperLine}
-                      width={pageDims.w}
-                      height={pageDims.h}
-                      lineSpacing={lineSpacing}
-                    />
+                    {Array.from({ length: pageCount }).map((_, i) => (
+                      <Group key={`page-${i}`} transform={[{ translateY: i * basePageH }]}>
+                        <SkiaPaper
+                          type={paper}
+                          color={paperColor}
+                          lineColor={paperLine}
+                          width={pageDims.w}
+                          height={basePageH}
+                          lineSpacing={lineSpacing}
+                        />
+                      </Group>
+                    ))}
                     {items.map((it, i) =>
                       it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
                     )}
@@ -840,6 +891,57 @@ export default function DrawScreen() {
               </Text>
               <Text style={{ color: colors.muted, marginTop: 4, paddingHorizontal: spacing.xl, textAlign: 'center' }}>
                 Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.
+              </Text>
+            </View>
+          )}
+          {/* Manual "Add page" FAB (only when auto-add is off) */}
+          {!settings.autoAddPage && (
+            <Pressable
+              testID="add-page-btn"
+              onPress={() => {
+                haptic.success();
+                setPageCount((c) => c + 1);
+                // Scroll to the bottom of the new page so the user sees the new space.
+                const newMax = Math.max(0, (pageCount + 1 - 1) * basePageH);
+                setScrollY(newMax);
+              }}
+              style={({ pressed }) => ({
+                position: 'absolute',
+                right: spacing.lg,
+                bottom: insets.bottom + spacing.lg,
+                width: 52,
+                height: 52,
+                borderRadius: 26,
+                backgroundColor: colors.brand,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed ? 0.85 : 1,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.25,
+                shadowRadius: 8,
+                elevation: 8,
+              })}
+            >
+              <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
+            </Pressable>
+          )}
+          {/* Page indicator */}
+          {pageCount > 1 && (
+            <View
+              testID="page-indicator"
+              style={{
+                position: 'absolute',
+                top: spacing.sm,
+                right: spacing.sm,
+                backgroundColor: colors.surface + 'cc',
+                paddingHorizontal: spacing.sm,
+                paddingVertical: 4,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.sm }}>
+                {Math.min(pageCount, Math.floor(scrollY / Math.max(1, basePageH)) + 1)} / {pageCount}
               </Text>
             </View>
           )}

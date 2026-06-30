@@ -17,6 +17,10 @@ export interface AppSettings {
   favoriteHwColors: string[];
   // Hide the system status bar (time / battery / signal) for a more immersive view.
   statusBarHidden: boolean;
+  // When true the handwriting canvas automatically appends a new page when the user
+  // strokes near the bottom of the last page. When false a floating "+" button at the
+  // bottom of the canvas adds a page manually.
+  autoAddPage: boolean;
 }
 
 const KEY = 'galaxynotes:app-settings';
@@ -29,6 +33,7 @@ const DEFAULTS: AppSettings = {
   palmRejection: false,
   favoriteHwColors: ['#FBFAF6', '#F4ECDA', '#FFF4C4'], // White, Cream, Yellow
   statusBarHidden: false,
+  autoAddPage: true,
 };
 
 let cache: AppSettings | null = null;

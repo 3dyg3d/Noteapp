@@ -140,6 +140,44 @@ frontend:
             This is the strictest interpretation of "Pen only" and is the safest behaviour for a
             user who explicitly enabled the toggle. Native verification on the S25 Ultra is still
             required.
+        - working: "NA"
+          agent: "main"
+          comment: |
+            User reported "im still able to write with my hand" AGAIN. Root-cause hypothesis was
+            a stale closure: the Pan gesture is constructed once per render but `settings.palmRejection`
+            was being captured by value in the gesture callbacks, so toggling the setting did not
+            update the running gesture chain.
+            Introduced `palmRejectionRef = useRef(settings.palmRejection)` and update its `.current`
+            on EVERY render so all four gesture callbacks (`onTouchesDown`, `onBegin`, `onUpdate`,
+            `onEnd`) read the latest value via the ref instead of the captured `settings.palmRejection`.
+            Also defaulted the touches array to `event.allTouches ?? event.changedTouches` so we
+            still inspect a touch when allTouches isn't populated yet.
+
+  - task: "Multi-page handwriting canvas (auto-add or manual add)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/draw/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            New feature requested by user: "i want to add page when i scroll to the end and persist
+            and put a settings for adding page automatically or by clicking on an icon".
+            Implementation:
+              - `DrawingDoc.pageCount` added to the JSON shape; defaults to 1, persists.
+              - Skia renders `pageCount` stacked SkiaPaper backgrounds, each at `translateY: i * basePageH`.
+              - New 2-finger vertical pan (`twoFingerPanY`) lets the user scroll across pages.
+                `scrollY` state drives the canvas translateY; clamped to [0, totalPageH - basePageH].
+              - New `AppSettings.autoAddPage` (default true). When ON, the Pan's `onEnd` checks if
+                the last stroke's Y is within 120px of the bottom of the current pages and bumps
+                `pageCount`. When OFF, a floating + button (`add-page-btn`, bottom-right of canvas)
+                appends a page manually and scrolls to it.
+              - Small page indicator pill (`page-indicator`) at the top-right of the canvas shows
+                "current / total" when there is more than one page.
+              - Settings → Pen & Gestures has a new Switch ("Auto-add page", testID `toggle-auto-add-page`).
 
   - task: "Zoom stays centered on the canvas"
     implemented: true

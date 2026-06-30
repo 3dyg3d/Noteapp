@@ -265,6 +265,24 @@ export default function SettingsScreen() {
           onChange={(v: GestureAction) => update({ gestureThreeFingerTap: v })}
           testID="gesture-three-finger"
         />
+
+        <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginTop: spacing.md }]}>
+          <Ionicons name="add-circle-outline" size={22} color={colors.onSurface} />
+          <View style={{ flex: 1, marginLeft: spacing.md }}>
+            <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Auto-add page</Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+              Automatically add a new page when you write near the bottom. When off, tap the
+              floating + button to add a page manually.
+            </Text>
+          </View>
+          <Switch
+            testID="toggle-auto-add-page"
+            value={settings.autoAddPage}
+            onValueChange={(v) => update({ autoAddPage: v })}
+            thumbColor={settings.autoAddPage ? colors.brand : colors.muted}
+            trackColor={{ false: colors.border, true: colors.brandTertiary }}
+          />
+        </View>
         </>)}
 
         {activeTab === 'security' && (<>
