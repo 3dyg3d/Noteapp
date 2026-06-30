@@ -23,7 +23,7 @@ const DEFAULTS: AppSettings = {
   sPenButton: 'eraser',
   gestureTwoFingerTap: 'undo',
   gestureThreeFingerTap: 'redo',
-  toolbarPosition: 'bottom',
+  toolbarPosition: 'left',
   palmRejection: false,
   favoriteHwColors: ['#FBFAF6', '#F4ECDA', '#FFF4C4'], // White, Cream, Yellow
 };

@@ -179,6 +179,7 @@ export default function DrawScreen() {
   const [showSubTemplate, setShowSubTemplate] = useState(false);
   const [showSubSize, setShowSubSize] = useState(false);
   const [showSubSpacing, setShowSubSpacing] = useState(false);
+  const [showSubToolbar, setShowSubToolbar] = useState(false);
   const [showToolPalette, setShowToolPalette] = useState(false);
   const [showToolOpts, setShowToolOpts] = useState(false);
   const [showTitleEdit, setShowTitleEdit] = useState(false);
@@ -195,7 +196,8 @@ export default function DrawScreen() {
 
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
-  const toolbarPos: ToolbarPosition = settings.toolbarPosition || 'bottom';
+  const toolbarPos: ToolbarPosition = settings.toolbarPosition || 'left';
+  const isVerticalToolbar = toolbarPos === 'left' || toolbarPos === 'right';
   const { openTab, renameTab } = useOpenTabs();
 
   // Active drawing state (refs to avoid re-renders per touch)
@@ -629,6 +631,126 @@ export default function DrawScreen() {
     );
   }
 
+  // Toolbar element — adapts orientation based on toolbarPos
+  const renderToolbar = () => {
+    const vertical = isVerticalToolbar;
+    return (
+      <View
+        style={[
+          {
+            backgroundColor: colors.surface,
+          },
+          vertical
+            ? {
+                width: 80,
+                paddingTop: spacing.sm,
+                paddingBottom: insets.bottom + spacing.sm,
+                borderRightWidth: toolbarPos === 'left' ? StyleSheet.hairlineWidth : 0,
+                borderLeftWidth: toolbarPos === 'right' ? StyleSheet.hairlineWidth : 0,
+                borderRightColor: colors.divider,
+                borderLeftColor: colors.divider,
+              }
+            : {
+                paddingTop: toolbarPos === 'top' ? spacing.xs : 0,
+                paddingBottom: toolbarPos === 'bottom' ? insets.bottom + spacing.xs : spacing.xs,
+                borderTopWidth: toolbarPos === 'bottom' ? StyleSheet.hairlineWidth : 0,
+                borderBottomWidth: toolbarPos === 'top' ? StyleSheet.hairlineWidth : 0,
+                borderTopColor: colors.divider,
+                borderBottomColor: colors.divider,
+              },
+        ]}
+      >
+        <ScrollView
+          horizontal={!vertical}
+          showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={
+            vertical
+              ? { alignItems: 'center', gap: 4, paddingHorizontal: 4 }
+              : { alignItems: 'center', gap: 2, paddingHorizontal: spacing.xs }
+          }
+          style={{ flexGrow: 0 }}
+        >
+          <ToolBtn
+            icon={settings.palmRejection ? 'hand-left' : 'hand-left-outline'}
+            label={settings.palmRejection ? 'Pen only' : 'Touch on'}
+            active={settings.palmRejection}
+            onPress={() => { haptic.selection(); update({ palmRejection: !settings.palmRejection }); }}
+            testID="tool-pen-mode"
+          />
+          <Divider vertical={vertical} />
+          <ToolBtn icon="brush" label="Pen" active={tool === 'pen'} onPress={() => handleToolTap('pen')} testID="tool-pen" />
+          <ToolBtn icon="create-outline" label="Fountain" active={tool === 'fountain'} onPress={() => handleToolTap('fountain')} testID="tool-fountain" />
+          <ToolBtn icon="color-wand" label="Marker" active={tool === 'marker'} onPress={() => handleToolTap('marker')} testID="tool-marker" />
+          <ToolBtn icon="bookmark-outline" label="Highlight" active={tool === 'highlighter'} onPress={() => handleToolTap('highlighter')} testID="tool-highlighter" />
+          <ToolBtn icon="pencil-outline" label="Pencil" active={tool === 'pencil'} onPress={() => handleToolTap('pencil')} testID="tool-pencil" />
+          <Divider vertical={vertical} />
+          <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
+          <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={() => handleToolTap('eraser')} testID="tool-eraser" />
+        </ScrollView>
+
+        {/* Color + width row */}
+        <View
+          style={
+            vertical
+              ? { flexDirection: 'column', alignItems: 'center', paddingTop: spacing.sm, gap: 8 }
+              : styles.optRow
+          }
+        >
+          <ScrollView
+            horizontal={!vertical}
+            showsHorizontalScrollIndicator={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={
+              vertical
+                ? { gap: 6, alignItems: 'center' }
+                : { gap: spacing.xs, paddingHorizontal: spacing.sm }
+            }
+            style={{ flexGrow: 0, maxHeight: vertical ? 180 : undefined }}
+          >
+            {PALETTE.map((c) => (
+              <Pressable
+                key={c}
+                onPress={() => setColor(c)}
+                testID={`color-${c}`}
+                style={[
+                  styles.colorDot,
+                  {
+                    backgroundColor: c,
+                    borderColor: color === c ? colors.brand : colors.border,
+                    borderWidth: color === c ? 3 : 1,
+                  },
+                ]}
+              />
+            ))}
+          </ScrollView>
+          <View style={{ flexDirection: vertical ? 'column' : 'row', gap: 4, paddingHorizontal: vertical ? 0 : spacing.sm }}>
+            {[0, 1, 2].map((i) => (
+              <Pressable
+                key={i}
+                onPress={() => setWidthIdx(i as 0 | 1 | 2)}
+                testID={`width-${i}`}
+                style={[
+                  styles.widthBtn,
+                  { borderColor: widthIdx === i ? colors.brand : colors.border, backgroundColor: colors.surfaceSecondary },
+                ]}
+              >
+                <View
+                  style={{
+                    width: 18,
+                    height: 2 + i * 3,
+                    backgroundColor: colors.onSurface,
+                    borderRadius: 999,
+                  }}
+                />
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: paperColor }}>
       {/* Chrome-style tabs row with back arrow inline */}
@@ -667,118 +789,52 @@ export default function DrawScreen() {
         />
       </View>
 
-      {/* Canvas */}
-      <View
-        style={{ flex: 1, backgroundColor: canvasColorHex }}
-        onLayout={(e) => setPageDims({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
-      >
-        {Platform.OS !== 'web' ? (
-          <GestureDetector gesture={finalGesture}>
-            <View style={{ flex: 1 }}>
-              <Canvas style={StyleSheet.absoluteFill}>
-                <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
-                  <SkiaPaper
-                    type={paper}
-                    color={paperColor}
-                    lineColor={paperLine}
-                    width={pageDims.w}
-                    height={pageDims.h}
-                    lineSpacing={lineSpacing}
-                  />
-                  {items.map((it, i) =>
-                    it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
-                  )}
-                  {livePreview}
-                </Group>
-              </Canvas>
+      {toolbarPos === 'top' && renderToolbar()}
+
+      {/* Canvas (+ optional left/right toolbars wrapping it) */}
+      <View style={{ flex: 1, flexDirection: isVerticalToolbar ? 'row' : 'column' }}>
+        {toolbarPos === 'left' && renderToolbar()}
+        <View
+          style={{ flex: 1, backgroundColor: canvasColorHex }}
+          onLayout={(e) => setPageDims({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+        >
+          {Platform.OS !== 'web' ? (
+            <GestureDetector gesture={finalGesture}>
+              <View style={{ flex: 1 }}>
+                <Canvas style={StyleSheet.absoluteFill}>
+                  <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
+                    <SkiaPaper
+                      type={paper}
+                      color={paperColor}
+                      lineColor={paperLine}
+                      width={pageDims.w}
+                      height={pageDims.h}
+                      lineSpacing={lineSpacing}
+                    />
+                    {items.map((it, i) =>
+                      it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
+                    )}
+                    {livePreview}
+                  </Group>
+                </Canvas>
+              </View>
+            </GestureDetector>
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+              <Ionicons name="brush-outline" size={48} color={colors.brand} />
+              <Text style={{ color: colors.onSurface, marginTop: spacing.md, fontWeight: '700' }}>
+                Stylus / S Pen canvas
+              </Text>
+              <Text style={{ color: colors.muted, marginTop: 4, paddingHorizontal: spacing.xl, textAlign: 'center' }}>
+                Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.
+              </Text>
             </View>
-          </GestureDetector>
-        ) : (
-          <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-            <Ionicons name="brush-outline" size={48} color={colors.brand} />
-            <Text style={{ color: colors.onSurface, marginTop: spacing.md, fontWeight: '700' }}>
-              Stylus / S Pen canvas
-            </Text>
-            <Text style={{ color: colors.muted, marginTop: 4, paddingHorizontal: spacing.xl, textAlign: 'center' }}>
-              Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* Bottom toolbar */}
-      <View
-        style={[
-          styles.toolbar,
-          {
-            backgroundColor: colors.surface,
-            borderTopColor: colors.divider,
-            paddingBottom: insets.bottom + spacing.xs,
-          },
-        ]}
-      >
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', gap: 2, paddingHorizontal: spacing.xs }}>
-          <ToolBtn
-            icon={settings.palmRejection ? 'hand-left' : 'hand-left-outline'}
-            label={settings.palmRejection ? 'Pen only' : 'Touch on'}
-            active={settings.palmRejection}
-            onPress={() => { haptic.selection(); update({ palmRejection: !settings.palmRejection }); }}
-            testID="tool-pen-mode"
-          />
-          <Divider />
-          <ToolBtn icon="brush" label="Pen" active={tool === 'pen'} onPress={() => handleToolTap('pen')} testID="tool-pen" />
-          <ToolBtn icon="create-outline" label="Fountain" active={tool === 'fountain'} onPress={() => handleToolTap('fountain')} testID="tool-fountain" />
-          <ToolBtn icon="color-wand" label="Marker" active={tool === 'marker'} onPress={() => handleToolTap('marker')} testID="tool-marker" />
-          <ToolBtn icon="bookmark-outline" label="Highlight" active={tool === 'highlighter'} onPress={() => handleToolTap('highlighter')} testID="tool-highlighter" />
-          <ToolBtn icon="pencil-outline" label="Pencil" active={tool === 'pencil'} onPress={() => handleToolTap('pencil')} testID="tool-pencil" />
-          <Divider />
-          <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
-          <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={() => handleToolTap('eraser')} testID="tool-eraser" />
-        </ScrollView>
-
-        {/* Color + width row */}
-        <View style={styles.optRow}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.sm }}>
-            {PALETTE.map((c) => (
-              <Pressable
-                key={c}
-                onPress={() => setColor(c)}
-                testID={`color-${c}`}
-                style={[
-                  styles.colorDot,
-                  {
-                    backgroundColor: c,
-                    borderColor: color === c ? colors.brand : colors.border,
-                    borderWidth: color === c ? 3 : 1,
-                  },
-                ]}
-              />
-            ))}
-          </ScrollView>
-          <View style={{ flexDirection: 'row', gap: 4, paddingHorizontal: spacing.sm }}>
-            {[0, 1, 2].map((i) => (
-              <Pressable
-                key={i}
-                onPress={() => setWidthIdx(i as 0 | 1 | 2)}
-                testID={`width-${i}`}
-                style={[
-                  styles.widthBtn,
-                  { borderColor: widthIdx === i ? colors.brand : colors.border, backgroundColor: colors.surfaceSecondary },
-                ]}
-              >
-                <View
-                  style={{
-                    width: 18,
-                    height: 2 + i * 3,
-                    backgroundColor: colors.onSurface,
-                    borderRadius: 999,
-                  }}
-                />
-              </Pressable>
-            ))}
-          </View>
+          )}
         </View>
+        {toolbarPos === 'right' && renderToolbar()}
       </View>
+
+      {toolbarPos === 'bottom' && renderToolbar()}
 
       {/* Tool options popover (tap an already-active tool again) */}
       <Modal visible={showToolOpts} transparent animationType="fade" onRequestClose={() => setShowToolOpts(false)}>
@@ -967,6 +1023,13 @@ export default function DrawScreen() {
                 testID="draw-menu-spacing"
               />
             )}
+            <DrawMenuRow
+              icon="apps-outline"
+              label="Toolbar position"
+              valueText={toolbarPos.charAt(0).toUpperCase() + toolbarPos.slice(1)}
+              onPress={() => { setShowPaperMenu(false); setShowSubToolbar(true); }}
+              testID="draw-menu-toolbar"
+            />
 
             <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm, marginHorizontal: spacing.lg }} />
 
@@ -1298,6 +1361,79 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
+      {/* SUB: Toolbar position */}
+      <Modal visible={showSubToolbar} transparent animationType="fade" onRequestClose={() => setShowSubToolbar(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPress={() => setShowSubToolbar(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Pressable onPress={() => { setShowSubToolbar(false); setShowPaperMenu(true); }} hitSlop={6}>
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+              </Pressable>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+                Toolbar position
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, justifyContent: 'center' }}>
+              {(['left', 'right', 'top', 'bottom'] as ToolbarPosition[]).map((pos) => {
+                const active = toolbarPos === pos;
+                const iconName: any =
+                  pos === 'left'
+                    ? 'chevron-back-circle-outline'
+                    : pos === 'right'
+                    ? 'chevron-forward-circle-outline'
+                    : pos === 'top'
+                    ? 'chevron-up-circle-outline'
+                    : 'chevron-down-circle-outline';
+                return (
+                  <Pressable
+                    key={pos}
+                    testID={`sub-toolbar-${pos}`}
+                    onPress={() => { haptic.selection(); update({ toolbarPosition: pos }); }}
+                    style={({ pressed }) => ({
+                      width: 140,
+                      paddingVertical: spacing.lg,
+                      borderRadius: radius.md,
+                      backgroundColor: active
+                        ? colors.brandTertiary
+                        : pressed
+                        ? colors.surfaceTertiary
+                        : colors.surfaceSecondary,
+                      borderWidth: 2,
+                      borderColor: active ? colors.brand : 'transparent',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                    })}
+                  >
+                    <Ionicons name={iconName} size={32} color={active ? colors.brand : colors.onSurface} />
+                    <Text style={{ color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                      {pos.charAt(0).toUpperCase() + pos.slice(1)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Title edit modal */}
       <Modal visible={showTitleEdit} transparent animationType="fade" onRequestClose={() => setShowTitleEdit(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowTitleEdit(false)}>
@@ -1435,9 +1571,17 @@ function ToolBtn({
   );
 }
 
-function Divider() {
+function Divider({ vertical }: { vertical?: boolean }) {
   const { colors } = useTheme();
-  return <View style={{ width: 1, height: 28, backgroundColor: colors.divider, marginHorizontal: 4 }} />;
+  return (
+    <View
+      style={
+        vertical
+          ? { height: 1, width: 28, backgroundColor: colors.divider, marginVertical: 4 }
+          : { width: 1, height: 28, backgroundColor: colors.divider, marginHorizontal: 4 }
+      }
+    />
+  );
 }
 
 function ShapeOption({
