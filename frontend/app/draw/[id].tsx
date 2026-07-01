@@ -64,6 +64,7 @@ interface DrawingDoc {
   canvasColor?: string;
   lineSpacing?: number; // pixel spacing for ruled / grid / dotted templates
   pageCount?: number;   // number of stacked pages in this note
+  docVersion?: number;  // 1 = pre-gap (contiguous world y), 2 = gap-inclusive world y
   items: Item[];
 }
 
@@ -440,10 +441,13 @@ export default function DrawScreen() {
   // Multi-page support
   const [pageCount, setPageCount] = useState(1);
 
-  // Derived translation so the canvas center stays pinned to the screen center at any scale,
-  // plus the user's vertical scroll offset across pages.
+  // Visible gap between adjacent pages (world coords). Strokes are stored with their
+  // gap-inclusive world Y so a stroke on page N has y ≥ N * (basePageH + PAGE_GAP).
+  // Existing (pre-gap) notes are migrated at load — see loader below.
+  const PAGE_GAP = 32;
   const basePageH = pageDims.h;
-  const totalPageH = basePageH * pageCount;
+  const pageStrideY = basePageH + PAGE_GAP;
+  const totalPageH = pageStrideY * pageCount - PAGE_GAP;
   // Horizontal: center the page when it fits in the viewport; when zoomed in such that the
   // page overflows the viewport, allow the user to pan sideways within bounds so neither
   // side edge is dragged out of view.
@@ -505,7 +509,34 @@ export default function DrawScreen() {
         if (n.drawing_data) {
           try {
             const doc: DrawingDoc = JSON.parse(n.drawing_data);
-            setItems(doc.items || []);
+            // Determine the page height so we can migrate legacy (v1) notes into gap-inclusive
+            // world Y. Migration only happens when docVersion is missing or < 2.
+            let loadedItems: Item[] = doc.items || [];
+            if (!doc.docVersion || doc.docVersion < 2) {
+              // Compute basePageH for this doc's paper size/orientation. Fall back to current
+              // pageDims.h if we can't determine it (viewport not yet laid out).
+              const legacyBaseH = pageDims.h || 800;
+              loadedItems = loadedItems.map((it) => {
+                if (it.kind === 'stroke') {
+                  return {
+                    ...it,
+                    points: it.points.map((p) => ({
+                      ...p,
+                      y: p.y + PAGE_GAP * Math.floor(p.y / Math.max(1, legacyBaseH)),
+                    })),
+                  } as Item;
+                }
+                // shape
+                const sIdx = Math.floor(it.start.y / Math.max(1, legacyBaseH));
+                const eIdx = Math.floor(it.end.y / Math.max(1, legacyBaseH));
+                return {
+                  ...it,
+                  start: { x: it.start.x, y: it.start.y + PAGE_GAP * sIdx },
+                  end: { x: it.end.x, y: it.end.y + PAGE_GAP * eIdx },
+                } as Item;
+              });
+            }
+            setItems(loadedItems);
             setPaper(doc.paper || 'blank');
             if (doc.paperSize) {
               // Legacy notes may have paperSize === 'fit' — coerce to A4.
@@ -546,6 +577,7 @@ export default function DrawScreen() {
               canvasColor: canvasColorHex,
               lineSpacing,
               pageCount,
+              docVersion: 2,
               items: nextItems,
             } as DrawingDoc),
             note_type: 'handwriting',
@@ -801,9 +833,9 @@ export default function DrawScreen() {
   // `overscrollY` is the damped screen-space distance the user has dragged BEYOND the last
   // page. It is added to `ty` so the paper visibly bounces up during the pull. When the
   // user releases past the threshold, a new page is auto-added.
-  const OVERSCROLL_ADD_THRESHOLD = 72;    // px pulled past the end (after damping) needed to trigger add
-  const OVERSCROLL_MAX = 140;             // absolute cap on damped overscroll
-  const OVERSCROLL_DAMP = 0.4;            // damping factor: raw overscroll * damp = shown overscroll
+  const OVERSCROLL_ADD_THRESHOLD = 140;   // px pulled past the end (after damping) needed to trigger add (was 72 — bumped for more deliberate action)
+  const OVERSCROLL_MAX = 200;             // absolute cap on damped overscroll
+  const OVERSCROLL_DAMP = 0.28;           // stiffer resistance (was 0.4)
 
   // 1-finger finger-drag on the paper → scroll vertically (always), horizontally only
   // when the paper edges are off-screen. Rejects stylus so the drawing gesture takes
@@ -954,8 +986,14 @@ export default function DrawScreen() {
         }
         return;
       }
-      // Reject touches that started outside the page area (left/right margins or above/below pages)
-      if (w.x < 0 || w.x > pageDims.w || w.y < 0 || w.y > totalPageH) {
+      // Reject touches that started outside the page area (left/right margins, above/below pages, or in a gap between pages).
+      const inGap = (() => {
+        const pageIdx = Math.floor(w.y / pageStrideY);
+        if (pageIdx < 0 || pageIdx >= pageCount) return true;
+        const localY = w.y - pageIdx * pageStrideY;
+        return localY > basePageH; // between two pages
+      })();
+      if (w.x < 0 || w.x > pageDims.w || w.y < 0 || w.y > totalPageH || inGap) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
         return;
@@ -1068,10 +1106,10 @@ export default function DrawScreen() {
       // Auto-add a page when the last stroke approaches the bottom of the current pages.
       if (autoAddPageRef.current && isPenTool(tool) && livePtsRef.current.length > 0) {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
-        if (last && last.y > pageCount * basePageH - 120) {
+        // Bottom of last page (world y) = totalPageH. Trigger when close to it.
+        if (last && last.y > totalPageH - 120) {
           setPageCount((c) => c + 1);
-          // Scroll the indicator forward to the new page so the user sees the new space.
-          setScrollY(pageCount * basePageH);
+          setScrollY(pageCount * pageStrideY);
         }
       }
       if (isPenTool(tool)) {
@@ -1309,6 +1347,101 @@ export default function DrawScreen() {
   // ---------- Zoom presets ----------
   const [zoomPresets, setZoomPresets] = useState<{ name: string; scale: number }[]>([]);
   const [showZoomMenu, setShowZoomMenu] = useState(false);
+  const [showPagesPanel, setShowPagesPanel] = useState(false);
+
+  // Pages panel helpers — operate on world-y coordinates (gap-inclusive) so items align.
+  const deletePage = useCallback((pageIdx: number) => {
+    if (pageCount <= 1) return;
+    haptic.warning();
+    setItems((prev) => {
+      pushHistory(prev);
+      const next: Item[] = [];
+      for (const it of prev) {
+        if (it.kind === 'stroke') {
+          const home = Math.floor((it.points[0]?.y ?? 0) / pageStrideY);
+          if (home === pageIdx) continue; // drop
+          if (home > pageIdx) {
+            next.push({ ...it, points: it.points.map((p) => ({ ...p, y: p.y - pageStrideY })) });
+          } else {
+            next.push(it);
+          }
+        } else {
+          const home = Math.floor(it.start.y / pageStrideY);
+          if (home === pageIdx) continue;
+          if (home > pageIdx) {
+            next.push({
+              ...it,
+              start: { x: it.start.x, y: it.start.y - pageStrideY },
+              end: { x: it.end.x, y: it.end.y - pageStrideY },
+            });
+          } else {
+            next.push(it);
+          }
+        }
+      }
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+    setPageCount((c) => Math.max(1, c - 1));
+    setScrollY((s) => Math.max(0, Math.min(s, (pageCount - 2) * pageStrideY)));
+  }, [pageCount, pageStrideY, paper, paperSize, paperColorId, persist]);
+
+  const movePage = useCallback((fromIdx: number, direction: -1 | 1) => {
+    const toIdx = fromIdx + direction;
+    if (toIdx < 0 || toIdx >= pageCount) return;
+    haptic.selection();
+    const a = Math.min(fromIdx, toIdx);
+    const b = Math.max(fromIdx, toIdx);
+    const delta = (b - a) * pageStrideY;
+    setItems((prev) => {
+      pushHistory(prev);
+      const next = prev.map((it) => {
+        if (it.kind === 'stroke') {
+          const home = Math.floor((it.points[0]?.y ?? 0) / pageStrideY);
+          if (home === a) return { ...it, points: it.points.map((p) => ({ ...p, y: p.y + delta })) };
+          if (home === b) return { ...it, points: it.points.map((p) => ({ ...p, y: p.y - delta })) };
+          return it;
+        }
+        const home = Math.floor(it.start.y / pageStrideY);
+        if (home === a) return { ...it, start: { ...it.start, y: it.start.y + delta }, end: { ...it.end, y: it.end.y + delta } };
+        if (home === b) return { ...it, start: { ...it.start, y: it.start.y - delta }, end: { ...it.end, y: it.end.y - delta } };
+        return it;
+      });
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+  }, [pageCount, pageStrideY, paper, paperSize, paperColorId, persist]);
+
+  const insertPageAfter = useCallback((pageIdx: number) => {
+    haptic.success();
+    const boundary = (pageIdx + 1) * pageStrideY;
+    setItems((prev) => {
+      pushHistory(prev);
+      const next = prev.map((it) => {
+        if (it.kind === 'stroke') {
+          return {
+            ...it,
+            points: it.points.map((p) => (p.y >= boundary ? { ...p, y: p.y + pageStrideY } : p)),
+          };
+        }
+        return {
+          ...it,
+          start: { x: it.start.x, y: it.start.y >= boundary ? it.start.y + pageStrideY : it.start.y },
+          end: { x: it.end.x, y: it.end.y >= boundary ? it.end.y + pageStrideY : it.end.y },
+        };
+      });
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+    setPageCount((c) => c + 1);
+  }, [pageStrideY, paper, paperSize, paperColorId, persist]);
+
+  const jumpToPage = useCallback((pageIdx: number) => {
+    haptic.selection();
+    const maxScroll = Math.max(0, totalPageH - basePageH);
+    setScrollY(Math.max(0, Math.min(pageIdx * pageStrideY, maxScroll)));
+  }, [pageStrideY, totalPageH, basePageH]);
+
   const [zoomMenuAnchor, setZoomMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetNameDraft, setPresetNameDraft] = useState('');
@@ -1514,6 +1647,14 @@ export default function DrawScreen() {
                   {Math.round(scale * 100)}%
                 </Text>
               </Pressable>
+              <Pressable
+                onPress={() => { haptic.selection(); setShowPagesPanel(true); }}
+                testID="draw-pages-btn"
+                style={styles.tabsRowIcon}
+                hitSlop={6}
+              >
+                <Ionicons name="copy-outline" size={20} color={colors.onSurface} />
+              </Pressable>
               <Pressable onPress={() => setShowPaperMenu(true)} testID="draw-more" style={styles.tabsRowIcon} hitSlop={6}>
                 <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
               </Pressable>
@@ -1537,7 +1678,7 @@ export default function DrawScreen() {
                 <Canvas style={StyleSheet.absoluteFill}>
                   <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
                     {Array.from({ length: pageCount }).map((_, i) => (
-                      <Group key={`page-${i}`} transform={[{ translateY: i * basePageH }]}>
+                      <Group key={`page-${i}`} transform={[{ translateY: i * pageStrideY }]}>
                         <SkiaPaper
                           type={paper}
                           color={paperColor}
@@ -1703,7 +1844,7 @@ export default function DrawScreen() {
                   borderRadius: 20,
                   backgroundColor: colors.surface,
                   borderWidth: 1,
-                  borderColor: overscrollY >= 72 ? colors.brand : colors.border,
+                  borderColor: overscrollY >= 140 ? colors.brand : colors.border,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,
@@ -1715,12 +1856,12 @@ export default function DrawScreen() {
                 }}
               >
                 <Ionicons
-                  name={overscrollY >= 72 ? 'add-circle' : 'arrow-up-circle-outline'}
+                  name={overscrollY >= 140 ? 'add-circle' : 'arrow-up-circle-outline'}
                   size={16}
-                  color={overscrollY >= 72 ? colors.brand : colors.muted}
+                  color={overscrollY >= 140 ? colors.brand : colors.muted}
                 />
                 <Text style={{ color: colors.onSurface, fontSize: 12, fontWeight: '600' }}>
-                  {overscrollY >= 72 ? 'Release to add page' : 'Pull to add page'}
+                  {overscrollY >= 140 ? 'Release to add page' : 'Pull to add page'}
                 </Text>
               </View>
             </View>
@@ -1792,8 +1933,8 @@ export default function DrawScreen() {
                   testID="page-up-btn"
                   onPress={() => {
                     haptic.selection();
-                    const currentPage = Math.floor(scrollY / Math.max(1, basePageH));
-                    setScrollY(Math.max(0, (currentPage - 1) * basePageH));
+                    const currentPage = Math.floor(scrollY / Math.max(1, pageStrideY));
+                    setScrollY(Math.max(0, (currentPage - 1) * pageStrideY));
                   }}
                   style={({ pressed }) => ({
                     width: 44,
@@ -1813,9 +1954,9 @@ export default function DrawScreen() {
                   testID="page-down-btn"
                   onPress={() => {
                     haptic.selection();
-                    const currentPage = Math.floor(scrollY / Math.max(1, basePageH));
+                    const currentPage = Math.floor(scrollY / Math.max(1, pageStrideY));
                     const maxScroll = Math.max(0, totalPageH - basePageH);
-                    setScrollY(Math.min(maxScroll, (currentPage + 1) * basePageH));
+                    setScrollY(Math.min(maxScroll, (currentPage + 1) * pageStrideY));
                   }}
                   style={({ pressed }) => ({
                     width: 44,
@@ -1850,7 +1991,7 @@ export default function DrawScreen() {
               }}
             >
               <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.sm }}>
-                {Math.min(pageCount, Math.floor(scrollY / Math.max(1, basePageH)) + 1)} / {pageCount}
+                {Math.min(pageCount, Math.floor(scrollY / Math.max(1, pageStrideY)) + 1)} / {pageCount}
               </Text>
             </View>
           )}
@@ -2264,6 +2405,180 @@ export default function DrawScreen() {
                 </View>
               ))}
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Pages preview panel (slides from right) — thumbnails, reorder, delete, add */}
+      <Modal
+        visible={showPagesPanel}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPagesPanel(false)}
+      >
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', flexDirection: 'row' }}
+          onPress={() => setShowPagesPanel(false)}
+        >
+          <View style={{ flex: 1 }} />
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              width: Math.min(340, winWidth * 0.85),
+              height: '100%',
+              backgroundColor: colors.surface,
+              paddingTop: insets.top + spacing.md,
+              paddingBottom: insets.bottom + spacing.md,
+              paddingHorizontal: spacing.md,
+              shadowColor: '#000',
+              shadowOffset: { width: -4, height: 0 },
+              shadowOpacity: 0.24,
+              shadowRadius: 12,
+              elevation: 16,
+            }}
+          >
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
+              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '800' }}>
+                Pages ({pageCount})
+              </Text>
+              <Pressable onPress={() => setShowPagesPanel(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.onSurface} />
+              </Pressable>
+            </View>
+
+            {/* Thumbnails list */}
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ gap: spacing.md, paddingBottom: spacing.md }}
+              showsVerticalScrollIndicator={false}
+            >
+              {Array.from({ length: pageCount }).map((_, i) => {
+                const isCurrent = Math.floor(scrollY / Math.max(1, pageStrideY)) === i;
+                // Thumbnail dims: keep aspect ratio of the page.
+                const thumbW = Math.min(240, winWidth * 0.6);
+                const thumbH = (thumbW / Math.max(1, pageDims.w)) * basePageH;
+                return (
+                  <View
+                    key={`page-thumb-${i}`}
+                    style={{
+                      borderRadius: radius.md,
+                      borderWidth: isCurrent ? 2 : 1,
+                      borderColor: isCurrent ? colors.brand : colors.border,
+                      backgroundColor: colors.surfaceSecondary,
+                      padding: spacing.sm,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Pressable
+                      onPress={() => { jumpToPage(i); setShowPagesPanel(false); }}
+                      style={{
+                        width: thumbW,
+                        height: thumbH,
+                        borderRadius: radius.sm,
+                        backgroundColor: paperColor,
+                        overflow: 'hidden',
+                        marginBottom: spacing.sm,
+                      }}
+                      testID={`page-thumb-${i}`}
+                    >
+                      {Platform.OS !== 'web' && (
+                        <Canvas style={{ flex: 1 }}>
+                          {(() => {
+                            const scaleT = thumbW / Math.max(1, pageDims.w);
+                            return (
+                              <Group transform={[{ scale: scaleT }]}>
+                                <SkiaPaper
+                                  type={paper}
+                                  color={paperColor}
+                                  lineColor={paperLine}
+                                  width={pageDims.w}
+                                  height={basePageH}
+                                  lineSpacing={lineSpacing}
+                                />
+                                {/* Render this page's items — filter by home page and translate y to page-local */}
+                                <Group transform={[{ translateY: -i * pageStrideY }]}>
+                                  {items
+                                    .filter((it) => {
+                                      const y = it.kind === 'stroke' ? (it.points[0]?.y ?? 0) : it.start.y;
+                                      return Math.floor(y / pageStrideY) === i;
+                                    })
+                                    .map((it, idx) =>
+                                      it.kind === 'stroke' ? renderStroke(it, `t${i}-s${idx}`) : renderShape(it, `t${i}-sh${idx}`)
+                                    )}
+                                </Group>
+                              </Group>
+                            );
+                          })()}
+                        </Canvas>
+                      )}
+                    </Pressable>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                      <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.sm }}>
+                        Page {i + 1}
+                      </Text>
+                      <View style={{ flexDirection: 'row', gap: 2 }}>
+                        <Pressable
+                          onPress={() => movePage(i, -1)}
+                          disabled={i === 0}
+                          hitSlop={6}
+                          style={{ padding: 6, opacity: i === 0 ? 0.3 : 1 }}
+                          testID={`page-move-up-${i}`}
+                        >
+                          <Ionicons name="arrow-up" size={16} color={colors.onSurface} />
+                        </Pressable>
+                        <Pressable
+                          onPress={() => movePage(i, 1)}
+                          disabled={i === pageCount - 1}
+                          hitSlop={6}
+                          style={{ padding: 6, opacity: i === pageCount - 1 ? 0.3 : 1 }}
+                          testID={`page-move-down-${i}`}
+                        >
+                          <Ionicons name="arrow-down" size={16} color={colors.onSurface} />
+                        </Pressable>
+                        <Pressable
+                          onPress={() => insertPageAfter(i)}
+                          hitSlop={6}
+                          style={{ padding: 6 }}
+                          testID={`page-insert-after-${i}`}
+                        >
+                          <Ionicons name="add" size={18} color={colors.brand} />
+                        </Pressable>
+                        <Pressable
+                          onPress={() => deletePage(i)}
+                          disabled={pageCount <= 1}
+                          hitSlop={6}
+                          style={{ padding: 6, opacity: pageCount <= 1 ? 0.3 : 1 }}
+                          testID={`page-delete-${i}`}
+                        >
+                          <Ionicons name="trash-outline" size={16} color={colors.error} />
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+
+              {/* Add page (at end) */}
+              <Pressable
+                onPress={() => insertPageAfter(pageCount - 1)}
+                style={{
+                  paddingVertical: spacing.md,
+                  borderRadius: radius.md,
+                  borderWidth: 1,
+                  borderColor: colors.brand,
+                  borderStyle: 'dashed',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexDirection: 'row',
+                  gap: 6,
+                }}
+                testID="page-add-at-end"
+              >
+                <Ionicons name="add-circle-outline" size={18} color={colors.brand} />
+                <Text style={{ color: colors.brand, fontWeight: '700' }}>Add page</Text>
+              </Pressable>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
