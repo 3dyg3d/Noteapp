@@ -805,6 +805,21 @@ export default function DrawScreen() {
           style={{ flexGrow: 1 }}
         >
           <ToolBtn
+            icon="arrow-undo"
+            label="Undo"
+            active={false}
+            onPress={() => { haptic.light(); undo(); }}
+            testID="tool-undo"
+          />
+          <ToolBtn
+            icon="arrow-redo"
+            label="Redo"
+            active={false}
+            onPress={() => { haptic.light(); redo(); }}
+            testID="tool-redo"
+          />
+          <Divider vertical={vertical} />
+          <ToolBtn
             icon={settings.palmRejection ? 'hand-left' : 'hand-left-outline'}
             label={settings.palmRejection ? 'Pen only' : 'Touch on'}
             active={settings.palmRejection}
