@@ -420,7 +420,7 @@ export default function DrawScreen() {
   const [showSubToolbar, setShowSubToolbar] = useState(false);
   const [showToolPalette, setShowToolPalette] = useState(false);
   const [showToolOpts, setShowToolOpts] = useState(false);
-  const [toolOptAnchor, setToolOptAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [toolOptAnchor, setToolOptAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [expandedColors, setExpandedColors] = useState(false); // in-popover grid palette toggle
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -1116,14 +1116,27 @@ export default function DrawScreen() {
   const handleToolTap = (t: Tool, e?: any) => {
     haptic.selection();
     if (tool === t && (isPenTool(t) || t === 'eraser')) {
-      const px = e?.nativeEvent?.pageX;
-      const py = e?.nativeEvent?.pageY;
-      if (typeof px === 'number' && typeof py === 'number') {
-        setToolOptAnchor({ x: px, y: py });
+      const target = e?.currentTarget;
+      if (target && typeof target.measureInWindow === 'function') {
+        target.measureInWindow((x: number, y: number, w: number, h: number) => {
+          if (typeof x === 'number' && typeof y === 'number' && w > 0 && h > 0) {
+            setToolOptAnchor({ x, y, w, h });
+          } else {
+            setToolOptAnchor(null);
+          }
+          setShowToolOpts(true);
+        });
       } else {
-        setToolOptAnchor(null);
+        // Fallback: use tap coordinates with a rough size
+        const px = e?.nativeEvent?.pageX;
+        const py = e?.nativeEvent?.pageY;
+        if (typeof px === 'number' && typeof py === 'number') {
+          setToolOptAnchor({ x: px - 22, y: py - 14, w: 44, h: 28 });
+        } else {
+          setToolOptAnchor(null);
+        }
+        setShowToolOpts(true);
       }
-      setShowToolOpts(true);
       return;
     }
     setTool(t);
@@ -1144,11 +1157,26 @@ export default function DrawScreen() {
   const handleFamilyTap = (f: ToolFamily, e?: any) => {
     haptic.selection();
     if (family === f) {
-      const px = e?.nativeEvent?.pageX;
-      const py = e?.nativeEvent?.pageY;
-      if (typeof px === 'number' && typeof py === 'number') setToolOptAnchor({ x: px, y: py });
-      else setToolOptAnchor(null);
-      setShowToolOpts(true);
+      const target = e?.currentTarget;
+      if (target && typeof target.measureInWindow === 'function') {
+        target.measureInWindow((x: number, y: number, w: number, h: number) => {
+          if (typeof x === 'number' && typeof y === 'number' && w > 0 && h > 0) {
+            setToolOptAnchor({ x, y, w, h });
+          } else {
+            setToolOptAnchor(null);
+          }
+          setShowToolOpts(true);
+        });
+      } else {
+        const px = e?.nativeEvent?.pageX;
+        const py = e?.nativeEvent?.pageY;
+        if (typeof px === 'number' && typeof py === 'number') {
+          setToolOptAnchor({ x: px - 22, y: py - 14, w: 44, h: 28 });
+        } else {
+          setToolOptAnchor(null);
+        }
+        setShowToolOpts(true);
+      }
       return;
     }
     applyFamilyVariant(f, variantByFamily[f]);
@@ -1191,6 +1219,14 @@ export default function DrawScreen() {
   const removePreset = (name: string) => {
     persistZoomPresets(zoomPresets.filter((p) => p.name !== name));
   };
+  const renamePreset = (oldName: string, newName: string) => {
+    const label = newName.trim().slice(0, 24);
+    if (!label) return;
+    if (zoomPresets.some((p) => p.name.toLowerCase() === label.toLowerCase() && p.name !== oldName)) return;
+    persistZoomPresets(zoomPresets.map((p) => (p.name === oldName ? { ...p, name: label } : p)));
+  };
+  const [renamingPreset, setRenamingPreset] = useState<string | null>(null); // preset name being edited
+  const [renameDraft, setRenameDraft] = useState('');
 
   // ---------- Ruler preferences (state is declared above, here we just persist prefs) ----------
   // Persist ruler preferences (not position — it re-centers each time).
@@ -1690,75 +1726,61 @@ export default function DrawScreen() {
         <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => { setShowToolOpts(false); setExpandedColors(false); }}>
           {(() => {
             const CARD_W = 260;
-            // We do not use a fixed APPROX_H anymore. Instead we set `bottom` in the style
-            // for the flipped case so the popover's real height (whatever React lays out)
-            // aligns cleanly with the tool's bottom edge.
+            // Approximate popup height used only for overflow detection when
+            // deciding whether to flip to bottom-align. Actual layout height is
+            // whatever React lays out.
+            const POPUP_APPROX_H = 340;
             const winW = winWidth;
             const winH = winHeight;
             const TOOLBAR_THICKNESS = 60;
             const GAP = 2;
-            const BTN_HALF = 14; // half-height of a ToolBtn (~28px tall)
+            const EDGE_MARGIN = 8;
             const positionStyle: any = {};
             if (toolOptAnchor) {
+              const rect = toolOptAnchor;
+              // Justify the popover with the tool button like MS Word paragraph justification:
+              //  - Vertical toolbars (left/right): default TOP-align both edges. Flip to
+              //    BOTTOM-align only if popup would overflow the screen bottom.
+              //  - Horizontal toolbars (top/bottom): default LEFT-align both edges. Flip to
+              //    RIGHT-align only if popup would overflow the screen right.
               if (toolbarPos === 'left') {
                 positionStyle.left = TOOLBAR_THICKNESS + GAP;
-                const toolTop = toolOptAnchor.y - BTN_HALF;
-                const toolBottom = toolOptAnchor.y + BTN_HALF;
-                const roomBelow = winH - insets.bottom - 8 - toolTop;
-                if (roomBelow >= 300) {
-                  positionStyle.top = Math.max(insets.top + 8, toolTop);
+                const wouldOverflowBottom = rect.y + POPUP_APPROX_H > winH - insets.bottom - EDGE_MARGIN;
+                if (wouldOverflowBottom) {
+                  // Bottom-align: popup's bottom flush with tool's bottom
+                  positionStyle.bottom = Math.max(insets.bottom + EDGE_MARGIN, winH - (rect.y + rect.h));
                 } else {
-                  // Flip: align bottoms, but clamp so we never overflow the top.
-                  const desiredBottom = winH - toolBottom;
-                  positionStyle.bottom = Math.max(insets.bottom + 8, desiredBottom);
+                  positionStyle.top = Math.max(insets.top + EDGE_MARGIN, rect.y);
                 }
               } else if (toolbarPos === 'right') {
                 positionStyle.right = TOOLBAR_THICKNESS + GAP;
-                const toolTop = toolOptAnchor.y - BTN_HALF;
-                const toolBottom = toolOptAnchor.y + BTN_HALF;
-                const roomBelow = winH - insets.bottom - 8 - toolTop;
-                if (roomBelow >= 300) {
-                  positionStyle.top = Math.max(insets.top + 8, toolTop);
+                const wouldOverflowBottom = rect.y + POPUP_APPROX_H > winH - insets.bottom - EDGE_MARGIN;
+                if (wouldOverflowBottom) {
+                  positionStyle.bottom = Math.max(insets.bottom + EDGE_MARGIN, winH - (rect.y + rect.h));
                 } else {
-                  positionStyle.bottom = Math.max(insets.bottom + 8, winH - toolBottom);
+                  positionStyle.top = Math.max(insets.top + EDGE_MARGIN, rect.y);
                 }
               } else if (toolbarPos === 'top') {
                 positionStyle.top = TOOLBAR_THICKNESS + GAP + insets.top;
-                const toolLeft = toolOptAnchor.x - BTN_HALF;
-                const toolRight = toolOptAnchor.x + BTN_HALF;
-                const roomRight = winW - 8 - toolLeft;
-                if (roomRight >= CARD_W) {
-                  positionStyle.left = Math.max(8, toolLeft);
+                const wouldOverflowRight = rect.x + CARD_W > winW - EDGE_MARGIN;
+                if (wouldOverflowRight) {
+                  // Right-align: popup's right flush with tool's right
+                  positionStyle.right = Math.max(EDGE_MARGIN, winW - (rect.x + rect.w));
                 } else {
-                  // Flip: align rights, but clamp so we never overflow the left.
-                  // desiredRight = winW - toolRight → card_left = winW - CARD_W - desiredRight
-                  // = toolRight - CARD_W. If that's < 8, clamp left to 8 instead of using right.
-                  const desiredLeftIfFlipped = toolRight - CARD_W;
-                  if (desiredLeftIfFlipped >= 8) {
-                    positionStyle.right = winW - toolRight;
-                  } else {
-                    positionStyle.left = 8;
-                  }
+                  positionStyle.left = Math.max(EDGE_MARGIN, rect.x);
                 }
               } else {
                 // bottom toolbar
                 positionStyle.bottom = TOOLBAR_THICKNESS + GAP + insets.bottom;
-                const toolLeft = toolOptAnchor.x - BTN_HALF;
-                const toolRight = toolOptAnchor.x + BTN_HALF;
-                const roomRight = winW - 8 - toolLeft;
-                if (roomRight >= CARD_W) {
-                  positionStyle.left = Math.max(8, toolLeft);
+                const wouldOverflowRight = rect.x + CARD_W > winW - EDGE_MARGIN;
+                if (wouldOverflowRight) {
+                  positionStyle.right = Math.max(EDGE_MARGIN, winW - (rect.x + rect.w));
                 } else {
-                  const desiredLeftIfFlipped = toolRight - CARD_W;
-                  if (desiredLeftIfFlipped >= 8) {
-                    positionStyle.right = winW - toolRight;
-                  } else {
-                    positionStyle.left = 8;
-                  }
+                  positionStyle.left = Math.max(EDGE_MARGIN, rect.x);
                 }
               }
             } else {
-              positionStyle.left = Math.max(8, (winW - CARD_W) / 2);
+              positionStyle.left = Math.max(EDGE_MARGIN, (winW - CARD_W) / 2);
               positionStyle.bottom = insets.bottom + 110;
             }
             return (
@@ -2150,16 +2172,37 @@ export default function DrawScreen() {
                 <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: 4 }} />
                 <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 4 }}>SAVED</Text>
                 {zoomPresets.map((p) => (
-                  <Pressable
+                  <View
                     key={`saved-${p.name}`}
-                    onPress={() => { haptic.selection(); setScale(p.scale); setShowZoomMenu(false); }}
-                    onLongPress={() => { haptic.warning(); removePreset(p.name); }}
-                    delayLongPress={500}
-                    style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                    style={{ paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}
                   >
-                    <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>{p.name}</Text>
-                    <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>{Math.round(p.scale * 100)}%</Text>
-                  </Pressable>
+                    <Pressable
+                      onPress={() => { haptic.selection(); setScale(p.scale); setShowZoomMenu(false); }}
+                      onLongPress={() => { setRenameDraft(p.name); setRenamingPreset(p.name); setShowZoomMenu(false); }}
+                      delayLongPress={400}
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 }}
+                      testID={`preset-${p.name}`}
+                    >
+                      <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>{p.name}</Text>
+                      <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>{Math.round(p.scale * 100)}%</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => { setRenameDraft(p.name); setRenamingPreset(p.name); setShowZoomMenu(false); }}
+                      hitSlop={8}
+                      testID={`preset-rename-${p.name}`}
+                      style={{ padding: 4 }}
+                    >
+                      <Ionicons name="pencil-outline" size={14} color={colors.muted} />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => { haptic.warning(); removePreset(p.name); }}
+                      hitSlop={8}
+                      testID={`preset-delete-${p.name}`}
+                      style={{ padding: 4 }}
+                    >
+                      <Ionicons name="close" size={16} color={colors.error} />
+                    </Pressable>
+                  </View>
                 ))}
               </>
             )}
