@@ -90,7 +90,7 @@ const PAPER_COLORS: { id: string; light: string; dark: string }[] = [
 const PALETTE = ['#1A1A1C', '#FFFFFF', '#B85C5C', '#D4A352', '#7B8C73', '#6E7A8A', '#8B7AA8', '#638C61', '#E11D48', '#2563EB', '#059669', '#DB2777'];
 // Quick colors shown as inline chips on the main toolbar — the four everyday colors.
 // These are DEFAULTS; the user can long-press a slot to reassign it via the grid picker.
-const DEFAULT_QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */];
+const DEFAULT_QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */, '#059669' /* green */, '#D4A352' /* amber */];
 
 // A Photoshop-style grid palette (8 columns × 8 rows) used everywhere the user
 // picks a color. Rows are: grayscale, red, orange, yellow, green, blue, purple, brown.
@@ -122,6 +122,54 @@ const DEFAULT_WIDTHS: Record<Tool, number> = {
   pen: 3, fountain: 5, marker: 10, highlighter: 20, pencil: 2, eraser: 24,
   line: 3, rect: 3, ellipse: 3,
 };
+
+// ---------- Tool families ----------
+// The toolbar shows FAMILY buttons; the popover picks a VARIANT for families that
+// have more than one. The `tool` state still holds a concrete internal drawing tool
+// (see the Tool type above); family+variant just drive the UI and select the
+// internal tool.
+type ToolFamily = 'pen' | 'pencil' | 'marker' | 'tape' | 'select' | 'laser' | 'eraser';
+
+const FAMILY_ORDER: ToolFamily[] = ['pen', 'pencil', 'marker', 'tape', 'select', 'laser', 'eraser'];
+
+const FAMILY_META: Record<ToolFamily, { label: string; icon: any }> = {
+  pen:    { label: 'Pen',    icon: 'brush' },
+  pencil: { label: 'Pencil', icon: 'pencil-outline' },
+  marker: { label: 'Marker', icon: 'color-wand' },
+  tape:   { label: 'Tape',   icon: 'bookmark-outline' },
+  select: { label: 'Select', icon: 'scan-outline' },
+  laser:  { label: 'Laser',  icon: 'flashlight-outline' },
+  eraser: { label: 'Eraser', icon: 'close-circle-outline' },
+};
+
+const FAMILY_VARIANTS: Record<ToolFamily, { key: string; label: string; icon: any }[]> = {
+  pen:    [ { key: 'fountain',  label: 'Fountain',  icon: 'create-outline' },
+            { key: 'ballpoint', label: 'Ballpoint', icon: 'brush' } ],
+  pencil: [ { key: 'pencil', label: 'Pencil', icon: 'pencil-outline' } ],
+  marker: [ { key: 'flat',  label: 'Flat tip',  icon: 'remove-outline' },
+            { key: 'round', label: 'Round tip', icon: 'ellipse' } ],
+  tape:   [ { key: 'tape', label: 'Tape', icon: 'bookmark-outline' } ],
+  select: [ { key: 'rect',  label: 'Rectangle', icon: 'scan-outline' },
+            { key: 'lasso', label: 'Lasso',     icon: 'analytics-outline' } ],
+  laser:  [ { key: 'line', label: 'Line laser', icon: 'remove-outline' },
+            { key: 'spot', label: 'Spot laser', icon: 'radio-button-on' } ],
+  eraser: [ { key: 'stroke', label: 'Stroke erase', icon: 'trash-outline' },
+            { key: 'area',   label: 'Area erase',   icon: 'cut-outline' } ],
+};
+
+// Convert a (family, variant) pair to the concrete internal drawing tool the
+// stroke pipeline knows about. Select and Laser both currently map to 'pen' since
+// their drawing behavior is stubbed — the family+variant is still stored so the UI
+// reflects the choice.
+function familyVariantToTool(f: ToolFamily, v: string): Tool {
+  if (f === 'pen')    return v === 'fountain' ? 'fountain' : 'pen';
+  if (f === 'pencil') return 'pencil';
+  if (f === 'marker') return 'marker';
+  if (f === 'tape')   return 'highlighter';
+  if (f === 'eraser') return 'eraser';
+  // select / laser — stubbed; use 'pen' internally (draws nothing until wired).
+  return 'pen';
+}
 
 // ---------- Helpers ----------
 function buildPathFromPoints(points: { x: number; y: number }[]): SkPath {
@@ -236,15 +284,38 @@ export default function DrawScreen() {
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>('#1A1A1C');
 
-  // User-customizable quick colors on the toolbar.
+  // Family / variant state — drives the toolbar UI and resolves to `tool`.
+  const [family, setFamily] = useState<ToolFamily>('pen');
+  const [variantByFamily, setVariantByFamily] = useState<Record<ToolFamily, string>>({
+    pen: 'fountain', pencil: 'pencil', marker: 'round', tape: 'tape',
+    select: 'rect', laser: 'line', eraser: 'stroke',
+  });
+
+  // User-customizable quick colors on the toolbar. Six slots; tap opens the grid
+  // picker to reassign that slot's color (the newly picked color also becomes the
+  // currently-active drawing color).
   const [quickColors, setQuickColors] = useState<string[]>(DEFAULT_QUICK_COLORS);
-  const [pickerFor, setPickerFor] = useState<{ slot: number | null } | null>(null); // null=closed, slot=null means "pick for active color"
+  const [recentColors, setRecentColors] = useState<string[]>([]); // last picks — most recent first, max 8
+  const [pickerFor, setPickerFor] = useState<{ slot: number | null } | null>(null);
   useEffect(() => {
     AsyncStorage.getItem('galaxynotes:quick-colors').then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length === 4) setQuickColors(parsed);
+          if (Array.isArray(parsed) && parsed.length >= 4) {
+            // Pad up to 6 if the user has old 4-slot data saved.
+            const padded = [...parsed];
+            while (padded.length < 6) padded.push(DEFAULT_QUICK_COLORS[padded.length] || '#000000');
+            setQuickColors(padded.slice(0, 6));
+          }
+        } catch {}
+      }
+    });
+    AsyncStorage.getItem('galaxynotes:recent-colors').then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setRecentColors(parsed.slice(0, 8));
         } catch {}
       }
     });
@@ -254,6 +325,14 @@ export default function DrawScreen() {
       const next = prev.slice();
       next[slot] = hex;
       AsyncStorage.setItem('galaxynotes:quick-colors', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+  const pushRecentColor = useCallback((hex: string) => {
+    setRecentColors((prev) => {
+      const filtered = prev.filter((c) => c.toLowerCase() !== hex.toLowerCase());
+      const next = [hex, ...filtered].slice(0, 8);
+      AsyncStorage.setItem('galaxynotes:recent-colors', JSON.stringify(next)).catch(() => {});
       return next;
     });
   }, []);
@@ -893,6 +972,31 @@ export default function DrawScreen() {
     setTool(t);
   };
 
+  // Family-level toolbar handling. Switches to the family's remembered variant, or
+  // opens the popover if the same family is re-tapped.
+  const applyFamilyVariant = useCallback((f: ToolFamily, v: string) => {
+    setFamily(f);
+    setVariantByFamily((prev) => ({ ...prev, [f]: v }));
+    setTool(familyVariantToTool(f, v));
+    if (f === 'eraser') {
+      setEraserModePersist(v === 'area' ? 'partial' : 'stroke');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleFamilyTap = (f: ToolFamily, e?: any) => {
+    haptic.selection();
+    if (family === f) {
+      const px = e?.nativeEvent?.pageX;
+      const py = e?.nativeEvent?.pageY;
+      if (typeof px === 'number' && typeof py === 'number') setToolOptAnchor({ x: px, y: py });
+      else setToolOptAnchor(null);
+      setShowToolOpts(true);
+      return;
+    }
+    applyFamilyVariant(f, variantByFamily[f]);
+  };
+
   const resetZoom = () => {
     setScale(1);
   };
@@ -966,32 +1070,35 @@ export default function DrawScreen() {
             testID="tool-pen-mode"
           />
           <Divider vertical={vertical} />
-          <ToolBtn icon="brush" label="Pen" active={tool === 'pen'} onPress={(e) => handleToolTap('pen', e)} testID="tool-pen" />
-          <ToolBtn icon="create-outline" label="Fountain" active={tool === 'fountain'} onPress={(e) => handleToolTap('fountain', e)} testID="tool-fountain" />
-          <ToolBtn icon="color-wand" label="Marker" active={tool === 'marker'} onPress={(e) => handleToolTap('marker', e)} testID="tool-marker" />
-          <ToolBtn icon="bookmark-outline" label="Highlight" active={tool === 'highlighter'} onPress={(e) => handleToolTap('highlighter', e)} testID="tool-highlighter" />
-          <ToolBtn icon="pencil-outline" label="Pencil" active={tool === 'pencil'} onPress={(e) => handleToolTap('pencil', e)} testID="tool-pencil" />
+          {/* Family buttons — one per tool family. Tap to switch family / re-tap to
+              open the variant + settings popover. */}
+          {FAMILY_ORDER.map((f) => (
+            <ToolBtn
+              key={`family-${f}`}
+              icon={FAMILY_META[f].icon}
+              label={FAMILY_META[f].label}
+              active={family === f}
+              onPress={(e) => handleFamilyTap(f, e)}
+              testID={`family-${f}`}
+            />
+          ))}
           <Divider vertical={vertical} />
-          <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
-          <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={(e) => handleToolTap('eraser', e)} testID="tool-eraser" />
-          <Divider vertical={vertical} />
-          {/* Quick colors — 4 user-customizable slots. Tap = apply. Long-press = reassign via grid picker. */}
+          {/* Quick colors — 6 user-customizable slots. Tap = open grid picker to
+              reassign this slot (and set it as the active color). */}
           {quickColors.map((c, slot) => (
             <Pressable
               key={`quick-${slot}`}
-              onPress={() => { haptic.selection(); setColor(c); }}
-              onLongPress={() => { haptic.medium(); setPickerFor({ slot }); }}
-              delayLongPress={280}
+              onPress={() => { haptic.selection(); setPickerFor({ slot }); }}
               testID={`quick-color-${slot}`}
-              style={[
-                styles.colorDot,
-                {
-                  backgroundColor: c,
-                  borderColor: color === c ? colors.brand : colors.border,
-                  borderWidth: color === c ? 3 : 1,
-                  marginHorizontal: 2,
-                },
-              ]}
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 9,
+                backgroundColor: c,
+                borderColor: color === c ? colors.brand : colors.border,
+                borderWidth: color === c ? 2 : 1,
+                marginHorizontal: 2,
+              }}
             />
           ))}
           <Divider vertical={vertical} />
@@ -1306,9 +1413,57 @@ export default function DrawScreen() {
               >
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
             <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.sm }}>
-              {labelForTool(tool)} settings
+              {FAMILY_META[family].label} settings
             </Text>
 
+            {/* Variant chooser — shown only for families with more than one variant. */}
+            {FAMILY_VARIANTS[family].length > 1 && (
+              <>
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Type</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: spacing.md, flexWrap: 'wrap' }}>
+                  {FAMILY_VARIANTS[family].map((v) => {
+                    const active = variantByFamily[family] === v.key;
+                    return (
+                      <Pressable
+                        key={v.key}
+                        testID={`variant-${family}-${v.key}`}
+                        onPress={() => { haptic.selection(); applyFamilyVariant(family, v.key); }}
+                        style={{
+                          flex: 1,
+                          minWidth: 100,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6,
+                          paddingVertical: spacing.sm,
+                          paddingHorizontal: spacing.sm,
+                          borderRadius: radius.md,
+                          backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                        }}
+                      >
+                        <Ionicons name={v.icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                        <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontSize: typeScale.sm, fontWeight: active ? '700' : '500' }}>
+                          {v.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            {(family === 'select' || family === 'laser') && (
+              <View style={{ backgroundColor: colors.surfaceSecondary, padding: spacing.md, borderRadius: radius.md, marginBottom: spacing.md }}>
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, textAlign: 'center' }}>
+                  {family === 'select'
+                    ? 'Selection is coming soon — the button is here so it matches the final layout.'
+                    : 'Laser is coming soon — pointer trails / spot laser will land in the next update.'}
+                </Text>
+              </View>
+            )}
+
+            {family !== 'select' && family !== 'laser' && (
+              <>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Thickness</Text>
               <Text style={{ color: colors.onSurface, fontSize: typeScale.sm, fontWeight: '600' }}>
@@ -1336,8 +1491,10 @@ export default function DrawScreen() {
               knobColor={colors.brand}
             />
             <View style={{ height: spacing.md }} />
+              </>
+            )}
 
-            {tool !== 'eraser' && (
+            {family !== 'select' && family !== 'laser' && family !== 'eraser' && (
               <>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Color</Text>
@@ -1411,40 +1568,8 @@ export default function DrawScreen() {
               </Text>
             )}
 
-            {tool === 'eraser' && (
-              <>
-                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Eraser mode</Text>
-                <View style={{ flexDirection: 'row', gap: 6, marginBottom: spacing.sm }}>
-                  {([
-                    { key: 'stroke' as const, label: 'Whole stroke', icon: 'trash-outline' as const },
-                    { key: 'partial' as const, label: 'Partial', icon: 'cut-outline' as const },
-                  ]).map((m) => {
-                    const active = eraserMode === m.key;
-                    return (
-                      <Pressable
-                        key={m.key}
-                        testID={`eraser-mode-${m.key}`}
-                        onPress={() => { haptic.selection(); setEraserModePersist(m.key); }}
-                        style={{
-                          flex: 1,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 4,
-                          paddingVertical: spacing.sm,
-                          borderRadius: radius.md,
-                          backgroundColor: active ? colors.brand : colors.surfaceSecondary,
-                        }}
-                      >
-                        <Ionicons name={m.icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
-                        <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontSize: typeScale.sm, fontWeight: active ? '700' : '500' }}>
-                          {m.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </>
+            {tool === 'eraser' && false && (
+              <></>
             )}
 
             <Pressable
@@ -1476,10 +1601,10 @@ export default function DrawScreen() {
               position: 'absolute',
               alignSelf: 'center',
               top: '20%',
-              width: 320,
+              width: 240,
               backgroundColor: colors.surface,
               borderRadius: radius.lg,
-              padding: spacing.lg,
+              padding: spacing.md,
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 6 },
               shadowOpacity: 0.28,
@@ -1496,10 +1621,45 @@ export default function DrawScreen() {
               </Pressable>
             </View>
 
-            {/* Photoshop-style grid: 8 columns × 8 rows */}
-            <View style={{ gap: 4 }}>
+            {/* Recent colors row (only if we have any). */}
+            {recentColors.length > 0 && (
+              <>
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 4 }}>Recent</Text>
+                <View style={{ flexDirection: 'row', gap: 3, marginBottom: spacing.sm, flexWrap: 'wrap' }}>
+                  {recentColors.map((c) => {
+                    const selected = c.toLowerCase() === color.toLowerCase();
+                    return (
+                      <Pressable
+                        key={`recent-${c}`}
+                        testID={`recent-color-${c}`}
+                        onPress={() => {
+                          haptic.selection();
+                          setColor(c);
+                          pushRecentColor(c);
+                          if (pickerFor && pickerFor.slot !== null && pickerFor.slot !== undefined) {
+                            setQuickColorSlot(pickerFor.slot, c);
+                          }
+                          setPickerFor(null);
+                        }}
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 4,
+                          backgroundColor: c,
+                          borderWidth: selected ? 2 : 1,
+                          borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
+                        }}
+                      />
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            {/* Photoshop-style grid: 8 columns × 8 rows (smaller cells) */}
+            <View style={{ gap: 3 }}>
               {COLOR_GRID.map((row, r) => (
-                <View key={`row-${r}`} style={{ flexDirection: 'row', gap: 4 }}>
+                <View key={`row-${r}`} style={{ flexDirection: 'row', gap: 3 }}>
                   {row.map((c) => {
                     const selected = c.toLowerCase() === color.toLowerCase();
                     return (
@@ -1509,17 +1669,18 @@ export default function DrawScreen() {
                         onPress={() => {
                           haptic.selection();
                           setColor(c);
+                          pushRecentColor(c);
                           if (pickerFor && pickerFor.slot !== null && pickerFor.slot !== undefined) {
                             setQuickColorSlot(pickerFor.slot, c);
                           }
                           setPickerFor(null);
                         }}
                         style={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 6,
+                          width: 22,
+                          height: 22,
+                          borderRadius: 4,
                           backgroundColor: c,
-                          borderWidth: selected ? 3 : 1,
+                          borderWidth: selected ? 2 : 1,
                           borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
                         }}
                       />
@@ -1528,9 +1689,6 @@ export default function DrawScreen() {
                 </View>
               ))}
             </View>
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.md, textAlign: 'center' }}>
-              Long-press a quick color on the toolbar to reassign it.
-            </Text>
           </Pressable>
         </Pressable>
       </Modal>
