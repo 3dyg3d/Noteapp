@@ -1,24 +1,25 @@
-import React, { useMemo } from 'react';
-import { View, Text } from 'react-native';
+import React, { useEffect, useMemo } from 'react';
+import { View, Text, TextInput } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useAnimatedStyle,
+  useAnimatedProps,
+  useSharedValue,
+  runOnJS,
+} from 'react-native-reanimated';
 
 /**
- * Clear-glass ruler overlay that spans end-to-end of the drawing surface.
- *
- * Layout:
- *  • The ruler's centre is at (state.x, state.y) in viewport coordinates.
- *  • Its length is derived from the viewport so it always reaches across the
- *    screen regardless of rotation (diagonal + margin).
- *  • The "0" tick sits exactly at the ruler's centre and unit values fan out
- *    symmetrically to the left (negative) and right (positive) so users
- *    always know where their reference point is.
- *  • The current rotation angle is shown next to the centre for quick feedback.
+ * Clear-glass ruler overlay that spans the drawing surface.
  *
  * Interaction:
- *  • 1-finger pan → moves the ruler.
- *  • 2-finger rotate → rotates around its centre.
- *  • Stylus / S-Pen touches are ignored so the pen draws THROUGH the ruler
- *    (with snapping handled by the parent).
+ *  • 1-finger pan → moves the ruler (worklet-driven for zero-lag).
+ *  • 2-finger twist → rotates around its centre (worklet-driven, thresholded, damped).
+ *  • Stylus / S-Pen touches are ignored so the pen draws THROUGH the ruler.
+ *
+ * The position and rotation are held as Reanimated shared values, so gesture updates run
+ * on the UI thread and don't trigger React re-renders while the user is manipulating the
+ * ruler. On gesture end we sync the final value back to React state via runOnJS so the
+ * parent can persist / react to changes.
  */
 export interface RulerState {
   x: number;      // centre X in viewport space
@@ -32,7 +33,7 @@ export interface RulerState {
 interface Props {
   state: RulerState;
   onChange: (next: RulerState) => void;
-  paperScale: number;         // current canvas scale (only used when scaleWithPaper=true)
+  paperScale: number;         // current canvas scale — used to scale graduation when scaleWithPaper=true
   viewport: { w: number; h: number };
   colors: {
     brand: string;
@@ -46,101 +47,56 @@ interface Props {
 // "close-enough" ruler for both platforms without native DPI code.
 const POINTS_PER_CM = 38;
 const POINTS_PER_INCH = POINTS_PER_CM * 2.54;
-const RULER_H = 155;              // 2.5× thicker (was 62) — big and easy to read
-const EDGE_PAD = 0;                // no extra padding — clipped by parent's overflow: hidden
-const INFINITE_MULTIPLIER = 3.2;   // make the ruler effectively infinite: 3.2× the diagonal so ends
-                                    // never enter the viewport at any rotation. Clipped by parent.
-const ROTATION_DAMP = 0.45;         // rotate slower than the finger's twist — feels calmer, less jumpy
-const ROTATION_START_THRESHOLD_RAD = 0.06; // ~3.4° of finger twist before we start applying rotation
+const RULER_H = 155;                    // thick, easy to read
+const INFINITE_MULTIPLIER = 3.2;        // 3.2× diagonal so the ends never enter the viewport at any rotation
+const ROTATION_DAMP = 0.75;             // ruler rotates at 75 % of finger twist — deliberate but not stiff
+const ROTATION_START_THRESHOLD_RAD = 0.035; // ~2° before rotation starts (cuts incidental jitter)
+
+const AnimatedView = Animated.createAnimatedComponent(View);
 
 export default function Ruler({ state, onChange, paperScale, viewport, colors }: Props) {
-  // Reserved for future use — the ruler length is now derived from viewport diagonal so
-  // it always spans end-to-end regardless of the paper scale. Kept in the API surface for
-  // callers that expect it and for future scale-aware tick spacing tweaks.
-  void paperScale;
-  void state.scaleWithPaper;
-  void state.lengthPx;
   void colors;
 
-  // Track cumulative rotation from the last onUpdate so we apply DELTAS (not the total
-  // since gesture start, which would compound wildly).
-  const lastRotationRef = React.useRef(0);
-  const rotationCrossedThresholdRef = React.useRef(false);
+  // Shared values driving the transform. Initial values seeded from React state.
+  const x = useSharedValue(state.x);
+  const y = useSharedValue(state.y);
+  const angle = useSharedValue(state.angle);
 
-  // Compute a length that spans FAR beyond the viewport so rotating the ruler never
-  // reveals its ends. Parent clips it via `overflow: hidden`.
+  // Sync shared values when React state changes externally (e.g. numeric angle input,
+  // recentre from the menu). Clamp x/y so the ruler centre stays inside the viewport.
+  useEffect(() => {
+    const clamped = Math.max(8, Math.min(viewport.w - 8, state.x));
+    if (x.value !== clamped) x.value = clamped;
+  }, [state.x, x, viewport.w]);
+  useEffect(() => {
+    const clamped = Math.max(8, Math.min(viewport.h - 8, state.y));
+    if (y.value !== clamped) y.value = clamped;
+  }, [state.y, y, viewport.h]);
+  useEffect(() => { if (angle.value !== state.angle) angle.value = state.angle; }, [state.angle, angle]);
+
+  // Refs used inside worklet handlers.
+  const startX = useSharedValue(0);
+  const startY = useSharedValue(0);
+  const startAngle = useSharedValue(0);
+  const lastRotation = useSharedValue(0);
+  const crossedThreshold = useSharedValue(false);
+
+  // Length: 3.2× the diagonal so the ends are always well outside the viewport.
   const diagonal = Math.hypot(viewport.w, viewport.h);
-  const displayLength = diagonal * INFINITE_MULTIPLIER + EDGE_PAD;
-
-  // 1-finger drag → pan the ruler. Reject stylus so the pen draws through.
-  const pan = Gesture.Pan()
-    .runOnJS(true)
-    .minDistance(0)
-    .maxPointers(1)
-    .onTouchesDown((event, manager) => {
-      'worklet';
-      // 1 = STYLUS. Fail the gesture so stylus events propagate to the canvas underneath.
-      if (event.allTouches?.[0]?.pointerType === 1) {
-        manager.fail();
-      }
-    })
-    .onUpdate((e) => {
-      onChange({ ...state, x: state.x + e.changeX, y: state.y + e.changeY });
-    });
-
-  // 2-finger twist → rotate around centre. Damped and thresholded so tiny incidental twists
-  // during a two-finger pan don't spin the ruler around.
-  const rotate = Gesture.Rotation()
-    .runOnJS(true)
-    .onTouchesDown((event, manager) => {
-      'worklet';
-      if (event.allTouches?.[0]?.pointerType === 1) {
-        manager.fail();
-      }
-    })
-    .onBegin(() => {
-      lastRotationRef.current = 0;
-      rotationCrossedThresholdRef.current = false;
-    })
-    .onUpdate((e) => {
-      // Wait until the user has twisted past the start threshold so tiny incidental
-      // rotations during a two-finger pan don't jerk the ruler around.
-      if (!rotationCrossedThresholdRef.current) {
-        if (Math.abs(e.rotation) < ROTATION_START_THRESHOLD_RAD) return;
-        rotationCrossedThresholdRef.current = true;
-        // Seed lastRotationRef at the threshold-crossing point so the FIRST applied delta
-        // is 0 — avoids a discrete jump when we start applying rotation.
-        lastRotationRef.current = e.rotation;
-      }
-      // Apply the delta (damped) since our last update.
-      const delta = e.rotation - lastRotationRef.current;
-      lastRotationRef.current = e.rotation;
-      const deltaDeg = (delta * ROTATION_DAMP * 180) / Math.PI;
-      onChange({ ...state, angle: state.angle + deltaDeg });
-    })
-    .onEnd(() => {
-      lastRotationRef.current = 0;
-      rotationCrossedThresholdRef.current = false;
-    })
-    .onFinalize(() => {
-      lastRotationRef.current = 0;
-      rotationCrossedThresholdRef.current = false;
-    });
-
-  const combined = Gesture.Simultaneous(pan, rotate);
-
-  const marksPerUnit = state.unit === 'cm' ? POINTS_PER_CM : POINTS_PER_INCH;
-  // Total units we can fit on each side of centre.
+  const displayLength = diagonal * INFINITE_MULTIPLIER;
   const halfLen = displayLength / 2;
-  const unitsPerSide = Math.floor(halfLen / marksPerUnit);
+
+  // Graduation spacing — optionally scales with the canvas zoom.
+  const basePpU = state.unit === 'cm' ? POINTS_PER_CM : POINTS_PER_INCH;
+  const marksPerUnit = state.scaleWithPaper ? basePpU * paperScale : basePpU;
+  const unitsPerSide = Math.floor(halfLen / Math.max(1, marksPerUnit));
+
   const ticks = useMemo(() => {
     const arr: { pos: number; label: string; big: boolean; isZero: boolean }[] = [];
-    // Centre = 0 tick
     arr.push({ pos: halfLen, label: '0', big: true, isZero: true });
     for (let i = 1; i <= unitsPerSide; i++) {
       arr.push({ pos: halfLen + i * marksPerUnit, label: `${i}`, big: true, isZero: false });
       arr.push({ pos: halfLen - i * marksPerUnit, label: `${i}`, big: true, isZero: false });
-      // 10 minor divisions between each major on both sides
       const minorStep = marksPerUnit / 10;
       for (let j = 1; j < 10; j++) {
         const posR = halfLen + (i - 1) * marksPerUnit + j * minorStep;
@@ -149,41 +105,130 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
         if (posL >= 0) arr.push({ pos: posL, label: '', big: false, isZero: false });
       }
     }
-    // Fill innermost minor ticks around zero (i=0 case above skipped them).
-    // Already covered by i=1's inner minor loop starting from posR = halfLen + minorStep etc.
     return arr;
   }, [displayLength, halfLen, marksPerUnit, unitsPerSide]);
 
-  // Format the angle nicely (0..360)
-  // Angle string was previously rendered inside the ruler; now the parent renders it as
-  // an un-rotated chip anchored to (state.x, state.y) so the tap area isn't inside the
-  // ruler's rotating GestureDetector.
+  // Bubble the final position/rotation up to React state so the parent can persist it.
+  const commit = (nx: number, ny: number, nAngle: number) => {
+    onChange({ ...state, x: nx, y: ny, angle: nAngle });
+  };
+
+  // 1-finger drag → pan (UI-thread). Rejects stylus so the pen draws through.
+  // Clamps the ruler centre inside the viewport so the "0" never leaves the screen.
+  const pan = Gesture.Pan()
+    .minDistance(0)
+    .maxPointers(1)
+    .onTouchesDown((event, manager) => {
+      'worklet';
+      if (event.allTouches?.[0]?.pointerType === 1) manager.fail();
+    })
+    .onStart(() => {
+      'worklet';
+      startX.value = x.value;
+      startY.value = y.value;
+    })
+    .onUpdate((e) => {
+      'worklet';
+      // Small safety margin so the "0" tick is always visible (not right at the edge).
+      const margin = 8;
+      const nx = startX.value + e.translationX;
+      const ny = startY.value + e.translationY;
+      x.value = Math.max(margin, Math.min(viewport.w - margin, nx));
+      y.value = Math.max(margin, Math.min(viewport.h - margin, ny));
+    })
+    .onEnd(() => {
+      'worklet';
+      runOnJS(commit)(x.value, y.value, angle.value);
+    });
+
+  // 2-finger twist → rotate (UI-thread). Damped and thresholded so twist during a pan
+  // doesn't jerk the ruler.
+  const rotate = Gesture.Rotation()
+    .onTouchesDown((event, manager) => {
+      'worklet';
+      if (event.allTouches?.[0]?.pointerType === 1) manager.fail();
+    })
+    .onBegin(() => {
+      'worklet';
+      startAngle.value = angle.value;
+      lastRotation.value = 0;
+      crossedThreshold.value = false;
+    })
+    .onUpdate((e) => {
+      'worklet';
+      // Ignore tiny rotations until they clearly cross the threshold — kills jitter.
+      if (!crossedThreshold.value) {
+        if (Math.abs(e.rotation) < ROTATION_START_THRESHOLD_RAD) return;
+        crossedThreshold.value = true;
+        lastRotation.value = e.rotation;
+      }
+      const delta = e.rotation - lastRotation.value;
+      lastRotation.value = e.rotation;
+      angle.value = angle.value + (delta * ROTATION_DAMP * 180) / Math.PI;
+    })
+    .onEnd(() => {
+      'worklet';
+      runOnJS(commit)(x.value, y.value, angle.value);
+    });
+
+  const combined = Gesture.Simultaneous(pan, rotate);
+
+  // Animated transform for the container. Fully worklet-driven → smooth 60/120 fps.
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        { translateX: x.value - halfLen },
+        { translateY: y.value - RULER_H / 2 },
+        { rotate: `${angle.value}deg` },
+        // The rotation must happen around the ruler's centre; the two translates above
+        // already position it so its centre sits at (x, y). No additional pivot fix
+        // needed because RN rotates around the element's centre by default.
+      ],
+    };
+  }, [halfLen]);
+
+  // Un-rotated angle chip that follows the ruler centre. Uses AnimatedTextInput with
+  // useAnimatedProps so its text updates on the UI thread every frame during rotation
+  // (no JS re-renders needed) — feels 100% live.
+  const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
+  const angleChipStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: x.value - 40 },
+      { translateY: y.value + 10 },
+    ],
+  }));
+  const angleTextProps = useAnimatedProps(() => {
+    'worklet';
+    const norm = ((angle.value % 360) + 360) % 360;
+    return { text: `${Math.round(norm)}°`, defaultValue: `${Math.round(norm)}°` } as any;
+  });
 
   return (
-    <GestureDetector gesture={combined}>
-      <View
-        style={{
-          position: 'absolute',
-          left: state.x - displayLength / 2,
-          top: state.y - RULER_H / 2,
-          width: displayLength,
-          height: RULER_H,
-          // Milky-white translucent body — clearly visible over any paper colour.
-          backgroundColor: 'rgba(255, 255, 255, 0.42)',
-          borderTopWidth: 1.6,
-          borderBottomWidth: 1.4,
-          borderColor: 'rgba(255, 255, 255, 0.85)',
-          transform: [{ rotate: `${state.angle}deg` }],
-          overflow: 'visible',
-          // subtle shadow for depth
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.22,
-          shadowRadius: 8,
-          elevation: 4,
-        }}
+    <>
+      <GestureDetector gesture={combined}>
+        <AnimatedView
+          style={[
+            {
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: displayLength,
+              height: RULER_H,
+              backgroundColor: 'rgba(255, 255, 255, 0.42)',
+              borderTopWidth: 1.6,
+              borderBottomWidth: 1.4,
+              borderColor: 'rgba(255, 255, 255, 0.9)',
+              overflow: 'visible',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.2,
+            shadowRadius: 8,
+            elevation: 4,
+          },
+          animatedStyle,
+        ]}
       >
-        {/* Solid straight edge at the top for pen snapping visual reference — white */}
+        {/* Solid straight edge at the top — the pen-snapping line */}
         <View
           pointerEvents="none"
           style={{
@@ -196,7 +241,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           }}
         />
 
-        {/* Tick marks along the top edge */}
+        {/* Tick marks — black graduation */}
         {ticks.map((t, i) => (
           <View
             key={i}
@@ -207,12 +252,12 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
               top: 0,
               width: 1.2,
               height: t.isZero ? 32 : t.big ? 22 : 10,
-              backgroundColor: t.isZero ? 'rgba(0, 0, 0, 1)' : 'rgba(0, 0, 0, 0.9)',
+              backgroundColor: t.isZero ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.9)',
             }}
           />
         ))}
 
-        {/* Numeric labels on major ticks (skip 0; a bigger centre label handles that) */}
+        {/* Numeric labels on major ticks (skip 0; centre label handles that) */}
         {ticks.filter((t) => t.big && !t.isZero).map((t, i) => (
           <Text
             key={`lbl-${i}`}
@@ -224,7 +269,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
               width: 24,
               textAlign: 'center',
               fontSize: 11,
-              color: 'rgba(0, 0, 0, 0.9)',
+              color: 'rgba(0,0,0,0.9)',
               fontWeight: '700',
             }}
           >
@@ -232,7 +277,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           </Text>
         ))}
 
-        {/* Centre "0" — larger, so it reads as the reference point */}
+        {/* Centre "0" */}
         <Text
           pointerEvents="none"
           style={{
@@ -243,17 +288,13 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
             textAlign: 'center',
             fontSize: 15,
             fontWeight: '800',
-            color: 'rgba(0, 0, 0, 1)',
+            color: 'rgba(0,0,0,1)',
           }}
         >
           0
         </Text>
 
-        {/* Angle readout is now rendered by the parent (draw/[id].tsx) as an un-rotated
-            floating chip anchored to the ruler centre so its tap area isn't captured by
-            the ruler's rotating GestureDetector. */}
-
-        {/* Unit label near the right, small and subtle */}
+        {/* Unit label */}
         <Text
           pointerEvents="none"
           style={{
@@ -262,20 +303,60 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
             top: 8,
             fontSize: 11,
             fontWeight: '700',
-            color: 'rgba(0, 0, 0, 0.75)',
+            color: 'rgba(0,0,0,0.75)',
           }}
         >
           {state.unit}
         </Text>
-      </View>
+      </AnimatedView>
     </GestureDetector>
+    {/* Live angle chip — un-rotated so it stays readable while the ruler spins. Updates
+        every frame via useAnimatedProps on a TextInput. Non-interactive (pen and gestures
+        pass through). */}
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        {
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: 80,
+          alignItems: 'center',
+        },
+        angleChipStyle,
+      ]}
+    >
+      <View
+        style={{
+          paddingHorizontal: 10,
+          paddingVertical: 3,
+          borderRadius: 12,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          borderWidth: 0.5,
+          borderColor: 'rgba(255,255,255,0.75)',
+        }}
+      >
+        <AnimatedTextInput
+          editable={false}
+          animatedProps={angleTextProps}
+          style={{
+            color: 'rgba(255,255,255,1)',
+            fontSize: 12,
+            fontWeight: '700',
+            padding: 0,
+            textAlign: 'center',
+            minWidth: 44,
+          }}
+        />
+      </View>
+    </Animated.View>
+    </>
   );
 }
 
 /**
  * Project a point onto the infinite line defined by the ruler's TOP edge in viewport
- * coordinates. Returns the projected point. Used by the parent to snap pen strokes.
- * Uses the same length formula the component uses so snapping stays consistent.
+ * coordinates. Uses the same length formula as the component so snapping stays consistent.
  */
 export function rulerProject(
   state: RulerState,
@@ -283,9 +364,10 @@ export function rulerProject(
   pt: { x: number; y: number },
   viewport?: { w: number; h: number }
 ): { x: number; y: number } {
+  void paperScale;
   const vw = viewport?.w ?? 1000;
   const vh = viewport?.h ?? 1000;
-  const displayLength = Math.hypot(vw, vh) + EDGE_PAD;
+  const displayLength = Math.hypot(vw, vh) * INFINITE_MULTIPLIER;
   const halfLen = displayLength / 2;
   const rad = (state.angle * Math.PI) / 180;
   const dx = Math.cos(rad);
@@ -294,7 +376,7 @@ export function rulerProject(
   const relY = pt.y - state.y;
   const t = relX * dx + relY * dy;
   const clampedT = Math.max(-halfLen, Math.min(halfLen, t));
-  // Offset perpendicular to the axis by -RULER_H/2 so strokes sit right at the top edge.
+  // Offset perpendicular to the axis so strokes sit at the top edge of the ruler.
   const perpX = -dy;
   const perpY = dx;
   const edgeOffset = -RULER_H / 2;
@@ -305,8 +387,7 @@ export function rulerProject(
 }
 
 /**
- * Returns distance from `pt` to the top edge of the ruler line (viewport coords).
- * Used to decide whether to snap a stroke or not.
+ * Distance from `pt` to the ruler's top edge (viewport coords).
  */
 export function rulerEdgeDistance(
   state: RulerState,

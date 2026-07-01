@@ -286,6 +286,7 @@ export default function DrawScreen() {
   const [rulerEnabled, setRulerEnabled] = useState(false);
   const [showRulerAngleInput, setShowRulerAngleInput] = useState(false);
   const [rulerAngleDraft, setRulerAngleDraft] = useState('0');
+  const [showRulerMenu, setShowRulerMenu] = useState(false);
   const [rulerState, setRulerState] = useState<RulerState>({
     x: 300, y: 300, angle: 0, unit: 'cm', scaleWithPaper: true, lengthPx: 340,
   });
@@ -1350,6 +1351,8 @@ export default function DrawScreen() {
   const [zoomPresets, setZoomPresets] = useState<{ name: string; scale: number }[]>([]);
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [showPagesPanel, setShowPagesPanel] = useState(false);
+  // Thumbnail size (0..1). 0 = small (many per row), 1 = large (roughly one per row).
+  const [pageThumbSize, setPageThumbSize] = useState(0.3);
 
   // Pages panel helpers — operate on world-y coordinates (gap-inclusive) so items align.
   const deletePage = useCallback((pageIdx: number) => {
@@ -1657,6 +1660,16 @@ export default function DrawScreen() {
               >
                 <Ionicons name="copy-outline" size={20} color={colors.onSurface} />
               </Pressable>
+              {rulerEnabled && (
+                <Pressable
+                  onPress={() => { haptic.selection(); setShowRulerMenu(true); }}
+                  testID="draw-ruler-settings-btn"
+                  style={styles.tabsRowIcon}
+                  hitSlop={6}
+                >
+                  <MaterialCommunityIcons name="ruler" size={20} color={colors.brand} />
+                </Pressable>
+              )}
               <Pressable onPress={() => setShowPaperMenu(true)} testID="draw-more" style={styles.tabsRowIcon} hitSlop={6}>
                 <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
               </Pressable>
@@ -1884,47 +1897,6 @@ export default function DrawScreen() {
               }}
             />
           )}
-          {/* Ruler angle chip — un-rotated, anchored to ruler centre so tap works cleanly.
-              Renders on top of the ruler; tap opens numeric angle input. */}
-          {rulerEnabled && Platform.OS !== 'web' && (() => {
-            const normalisedAngle = ((rulerState.angle % 360) + 360) % 360;
-            const angleStr = `${normalisedAngle.toFixed(0)}°`;
-            return (
-              <Pressable
-                onPress={() => {
-                  haptic.selection();
-                  setRulerAngleDraft(String(Math.round(normalisedAngle)));
-                  setShowRulerAngleInput(true);
-                }}
-                hitSlop={10}
-                testID="ruler-angle-chip"
-                style={({ pressed }) => ({
-                  position: 'absolute',
-                  left: rulerState.x - 44,
-                  top: rulerState.y + 6,
-                  width: 88,
-                  paddingHorizontal: 12,
-                  paddingVertical: 5,
-                  borderRadius: 14,
-                  backgroundColor: pressed ? 'rgba(0,0,0,0.85)' : 'rgba(0,0,0,0.65)',
-                  borderWidth: 0.5,
-                  borderColor: 'rgba(255,255,255,0.8)',
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 4,
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: 0.25,
-                  shadowRadius: 4,
-                  elevation: 4,
-                })}
-              >
-                <Text style={{ color: '#FFF', fontSize: 13, fontWeight: '700' }}>{angleStr}</Text>
-                <Ionicons name="create-outline" size={12} color="rgba(255,255,255,0.75)" />
-              </Pressable>
-            );
-          })()}
           {/* Vertical scroll thumb (right edge) — stylus-friendly, works regardless of palm rejection */}
           {pageCount > 1 && (
             <View
@@ -2452,6 +2424,139 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
+      {/* Ruler quick-settings menu (from the ruler icon next to zoom pill) */}
+      <Modal
+        visible={showRulerMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRulerMenu(false)}
+      >
+        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowRulerMenu(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: insets.top + 56,
+              right: 12,
+              width: 240,
+              backgroundColor: colors.surface,
+              borderRadius: radius.md,
+              padding: spacing.md,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.22,
+              shadowRadius: 16,
+              elevation: 12,
+            }}
+          >
+            <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.base, marginBottom: spacing.sm }}>
+              Ruler
+            </Text>
+
+            {/* Set angle */}
+            <Pressable
+              onPress={() => {
+                const norm = ((rulerState.angle % 360) + 360) % 360;
+                setRulerAngleDraft(String(Math.round(norm)));
+                setShowRulerMenu(false);
+                setShowRulerAngleInput(true);
+              }}
+              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+              testID="ruler-menu-angle"
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="compass-outline" size={16} color={colors.onSurface} />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>Set angle</Text>
+              </View>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600' }}>
+                {`${Math.round(((rulerState.angle % 360) + 360) % 360)}°`}
+              </Text>
+            </Pressable>
+
+            {/* Scale graduation with paper */}
+            <Pressable
+              onPress={() => {
+                haptic.selection();
+                setRulerState((prev) => ({ ...prev, scaleWithPaper: !prev.scaleWithPaper }));
+              }}
+              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+              testID="ruler-menu-scale"
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="resize-outline" size={16} color={colors.onSurface} />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>Scale with paper</Text>
+              </View>
+              <View
+                style={{
+                  paddingHorizontal: 8,
+                  paddingVertical: 2,
+                  borderRadius: 999,
+                  backgroundColor: rulerState.scaleWithPaper ? colors.brand : colors.surfaceSecondary,
+                }}
+              >
+                <Text
+                  style={{
+                    color: rulerState.scaleWithPaper ? colors.onBrandPrimary : colors.onSurface,
+                    fontSize: 11,
+                    fontWeight: '700',
+                  }}
+                >
+                  {rulerState.scaleWithPaper ? 'On' : 'Off'}
+                </Text>
+              </View>
+            </Pressable>
+
+            {/* Units */}
+            <Pressable
+              onPress={() => {
+                haptic.selection();
+                setRulerState((prev) => ({ ...prev, unit: prev.unit === 'cm' ? 'in' : 'cm' }));
+              }}
+              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+              testID="ruler-menu-unit"
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="swap-horizontal-outline" size={16} color={colors.onSurface} />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>Units</Text>
+              </View>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600' }}>
+                {rulerState.unit === 'cm' ? 'cm' : 'inches'}
+              </Text>
+            </Pressable>
+
+            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: 4 }} />
+
+            {/* Reset position/angle */}
+            <Pressable
+              onPress={() => {
+                haptic.selection();
+                setRulerState((prev) => ({ ...prev, x: viewport.w / 2, y: viewport.h / 2, angle: 0 }));
+                setShowRulerMenu(false);
+              }}
+              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              testID="ruler-menu-reset"
+            >
+              <Ionicons name="refresh" size={16} color={colors.brand} />
+              <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>Recenter & straighten</Text>
+            </Pressable>
+
+            {/* Hide ruler */}
+            <Pressable
+              onPress={() => {
+                haptic.selection();
+                setRulerEnabled(false);
+                setShowRulerMenu(false);
+              }}
+              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              testID="ruler-menu-hide"
+            >
+              <Ionicons name="eye-off-outline" size={16} color={colors.error} />
+              <Text style={{ color: colors.error, fontSize: typeScale.sm, fontWeight: '600' }}>Hide ruler</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Ruler angle — numeric input */}
       <Modal
         visible={showRulerAngleInput}
@@ -2528,179 +2633,254 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
-      {/* Pages preview panel (slides from right) — thumbnails, reorder, delete, add */}
+      {/* Pages preview panel (slides from right) — thumbnails, reorder, delete, add.
+          No dark backdrop — canvas stays visible and interactive to the left of the panel. */}
       <Modal
         visible={showPagesPanel}
         transparent
         animationType="slide"
         onRequestClose={() => setShowPagesPanel(false)}
       >
-        <Pressable
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', flexDirection: 'row' }}
-          onPress={() => setShowPagesPanel(false)}
-        >
-          <View style={{ flex: 1 }} />
-          <Pressable
-            onPress={(e) => e.stopPropagation && e.stopPropagation()}
-            style={{
-              width: Math.min(340, winWidth * 0.85),
-              height: '100%',
-              backgroundColor: colors.surface,
-              paddingTop: insets.top + spacing.md,
-              paddingBottom: insets.bottom + spacing.md,
-              paddingHorizontal: spacing.md,
-              shadowColor: '#000',
-              shadowOffset: { width: -4, height: 0 },
-              shadowOpacity: 0.24,
-              shadowRadius: 12,
-              elevation: 16,
-            }}
-          >
-            {/* Header */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
-              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '800' }}>
-                Pages ({pageCount})
-              </Text>
-              <Pressable onPress={() => setShowPagesPanel(false)} hitSlop={8}>
-                <Ionicons name="close" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
-
-            {/* Thumbnails list */}
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={{ gap: spacing.md, paddingBottom: spacing.md }}
-              showsVerticalScrollIndicator={false}
-            >
-              {Array.from({ length: pageCount }).map((_, i) => {
-                const isCurrent = Math.floor(scrollY / Math.max(1, pageStrideY)) === i;
-                // Thumbnail dims: keep aspect ratio of the page.
-                const thumbW = Math.min(240, winWidth * 0.6);
-                const thumbH = (thumbW / Math.max(1, pageDims.w)) * basePageH;
-                return (
-                  <View
-                    key={`page-thumb-${i}`}
-                    style={{
-                      borderRadius: radius.md,
-                      borderWidth: isCurrent ? 2 : 1,
-                      borderColor: isCurrent ? colors.brand : colors.border,
-                      backgroundColor: colors.surfaceSecondary,
-                      padding: spacing.sm,
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Pressable
-                      onPress={() => { jumpToPage(i); setShowPagesPanel(false); }}
-                      style={{
-                        width: thumbW,
-                        height: thumbH,
-                        borderRadius: radius.sm,
-                        backgroundColor: paperColor,
-                        overflow: 'hidden',
-                        marginBottom: spacing.sm,
-                      }}
-                      testID={`page-thumb-${i}`}
-                    >
-                      {Platform.OS !== 'web' && (
-                        <Canvas style={{ flex: 1 }}>
-                          {(() => {
-                            const scaleT = thumbW / Math.max(1, pageDims.w);
-                            return (
-                              <Group transform={[{ scale: scaleT }]}>
-                                <SkiaPaper
-                                  type={paper}
-                                  color={paperColor}
-                                  lineColor={paperLine}
-                                  width={pageDims.w}
-                                  height={basePageH}
-                                  lineSpacing={lineSpacing}
-                                />
-                                {/* Render this page's items — filter by home page and translate y to page-local */}
-                                <Group transform={[{ translateY: -i * pageStrideY }]}>
-                                  {items
-                                    .filter((it) => {
-                                      const y = it.kind === 'stroke' ? (it.points[0]?.y ?? 0) : it.start.y;
-                                      return Math.floor(y / pageStrideY) === i;
-                                    })
-                                    .map((it, idx) =>
-                                      it.kind === 'stroke' ? renderStroke(it, `t${i}-s${idx}`) : renderShape(it, `t${i}-sh${idx}`)
-                                    )}
-                                </Group>
-                              </Group>
-                            );
-                          })()}
-                        </Canvas>
-                      )}
-                    </Pressable>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                      <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.sm }}>
-                        Page {i + 1}
-                      </Text>
-                      <View style={{ flexDirection: 'row', gap: 2 }}>
-                        <Pressable
-                          onPress={() => movePage(i, -1)}
-                          disabled={i === 0}
-                          hitSlop={6}
-                          style={{ padding: 6, opacity: i === 0 ? 0.3 : 1 }}
-                          testID={`page-move-up-${i}`}
-                        >
-                          <Ionicons name="arrow-up" size={16} color={colors.onSurface} />
-                        </Pressable>
-                        <Pressable
-                          onPress={() => movePage(i, 1)}
-                          disabled={i === pageCount - 1}
-                          hitSlop={6}
-                          style={{ padding: 6, opacity: i === pageCount - 1 ? 0.3 : 1 }}
-                          testID={`page-move-down-${i}`}
-                        >
-                          <Ionicons name="arrow-down" size={16} color={colors.onSurface} />
-                        </Pressable>
-                        <Pressable
-                          onPress={() => insertPageAfter(i)}
-                          hitSlop={6}
-                          style={{ padding: 6 }}
-                          testID={`page-insert-after-${i}`}
-                        >
-                          <Ionicons name="add" size={18} color={colors.brand} />
-                        </Pressable>
-                        <Pressable
-                          onPress={() => deletePage(i)}
-                          disabled={pageCount <= 1}
-                          hitSlop={6}
-                          style={{ padding: 6, opacity: pageCount <= 1 ? 0.3 : 1 }}
-                          testID={`page-delete-${i}`}
-                        >
-                          <Ionicons name="trash-outline" size={16} color={colors.error} />
-                        </Pressable>
-                      </View>
-                    </View>
-                  </View>
-                );
-              })}
-
-              {/* Add page (at end) */}
-              <Pressable
-                onPress={() => insertPageAfter(pageCount - 1)}
+        <View style={{ flex: 1, flexDirection: 'row' }} pointerEvents="box-none">
+          {/* Left click-outside catcher (transparent) — taps close the panel; touches on the canvas
+              still work while the panel is open because it's transparent. */}
+          <Pressable style={{ flex: 1 }} onPress={() => setShowPagesPanel(false)} />
+          {(() => {
+            // Panel width scales up when thumbnails are large so we still get 2 columns.
+            const panelWidth = Math.min(Math.max(280, 200 + pageThumbSize * 260), winWidth * 0.9);
+            const innerPad = spacing.md;
+            const innerW = panelWidth - innerPad * 2;
+            const gap = 8;
+            // Interpolate thumb size: 70 (small) .. 200 (large).
+            const thumbW = Math.round(70 + pageThumbSize * 130);
+            const thumbH = Math.round((thumbW / Math.max(1, pageDims.w)) * basePageH);
+            // Card = thumb + border/padding (~ +16px each side). Column count from available width.
+            const cardW = thumbW + 12;
+            const cols = Math.max(1, Math.floor((innerW + gap) / (cardW + gap)));
+            return (
+              <View
                 style={{
-                  paddingVertical: spacing.md,
-                  borderRadius: radius.md,
-                  borderWidth: 1,
-                  borderColor: colors.brand,
-                  borderStyle: 'dashed',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexDirection: 'row',
-                  gap: 6,
+                  width: panelWidth,
+                  height: '100%',
+                  backgroundColor: colors.surface,
+                  paddingTop: insets.top + spacing.md,
+                  paddingBottom: insets.bottom + spacing.md,
+                  paddingHorizontal: innerPad,
+                  shadowColor: '#000',
+                  shadowOffset: { width: -4, height: 0 },
+                  shadowOpacity: 0.24,
+                  shadowRadius: 12,
+                  elevation: 16,
                 }}
-                testID="page-add-at-end"
               >
-                <Ionicons name="add-circle-outline" size={18} color={colors.brand} />
-                <Text style={{ color: colors.brand, fontWeight: '700' }}>Add page</Text>
-              </Pressable>
-            </ScrollView>
-          </Pressable>
-        </Pressable>
+                {/* Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+                  <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '800' }}>
+                    Pages ({pageCount})
+                  </Text>
+                  <Pressable onPress={() => setShowPagesPanel(false)} hitSlop={8}>
+                    <Ionicons name="close" size={22} color={colors.onSurface} />
+                  </Pressable>
+                </View>
+
+                {/* Size slider */}
+                <View style={{ marginBottom: spacing.sm }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Ionicons name="apps-outline" size={14} color={colors.muted} />
+                    <View
+                      style={{
+                        flex: 1,
+                        height: 28,
+                        justifyContent: 'center',
+                      }}
+                      onStartShouldSetResponder={() => true}
+                      onMoveShouldSetResponder={() => true}
+                      onResponderGrant={(e) => {
+                        const w = (e as any).nativeEvent.layout?.width;
+                        // Position via percentage of the touch within the row
+                        const target = (e as any).nativeEvent;
+                        // Use pageX minus track's pageX would need measure — approximate via ratio of locationX/width later
+                        const lx = target.locationX ?? 0;
+                        const trackW = w || innerW - 20;
+                        setPageThumbSize(Math.max(0, Math.min(1, lx / Math.max(1, trackW))));
+                      }}
+                      onResponderMove={(e) => {
+                        const target = (e as any).nativeEvent;
+                        const lx = target.locationX ?? 0;
+                        const trackW = innerW - 22;
+                        setPageThumbSize(Math.max(0, Math.min(1, lx / Math.max(1, trackW))));
+                      }}
+                    >
+                      <View style={{ height: 4, backgroundColor: colors.surfaceSecondary, borderRadius: 2 }} />
+                      <View
+                        style={{
+                          position: 'absolute',
+                          left: `${pageThumbSize * 100}%`,
+                          top: 6,
+                          width: 16,
+                          height: 16,
+                          borderRadius: 8,
+                          backgroundColor: colors.brand,
+                          marginLeft: -8,
+                          borderWidth: 2,
+                          borderColor: colors.surface,
+                        }}
+                      />
+                    </View>
+                    <Ionicons name="grid-outline" size={16} color={colors.muted} />
+                  </View>
+                </View>
+
+                {/* Grid of thumbnails */}
+                <ScrollView
+                  style={{ flex: 1 }}
+                  contentContainerStyle={{ paddingBottom: spacing.md }}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}>
+                    {Array.from({ length: pageCount }).map((_, i) => {
+                      const isCurrent = Math.floor(scrollY / Math.max(1, pageStrideY)) === i;
+                      return (
+                        <View
+                          key={`page-thumb-${i}`}
+                          style={{
+                            width: cardW,
+                            borderRadius: radius.sm,
+                            borderWidth: isCurrent ? 2 : 1,
+                            borderColor: isCurrent ? colors.brand : colors.border,
+                            backgroundColor: colors.surfaceSecondary,
+                            padding: 4,
+                            alignItems: 'center',
+                          }}
+                        >
+                          <Pressable
+                            onPress={() => { jumpToPage(i); setShowPagesPanel(false); }}
+                            style={{
+                              width: thumbW,
+                              height: thumbH,
+                              borderRadius: 3,
+                              backgroundColor: paperColor,
+                              overflow: 'hidden',
+                              marginBottom: 4,
+                            }}
+                            testID={`page-thumb-${i}`}
+                          >
+                            {Platform.OS !== 'web' && (
+                              <Canvas style={{ flex: 1 }}>
+                                {(() => {
+                                  const scaleT = thumbW / Math.max(1, pageDims.w);
+                                  return (
+                                    <Group transform={[{ scale: scaleT }]}>
+                                      <SkiaPaper
+                                        type={paper}
+                                        color={paperColor}
+                                        lineColor={paperLine}
+                                        width={pageDims.w}
+                                        height={basePageH}
+                                        lineSpacing={lineSpacing}
+                                      />
+                                      <Group transform={[{ translateY: -i * pageStrideY }]}>
+                                        {items
+                                          .filter((it) => {
+                                            const yy = it.kind === 'stroke' ? (it.points[0]?.y ?? 0) : it.start.y;
+                                            return Math.floor(yy / pageStrideY) === i;
+                                          })
+                                          .map((it, idx) =>
+                                            it.kind === 'stroke' ? renderStroke(it, `t${i}-s${idx}`) : renderShape(it, `t${i}-sh${idx}`)
+                                          )}
+                                      </Group>
+                                    </Group>
+                                  );
+                                })()}
+                              </Canvas>
+                            )}
+                          </Pressable>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                            <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: 10 }}>
+                              {i + 1}
+                            </Text>
+                            <View style={{ flexDirection: 'row' }}>
+                              <Pressable
+                                onPress={() => movePage(i, -1)}
+                                disabled={i === 0}
+                                hitSlop={4}
+                                style={{ padding: 2, opacity: i === 0 ? 0.3 : 1 }}
+                                testID={`page-move-up-${i}`}
+                              >
+                                <Ionicons name="chevron-back" size={12} color={colors.onSurface} />
+                              </Pressable>
+                              <Pressable
+                                onPress={() => movePage(i, 1)}
+                                disabled={i === pageCount - 1}
+                                hitSlop={4}
+                                style={{ padding: 2, opacity: i === pageCount - 1 ? 0.3 : 1 }}
+                                testID={`page-move-down-${i}`}
+                              >
+                                <Ionicons name="chevron-forward" size={12} color={colors.onSurface} />
+                              </Pressable>
+                              <Pressable
+                                onPress={() => insertPageAfter(i)}
+                                hitSlop={4}
+                                style={{ padding: 2 }}
+                                testID={`page-insert-after-${i}`}
+                              >
+                                <Ionicons name="add" size={14} color={colors.brand} />
+                              </Pressable>
+                              <Pressable
+                                onPress={() => deletePage(i)}
+                                disabled={pageCount <= 1}
+                                hitSlop={4}
+                                style={{ padding: 2, opacity: pageCount <= 1 ? 0.3 : 1 }}
+                                testID={`page-delete-${i}`}
+                              >
+                                <Ionicons name="trash-outline" size={12} color={colors.error} />
+                              </Pressable>
+                            </View>
+                          </View>
+                        </View>
+                      );
+                    })}
+
+                    {/* Add-page card at the end (same size as thumbnails) */}
+                    <Pressable
+                      onPress={() => insertPageAfter(pageCount - 1)}
+                      style={{
+                        width: cardW,
+                        borderRadius: radius.sm,
+                        borderWidth: 1,
+                        borderColor: colors.brand,
+                        borderStyle: 'dashed',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 4,
+                      }}
+                      testID="page-add-at-end"
+                    >
+                      <View
+                        style={{
+                          width: thumbW,
+                          height: thumbH,
+                          borderRadius: 3,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Ionicons name="add-circle-outline" size={Math.max(18, thumbW * 0.25)} color={colors.brand} />
+                      </View>
+                      <Text style={{ color: colors.brand, fontWeight: '700', fontSize: 10, marginTop: 2 }}>Add</Text>
+                    </Pressable>
+                  </View>
+                </ScrollView>
+                {/* Column count hint */}
+                <Text style={{ color: colors.muted, fontSize: 10, textAlign: 'right', marginTop: 2 }}>
+                  {cols} per row
+                </Text>
+              </View>
+            );
+          })()}
+        </View>
       </Modal>
+
 
       {/* Zoom presets menu (tap zoom pill) + save prompt (long-press zoom pill) */}
       <Modal visible={showZoomMenu} transparent animationType="fade" onRequestClose={() => setShowZoomMenu(false)}>
