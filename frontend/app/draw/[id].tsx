@@ -504,8 +504,10 @@ export default function DrawScreen() {
   });
 
   // Track whether the active touch is from a stylus / S-Pen vs a finger.
-  // We set this in onTouchesDown and consult it in every callback so palm
-  // rejection works even when pointerType is not reported (some Android builds).
+  // Set from React Native PointerEvent (onStartShouldSetResponderCapture) before the
+  // RNGH gesture begins, then consulted in every gesture callback so palm rejection
+  // works. Default to `true` so the app is usable on very old devices that don't
+  // report pointerType — if a user's finger still writes they can disable palm rejection.
   const isStylusRef = useRef<boolean>(true);
 
   const pan = Gesture.Pan()
@@ -936,7 +938,26 @@ export default function DrawScreen() {
         >
           {Platform.OS !== 'web' ? (
             <GestureDetector gesture={finalGesture}>
-              <View style={{ flex: 1 }}>
+              <View
+                style={{ flex: 1 }}
+                onStartShouldSetResponderCapture={(e) => {
+                  // React Native PointerEvent gives us `pointerType` on Android (S-Pen reports
+                  // 'pen'). We capture this BEFORE the RNGH gesture starts and stash it in
+                  // `isStylusRef` so palm rejection can reject finger touches.
+                  const pt = (e.nativeEvent as any).pointerType;
+                  if (pt === 'pen' || pt === 'stylus') {
+                    isStylusRef.current = true;
+                  } else if (pt === 'touch' || pt === 'finger') {
+                    isStylusRef.current = false;
+                  } else {
+                    // Undefined pointerType (older Android / iOS finger) — assume touch.
+                    // If a user is actually using a stylus that doesn't report pointerType,
+                    // they can toggle "Pen only" OFF from the toolbar to allow finger drawing.
+                    isStylusRef.current = false;
+                  }
+                  return false; // don't actually claim the responder; let RNGH handle it
+                }}
+              >
                 <Canvas style={StyleSheet.absoluteFill}>
                   <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
                     {Array.from({ length: pageCount }).map((_, i) => (
