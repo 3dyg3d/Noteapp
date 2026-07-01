@@ -26,12 +26,14 @@ function ThemedStack() {
         hidden={settings.statusBarHidden}
       />
       <Stack
+        initialRouteName="index"
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: colors.surface },
           animation: 'slide_from_right',
         }}
       >
+        <Stack.Screen name="index" />
         <Stack.Screen
           name="settings"
           options={{
