@@ -289,6 +289,7 @@ export default function DrawScreen() {
   const [showToolPalette, setShowToolPalette] = useState(false);
   const [showToolOpts, setShowToolOpts] = useState(false);
   const [toolOptAnchor, setToolOptAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [expandedColors, setExpandedColors] = useState(false); // in-popover grid palette toggle
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
@@ -1267,8 +1268,8 @@ export default function DrawScreen() {
       {toolbarPos === 'bottom' && renderToolbar()}
 
       {/* Tool options popover (tap an already-active tool again) — small card anchored near the tap */}
-      <Modal visible={showToolOpts} transparent animationType="fade" onRequestClose={() => setShowToolOpts(false)}>
-        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowToolOpts(false)}>
+      <Modal visible={showToolOpts} transparent animationType="fade" onRequestClose={() => { setShowToolOpts(false); setExpandedColors(false); }}>
+        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => { setShowToolOpts(false); setExpandedColors(false); }}>
           {(() => {
             const CARD_W = 260;
             const APPROX_H = 400; // rough card height (title + slider + 8-row color grid + Done btn)
@@ -1298,10 +1299,12 @@ export default function DrawScreen() {
                     left,
                     top,
                     width: CARD_W,
+                    maxHeight: Math.min(560, winH - top - 16),
                     shadowColor: '#000',
                   },
                 ]}
               >
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
             <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.sm }}>
               {labelForTool(tool)} settings
             </Text>
@@ -1336,33 +1339,65 @@ export default function DrawScreen() {
 
             {tool !== 'eraser' && (
               <>
-                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Color</Text>
-                {/* Inline grid picker — 8 cols × 8 rows so the full palette lives inside
-                    the tool popover, no secondary modal needed. */}
-                <View style={{ gap: 3, alignSelf: 'center' }}>
-                  {COLOR_GRID.map((row, r) => (
-                    <View key={`row-${r}`} style={{ flexDirection: 'row', gap: 3 }}>
-                      {row.map((c) => {
-                        const selected = c.toLowerCase() === color.toLowerCase();
-                        return (
-                          <Pressable
-                            key={c}
-                            testID={`opt-color-${c}`}
-                            onPress={() => { haptic.selection(); setColor(c); }}
-                            style={{
-                              width: 24,
-                              height: 24,
-                              borderRadius: 4,
-                              backgroundColor: c,
-                              borderWidth: selected ? 2.5 : 1,
-                              borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
-                            }}
-                          />
-                        );
-                      })}
-                    </View>
-                  ))}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Color</Text>
+                  {expandedColors ? (
+                    <Pressable onPress={() => setExpandedColors(false)} hitSlop={6} testID="opt-collapse-colors">
+                      <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>Less</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable onPress={() => setExpandedColors(true)} hitSlop={6} testID="opt-more-colors">
+                      <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>More colors…</Text>
+                    </Pressable>
+                  )}
                 </View>
+
+                {expandedColors ? (
+                  // Inline full-palette grid (still inside the popover).
+                  <View style={{ gap: 3, alignSelf: 'center' }}>
+                    {COLOR_GRID.map((row, r) => (
+                      <View key={`row-${r}`} style={{ flexDirection: 'row', gap: 3 }}>
+                        {row.map((c) => {
+                          const selected = c.toLowerCase() === color.toLowerCase();
+                          return (
+                            <Pressable
+                              key={c}
+                              testID={`opt-color-${c}`}
+                              onPress={() => { haptic.selection(); setColor(c); }}
+                              style={{
+                                width: 24,
+                                height: 24,
+                                borderRadius: 4,
+                                backgroundColor: c,
+                                borderWidth: selected ? 2.5 : 1,
+                                borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
+                              }}
+                            />
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  // Default view: the 4 quick colors as chips (same set as toolbar).
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
+                    {quickColors.map((c, i) => (
+                      <Pressable
+                        key={`opt-quick-${i}`}
+                        testID={`opt-quick-${i}`}
+                        onPress={() => { haptic.selection(); setColor(c); }}
+                        style={{
+                          width: 34,
+                          height: 34,
+                          borderRadius: 17,
+                          backgroundColor: c,
+                          borderWidth: color === c ? 3 : 1,
+                          borderColor: color === c ? colors.brand : 'rgba(0,0,0,0.15)',
+                        }}
+                      />
+                    ))}
+                  </View>
+                )}
               </>
             )}
 
@@ -1413,12 +1448,13 @@ export default function DrawScreen() {
             )}
 
             <Pressable
-              onPress={() => setShowToolOpts(false)}
+              onPress={() => { setShowToolOpts(false); setExpandedColors(false); }}
               testID="opt-close"
               style={[styles.btn, { backgroundColor: colors.brand, marginTop: spacing.lg }]}
             >
               <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
             </Pressable>
+              </ScrollView>
           </Pressable>
             );
           })()}
