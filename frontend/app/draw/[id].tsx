@@ -9,6 +9,7 @@ import {
   TextInput,
   ActivityIndicator,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -154,6 +155,7 @@ export default function DrawScreen() {
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
 
   const [note, setNote] = useState<Note | null>(null);
   const [loading, setLoading] = useState(true);
@@ -218,6 +220,7 @@ export default function DrawScreen() {
   const [showSubToolbar, setShowSubToolbar] = useState(false);
   const [showToolPalette, setShowToolPalette] = useState(false);
   const [showToolOpts, setShowToolOpts] = useState(false);
+  const [toolOptAnchor, setToolOptAnchor] = useState<{ x: number; y: number } | null>(null);
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
@@ -748,9 +751,16 @@ export default function DrawScreen() {
     router.back();
   };
 
-  const handleToolTap = (t: Tool) => {
+  const handleToolTap = (t: Tool, e?: any) => {
     haptic.selection();
     if (tool === t && (isPenTool(t) || t === 'eraser')) {
+      const px = e?.nativeEvent?.pageX;
+      const py = e?.nativeEvent?.pageY;
+      if (typeof px === 'number' && typeof py === 'number') {
+        setToolOptAnchor({ x: px, y: py });
+      } else {
+        setToolOptAnchor(null);
+      }
       setShowToolOpts(true);
       return;
     }
@@ -832,14 +842,14 @@ export default function DrawScreen() {
             testID="tool-pen-mode"
           />
           <Divider vertical={vertical} />
-          <ToolBtn icon="brush" label="Pen" active={tool === 'pen'} onPress={() => handleToolTap('pen')} testID="tool-pen" />
-          <ToolBtn icon="create-outline" label="Fountain" active={tool === 'fountain'} onPress={() => handleToolTap('fountain')} testID="tool-fountain" />
-          <ToolBtn icon="color-wand" label="Marker" active={tool === 'marker'} onPress={() => handleToolTap('marker')} testID="tool-marker" />
-          <ToolBtn icon="bookmark-outline" label="Highlight" active={tool === 'highlighter'} onPress={() => handleToolTap('highlighter')} testID="tool-highlighter" />
-          <ToolBtn icon="pencil-outline" label="Pencil" active={tool === 'pencil'} onPress={() => handleToolTap('pencil')} testID="tool-pencil" />
+          <ToolBtn icon="brush" label="Pen" active={tool === 'pen'} onPress={(e) => handleToolTap('pen', e)} testID="tool-pen" />
+          <ToolBtn icon="create-outline" label="Fountain" active={tool === 'fountain'} onPress={(e) => handleToolTap('fountain', e)} testID="tool-fountain" />
+          <ToolBtn icon="color-wand" label="Marker" active={tool === 'marker'} onPress={(e) => handleToolTap('marker', e)} testID="tool-marker" />
+          <ToolBtn icon="bookmark-outline" label="Highlight" active={tool === 'highlighter'} onPress={(e) => handleToolTap('highlighter', e)} testID="tool-highlighter" />
+          <ToolBtn icon="pencil-outline" label="Pencil" active={tool === 'pencil'} onPress={(e) => handleToolTap('pencil', e)} testID="tool-pencil" />
           <Divider vertical={vertical} />
           <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
-          <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={() => handleToolTap('eraser')} testID="tool-eraser" />
+          <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={(e) => handleToolTap('eraser', e)} testID="tool-eraser" />
           <Divider vertical={vertical} />
           {/* Color swatches — inline in the same single line */}
           {PALETTE.map((c) => (
@@ -1138,19 +1148,42 @@ export default function DrawScreen() {
 
       {toolbarPos === 'bottom' && renderToolbar()}
 
-      {/* Tool options popover (tap an already-active tool again) */}
+      {/* Tool options popover (tap an already-active tool again) — small card anchored near the tap */}
       <Modal visible={showToolOpts} transparent animationType="fade" onRequestClose={() => setShowToolOpts(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setShowToolOpts(false)}>
-          <Pressable
-            style={[
-              styles.toolOptCard,
-              {
-                backgroundColor: colors.surface,
-                bottom: insets.bottom + 130,
-                shadowColor: '#000',
-              },
-            ]}
-          >
+        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowToolOpts(false)}>
+          {(() => {
+            const CARD_W = 260;
+            const APPROX_H = 220; // rough card height for placement (color grid grows with palette)
+            const winW = winWidth;
+            const winH = winHeight;
+            let left: number;
+            let top: number;
+            if (toolOptAnchor) {
+              // Horizontally: center on the tap point, clamp on-screen.
+              left = Math.max(8, Math.min(winW - CARD_W - 8, toolOptAnchor.x - CARD_W / 2));
+              // Vertically: prefer showing above the tap; if not enough room, show below.
+              const above = toolOptAnchor.y - APPROX_H - 12;
+              const below = toolOptAnchor.y + 12;
+              top = above > insets.top + 8 ? above : Math.min(winH - APPROX_H - 8, below);
+            } else {
+              // Fallback: bottom of screen based on toolbar position.
+              left = Math.max(8, (winW - CARD_W) / 2);
+              top = winH - APPROX_H - (insets.bottom + 110);
+            }
+            return (
+              <Pressable
+                onPress={(e) => e.stopPropagation && e.stopPropagation()}
+                style={[
+                  styles.toolOptCard,
+                  {
+                    backgroundColor: colors.surface,
+                    left,
+                    top,
+                    width: CARD_W,
+                    shadowColor: '#000',
+                  },
+                ]}
+              >
             <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.sm }}>
               {labelForTool(tool)} settings
             </Text>
@@ -1220,6 +1253,8 @@ export default function DrawScreen() {
               <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
             </Pressable>
           </Pressable>
+            );
+          })()}
         </Pressable>
       </Modal>
 
@@ -1879,16 +1914,16 @@ function ToolBtn({
   icon: any;
   label: string;
   active: boolean;
-  onPress: () => void;
+  onPress: (e?: any) => void;
   testID?: string;
 }) {
   const { colors } = useTheme();
   return (
     <Pressable
       testID={testID}
-      onPress={() => {
+      onPress={(e) => {
         haptic.selection();
-        onPress();
+        onPress(e);
       }}
       style={{
         alignItems: 'center',
@@ -2224,9 +2259,7 @@ const styles = StyleSheet.create({
   },
   toolOptCard: {
     position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    padding: spacing.lg,
+    padding: spacing.md,
     borderRadius: radius.lg,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
