@@ -284,6 +284,8 @@ export default function DrawScreen() {
 
   // ---------- Ruler (declared here so pan gesture below can reference the refs) ----------
   const [rulerEnabled, setRulerEnabled] = useState(false);
+  const [showRulerAngleInput, setShowRulerAngleInput] = useState(false);
+  const [rulerAngleDraft, setRulerAngleDraft] = useState('0');
   const [rulerState, setRulerState] = useState<RulerState>({
     x: 300, y: 300, angle: 0, unit: 'cm', scaleWithPaper: true, lengthPx: 340,
   });
@@ -1882,6 +1884,47 @@ export default function DrawScreen() {
               }}
             />
           )}
+          {/* Ruler angle chip — un-rotated, anchored to ruler centre so tap works cleanly.
+              Renders on top of the ruler; tap opens numeric angle input. */}
+          {rulerEnabled && Platform.OS !== 'web' && (() => {
+            const normalisedAngle = ((rulerState.angle % 360) + 360) % 360;
+            const angleStr = `${normalisedAngle.toFixed(0)}°`;
+            return (
+              <Pressable
+                onPress={() => {
+                  haptic.selection();
+                  setRulerAngleDraft(String(Math.round(normalisedAngle)));
+                  setShowRulerAngleInput(true);
+                }}
+                hitSlop={10}
+                testID="ruler-angle-chip"
+                style={({ pressed }) => ({
+                  position: 'absolute',
+                  left: rulerState.x - 44,
+                  top: rulerState.y + 6,
+                  width: 88,
+                  paddingHorizontal: 12,
+                  paddingVertical: 5,
+                  borderRadius: 14,
+                  backgroundColor: pressed ? 'rgba(0,0,0,0.85)' : 'rgba(0,0,0,0.65)',
+                  borderWidth: 0.5,
+                  borderColor: 'rgba(255,255,255,0.8)',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 4,
+                  elevation: 4,
+                })}
+              >
+                <Text style={{ color: '#FFF', fontSize: 13, fontWeight: '700' }}>{angleStr}</Text>
+                <Ionicons name="create-outline" size={12} color="rgba(255,255,255,0.75)" />
+              </Pressable>
+            );
+          })()}
           {/* Vertical scroll thumb (right edge) — stylus-friendly, works regardless of palm rejection */}
           {pageCount > 1 && (
             <View
@@ -2404,6 +2447,82 @@ export default function DrawScreen() {
                   })}
                 </View>
               ))}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Ruler angle — numeric input */}
+      <Modal
+        visible={showRulerAngleInput}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRulerAngleInput(false)}
+      >
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' }}
+          onPress={() => setShowRulerAngleInput(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{ width: 300, backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg }}
+          >
+            <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.sm }}>
+              Ruler angle
+            </Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.md }}>
+              Enter an angle in degrees (0 to 359).
+            </Text>
+            <TextInput
+              value={rulerAngleDraft}
+              onChangeText={setRulerAngleDraft}
+              keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={colors.muted}
+              autoFocus
+              style={{
+                borderWidth: 1,
+                borderColor: colors.border,
+                borderRadius: radius.sm,
+                padding: spacing.sm,
+                color: colors.onSurface,
+                marginBottom: spacing.md,
+                fontSize: typeScale.base,
+              }}
+              testID="ruler-angle-input"
+            />
+            {/* Snap-to quick chips */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: spacing.md }}>
+              {[0, 15, 30, 45, 60, 90, 135, 180, 270].map((deg) => (
+                <Pressable
+                  key={`snap-${deg}`}
+                  onPress={() => setRulerAngleDraft(String(deg))}
+                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.surfaceSecondary }}
+                >
+                  <Text style={{ color: colors.onSurface, fontSize: 12, fontWeight: '600' }}>{deg}°</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <Pressable
+                onPress={() => setShowRulerAngleInput(false)}
+                style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.surfaceSecondary, alignItems: 'center' }}
+              >
+                <Text style={{ color: colors.onSurface }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  const n = parseFloat(rulerAngleDraft);
+                  if (Number.isFinite(n)) {
+                    setRulerState((prev) => ({ ...prev, angle: n }));
+                  }
+                  setShowRulerAngleInput(false);
+                }}
+                style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.brand, alignItems: 'center' }}
+                testID="ruler-angle-save"
+              >
+                <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Set</Text>
+              </Pressable>
             </View>
           </Pressable>
         </Pressable>

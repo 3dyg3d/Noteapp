@@ -48,6 +48,10 @@ const POINTS_PER_CM = 38;
 const POINTS_PER_INCH = POINTS_PER_CM * 2.54;
 const RULER_H = 155;              // 2.5× thicker (was 62) — big and easy to read
 const EDGE_PAD = 0;                // no extra padding — clipped by parent's overflow: hidden
+const INFINITE_MULTIPLIER = 3.2;   // make the ruler effectively infinite: 3.2× the diagonal so ends
+                                    // never enter the viewport at any rotation. Clipped by parent.
+const ROTATION_DAMP = 0.45;         // rotate slower than the finger's twist — feels calmer, less jumpy
+const ROTATION_START_THRESHOLD_RAD = 0.06; // ~3.4° of finger twist before we start applying rotation
 
 export default function Ruler({ state, onChange, paperScale, viewport, colors }: Props) {
   // Reserved for future use — the ruler length is now derived from viewport diagonal so
@@ -58,10 +62,15 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
   void state.lengthPx;
   void colors;
 
-  // Compute a length that spans end-to-end regardless of orientation. Using the diagonal
-  // guarantees the ruler always reaches beyond both edges even when rotated 45°.
+  // Track cumulative rotation from the last onUpdate so we apply DELTAS (not the total
+  // since gesture start, which would compound wildly).
+  const lastRotationRef = React.useRef(0);
+  const rotationCrossedThresholdRef = React.useRef(false);
+
+  // Compute a length that spans FAR beyond the viewport so rotating the ruler never
+  // reveals its ends. Parent clips it via `overflow: hidden`.
   const diagonal = Math.hypot(viewport.w, viewport.h);
-  const displayLength = diagonal + EDGE_PAD;
+  const displayLength = diagonal * INFINITE_MULTIPLIER + EDGE_PAD;
 
   // 1-finger drag → pan the ruler. Reject stylus so the pen draws through.
   const pan = Gesture.Pan()
@@ -79,7 +88,8 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
       onChange({ ...state, x: state.x + e.changeX, y: state.y + e.changeY });
     });
 
-  // 2-finger twist → rotate around centre.
+  // 2-finger twist → rotate around centre. Damped and thresholded so tiny incidental twists
+  // during a two-finger pan don't spin the ruler around.
   const rotate = Gesture.Rotation()
     .runOnJS(true)
     .onTouchesDown((event, manager) => {
@@ -88,8 +98,33 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
         manager.fail();
       }
     })
+    .onBegin(() => {
+      lastRotationRef.current = 0;
+      rotationCrossedThresholdRef.current = false;
+    })
     .onUpdate((e) => {
-      onChange({ ...state, angle: state.angle + (e.rotation * 180) / Math.PI });
+      // Wait until the user has twisted past the start threshold so tiny incidental
+      // rotations during a two-finger pan don't jerk the ruler around.
+      if (!rotationCrossedThresholdRef.current) {
+        if (Math.abs(e.rotation) < ROTATION_START_THRESHOLD_RAD) return;
+        rotationCrossedThresholdRef.current = true;
+        // Seed lastRotationRef at the threshold-crossing point so the FIRST applied delta
+        // is 0 — avoids a discrete jump when we start applying rotation.
+        lastRotationRef.current = e.rotation;
+      }
+      // Apply the delta (damped) since our last update.
+      const delta = e.rotation - lastRotationRef.current;
+      lastRotationRef.current = e.rotation;
+      const deltaDeg = (delta * ROTATION_DAMP * 180) / Math.PI;
+      onChange({ ...state, angle: state.angle + deltaDeg });
+    })
+    .onEnd(() => {
+      lastRotationRef.current = 0;
+      rotationCrossedThresholdRef.current = false;
+    })
+    .onFinalize(() => {
+      lastRotationRef.current = 0;
+      rotationCrossedThresholdRef.current = false;
     });
 
   const combined = Gesture.Simultaneous(pan, rotate);
@@ -120,8 +155,9 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
   }, [displayLength, halfLen, marksPerUnit, unitsPerSide]);
 
   // Format the angle nicely (0..360)
-  const normalisedAngle = ((state.angle % 360) + 360) % 360;
-  const angleStr = `${normalisedAngle.toFixed(0)}°`;
+  // Angle string was previously rendered inside the ruler; now the parent renders it as
+  // an un-rotated chip anchored to (state.x, state.y) so the tap area isn't inside the
+  // ruler's rotating GestureDetector.
 
   return (
     <GestureDetector gesture={combined}>
@@ -132,11 +168,11 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           top: state.y - RULER_H / 2,
           width: displayLength,
           height: RULER_H,
-          // Clear-glass look — more translucent so users can see the paper beneath.
-          backgroundColor: 'rgba(255, 255, 255, 0.16)',
+          // Milky-white translucent body — clearly visible over any paper colour.
+          backgroundColor: 'rgba(255, 255, 255, 0.42)',
           borderTopWidth: 1.6,
           borderBottomWidth: 1.4,
-          borderColor: 'rgba(0, 0, 0, 0.55)',
+          borderColor: 'rgba(255, 255, 255, 0.85)',
           transform: [{ rotate: `${state.angle}deg` }],
           overflow: 'visible',
           // subtle shadow for depth
@@ -147,7 +183,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           elevation: 4,
         }}
       >
-        {/* Solid straight edge at the top for pen snapping visual reference */}
+        {/* Solid straight edge at the top for pen snapping visual reference — white */}
         <View
           pointerEvents="none"
           style={{
@@ -156,7 +192,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
             right: 0,
             top: 0,
             height: 1.5,
-            backgroundColor: 'rgba(0, 0, 0, 0.85)',
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
           }}
         />
 
@@ -213,32 +249,9 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           0
         </Text>
 
-        {/* Angle readout at centre (below the 0) */}
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: halfLen - 32,
-            top: RULER_H / 2 + 6,
-            width: 64,
-            alignItems: 'center',
-          }}
-        >
-          <View
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 3,
-              borderRadius: 12,
-              backgroundColor: 'rgba(0, 0, 0, 0.55)',
-              borderWidth: 0.5,
-              borderColor: 'rgba(0, 0, 0, 0.7)',
-            }}
-          >
-            <Text style={{ color: 'rgba(255, 255, 255, 1)', fontSize: 12, fontWeight: '700' }}>
-              {angleStr}
-            </Text>
-          </View>
-        </View>
+        {/* Angle readout is now rendered by the parent (draw/[id].tsx) as an un-rotated
+            floating chip anchored to the ruler centre so its tap area isn't captured by
+            the ruler's rotating GestureDetector. */}
 
         {/* Unit label near the right, small and subtle */}
         <Text
