@@ -189,11 +189,8 @@ export default function NoteEditor() {
   );
 
   if (loading || !note) {
-    return (
-      <View style={[styles.center, { backgroundColor: colors.surface }]}>
-        <ActivityIndicator color={colors.brand} />
-      </View>
-    );
+    // Plain surface — no spinner — to avoid a flash when switching between open tabs.
+    return <View style={{ flex: 1, backgroundColor: colors.surface }} />;
   }
 
   return (

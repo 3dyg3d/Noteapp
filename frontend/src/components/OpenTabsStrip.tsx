@@ -98,13 +98,18 @@ export default function OpenTabsStrip({
               <Pressable
                 testID={`opentab-close-${t.id}`}
                 onPress={async () => {
-                  await closeTab(t.id);
+                  // Navigate FIRST if the closed tab is currently active — this keeps the
+                  // current screen visible while the new one mounts so there's no visible
+                  // "no active tab" reflow / flash before the next note loads.
                   if (active) {
                     const remaining = tabs.filter((x) => x.id !== t.id);
                     const last = remaining[remaining.length - 1];
                     if (last) router.replace((last.type === 'handwriting' ? `/draw/${last.id}` : `/note/${last.id}`) as any);
                     else router.replace('/');
                   }
+                  // Small delay so the navigation transition can commit before the tab
+                  // list re-renders — prevents the closed tab from flickering during the swap.
+                  setTimeout(() => { closeTab(t.id); }, active ? 60 : 0);
                 }}
                 style={styles.closeBtn}
                 hitSlop={8}

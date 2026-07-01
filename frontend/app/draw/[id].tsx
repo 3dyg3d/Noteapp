@@ -773,11 +773,9 @@ export default function DrawScreen() {
   };
 
   if (loading || !note) {
-    return (
-      <View style={[styles.center, { backgroundColor: paperColor }]}>
-        <ActivityIndicator color={colors.brand} />
-      </View>
-    );
+    // Keep the transition minimal — just a plain matching surface, no spinner. This
+    // eliminates the "flash of loading state" when switching between open tabs.
+    return <View style={{ flex: 1, backgroundColor: colors.surface }} />;
   }
 
   // Toolbar element — adapts orientation based on toolbarPos
@@ -2278,7 +2276,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
+  backdrop: { flex: 1, backgroundColor: 'transparent' },
   sheet: {
     position: 'absolute',
     left: 0, right: 0, bottom: 0,

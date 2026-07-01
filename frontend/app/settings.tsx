@@ -6,13 +6,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale } from '@/src/theme/tokens';
+import { spacing, radius, typeScale, ACCENTS, AccentKey } from '@/src/theme/tokens';
 import { useAppSettings, GestureAction, SPenAction } from '@/src/state/useAppSettings';
 
 const PASS_KEY = 'galaxynotes:passcode';
 
 export default function SettingsScreen() {
-  const { mode, setMode, colors } = useTheme();
+  const { mode, setMode, accent, setAccent, colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { settings, update } = useAppSettings();
   const { width: winW } = useWindowDimensions();
@@ -126,7 +126,7 @@ export default function SettingsScreen() {
         <Pressable
           testID="settings-backdrop"
           onPress={() => router.back()}
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' }}
+          style={{ flex: 1, backgroundColor: 'transparent' }}
         />
       )}
       <View
@@ -208,6 +208,46 @@ export default function SettingsScreen() {
           <ThemeOption value="system" label="System" />
           <ThemeOption value="light" label="Light" />
           <ThemeOption value="dark" label="Dark" />
+        </View>
+
+        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>ACCENT COLOR</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+          {(Object.keys(ACCENTS) as AccentKey[]).map((key) => {
+            const a = ACCENTS[key];
+            const selected = accent === key;
+            return (
+              <Pressable
+                key={key}
+                testID={`accent-${key}`}
+                onPress={() => setAccent(key)}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: spacing.sm,
+                  paddingVertical: spacing.sm,
+                  paddingHorizontal: spacing.md,
+                  borderRadius: radius.md,
+                  backgroundColor: selected ? colors.brandTertiary : colors.surfaceSecondary,
+                  borderWidth: selected ? 2 : StyleSheet.hairlineWidth,
+                  borderColor: selected ? colors.brand : colors.border,
+                }}
+              >
+                <View
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 10,
+                    backgroundColor: a.swatch,
+                    borderWidth: 1,
+                    borderColor: 'rgba(0,0,0,0.15)',
+                  }}
+                />
+                <Text style={{ color: colors.onSurface, fontWeight: selected ? '700' : '500' }}>
+                  {a.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
 
         <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginTop: spacing.md }]}>
