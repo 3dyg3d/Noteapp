@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
@@ -85,17 +86,27 @@ const PAPER_COLORS: { id: string; light: string; dark: string }[] = [
 ];
 
 // ---------- Constants ----------
-const PALETTE = ['#1A1A1C', '#FFFFFF', '#B85C5C', '#D4A352', '#7B8C73', '#6E7A8A', '#8B7AA8', '#638C61'];
-const WIDTHS: Record<PenTool | 'eraser' | ShapeTool, [number, number, number]> = {
-  pen: [2, 4, 7],
-  fountain: [3, 6, 10],
-  marker: [8, 14, 22],
-  highlighter: [16, 24, 32],
-  pencil: [1.5, 3, 5],
-  eraser: [16, 30, 60],
-  line: [2, 4, 6],
-  rect: [2, 4, 6],
-  ellipse: [2, 4, 6],
+// Full palette shown in tool popovers (long-press / re-tap tool).
+const PALETTE = ['#1A1A1C', '#FFFFFF', '#B85C5C', '#D4A352', '#7B8C73', '#6E7A8A', '#8B7AA8', '#638C61', '#E11D48', '#2563EB', '#059669', '#DB2777'];
+// Quick colors shown as inline chips on the main toolbar — the four everyday colors.
+const QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */];
+
+// Continuous-slider ranges per tool (in points). Users can pick any value in [min, max].
+const WIDTH_RANGE: Record<Tool, { min: number; max: number }> = {
+  pen:         { min: 0.5, max: 12 },
+  fountain:    { min: 1,   max: 14 },
+  marker:      { min: 2,   max: 22 },
+  highlighter: { min: 4,   max: 36 },
+  pencil:      { min: 0.5, max: 8  },
+  eraser:      { min: 4,   max: 60 },
+  line:        { min: 1,   max: 12 },
+  rect:        { min: 1,   max: 12 },
+  ellipse:     { min: 1,   max: 12 },
+};
+
+const DEFAULT_WIDTHS: Record<Tool, number> = {
+  pen: 3, fountain: 5, marker: 10, highlighter: 20, pencil: 2, eraser: 24,
+  line: 3, rect: 3, ellipse: 3,
 };
 
 // ---------- Helpers ----------
@@ -210,7 +221,27 @@ export default function DrawScreen() {
   // Tool state
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>('#1A1A1C');
-  const [widthIdx, setWidthIdx] = useState<0 | 1 | 2>(1);
+  const [widths, setWidths] = useState<Record<Tool, number>>(DEFAULT_WIDTHS);
+  // Persist per-tool widths across sessions.
+  useEffect(() => {
+    AsyncStorage.getItem('galaxynotes:tool-widths').then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            setWidths((prev) => ({ ...prev, ...parsed }));
+          }
+        } catch {}
+      }
+    });
+  }, []);
+  const setToolWidth = useCallback((t: Tool, v: number) => {
+    setWidths((prev) => {
+      const next = { ...prev, [t]: v };
+      AsyncStorage.setItem('galaxynotes:tool-widths', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
   const [showPaperMenu, setShowPaperMenu] = useState(false);
   // Sub-menus opened from the main kebab menu
   const [showSubColor, setShowSubColor] = useState(false);
@@ -276,9 +307,15 @@ export default function DrawScreen() {
 
   // ----- Load -----
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setNote(null);
+    setItems([]);
+    historyRef.current = { undo: [], redo: [] };
     (async () => {
       try {
         const n = await NotesApi.get(id as string);
+        if (cancelled) return;
         setNote(n);
         openTab({ id: n.id, title: n.title || 'Untitled', type: 'handwriting' });
         if (n.drawing_data) {
@@ -302,9 +339,10 @@ export default function DrawScreen() {
       } catch (e) {
         console.warn(e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, [id]);
 
   // ----- Persist (debounced) -----
@@ -383,7 +421,7 @@ export default function DrawScreen() {
 
   const finalizeStroke = (pts: { x: number; y: number; t: number }[]) => {
     if (pts.length < 2 || !isPenTool(tool)) return;
-    const w = WIDTHS[tool][widthIdx];
+    const w = widths[tool];
     const stroke: StrokeData = {
       kind: 'stroke',
       tool,
@@ -401,7 +439,7 @@ export default function DrawScreen() {
 
   const finalizeShape = (start: Pt, end: Pt) => {
     if (!isShapeTool(tool)) return;
-    const w = WIDTHS[tool][widthIdx];
+    const w = widths[tool];
     const shape: ShapeData = {
       kind: 'shape',
       tool,
@@ -419,7 +457,7 @@ export default function DrawScreen() {
   };
 
   const eraseAt = (x: number, y: number) => {
-    const radius = WIDTHS.eraser[widthIdx] / 2;
+    const radius = widths.eraser / 2;
     setItems((prev) => {
       const next = prev.filter((it) => {
         if (it.kind === 'stroke') {
@@ -678,7 +716,7 @@ export default function DrawScreen() {
         kind: 'stroke',
         tool,
         color,
-        width: WIDTHS[tool][widthIdx],
+        width: widths[tool],
         points: livePtsRef.current.map((p) => ({ x: p.x, y: p.y, t: p.t })),
       };
       return renderStroke(stroke, 'live');
@@ -688,7 +726,7 @@ export default function DrawScreen() {
         kind: 'shape',
         tool,
         color,
-        width: WIDTHS[tool][widthIdx],
+        width: widths[tool],
         start: liveShapeRef.current.start,
         end: liveShapeRef.current.end,
       };
@@ -850,8 +888,8 @@ export default function DrawScreen() {
           <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
           <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={(e) => handleToolTap('eraser', e)} testID="tool-eraser" />
           <Divider vertical={vertical} />
-          {/* Color swatches — inline in the same single line */}
-          {PALETTE.map((c) => (
+          {/* Quick colors — 4 everyday colors. Full palette lives in the tool popover. */}
+          {QUICK_COLORS.map((c) => (
             <Pressable
               key={c}
               onPress={() => setColor(c)}
@@ -868,31 +906,43 @@ export default function DrawScreen() {
             />
           ))}
           <Divider vertical={vertical} />
-          {/* Width buttons — also inline */}
-          {[0, 1, 2].map((i) => (
-            <Pressable
-              key={`w-${i}`}
-              onPress={() => setWidthIdx(i as 0 | 1 | 2)}
-              testID={`width-${i}`}
-              style={[
-                styles.widthBtn,
-                {
-                  borderColor: widthIdx === i ? colors.brand : colors.border,
-                  backgroundColor: colors.surfaceSecondary,
-                  marginHorizontal: 2,
-                },
-              ]}
-            >
-              <View
-                style={{
-                  width: 18,
-                  height: 2 + i * 3,
-                  backgroundColor: colors.onSurface,
-                  borderRadius: 999,
-                }}
-              />
-            </Pressable>
-          ))}
+          {/* Thickness chip — tap to open a popover with a draggable slider. */}
+          <Pressable
+            onPress={(e) => {
+              haptic.selection();
+              const px = e?.nativeEvent?.pageX;
+              const py = e?.nativeEvent?.pageY;
+              if (typeof px === 'number' && typeof py === 'number') {
+                setToolOptAnchor({ x: px, y: py });
+              } else {
+                setToolOptAnchor(null);
+              }
+              setShowToolOpts(true);
+            }}
+            testID="tool-thickness"
+            style={{
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 8,
+              paddingVertical: 4,
+              borderRadius: radius.sm,
+              marginHorizontal: 2,
+              backgroundColor: colors.surfaceSecondary,
+              minWidth: 44,
+            }}
+          >
+            <View
+              style={{
+                width: 24,
+                height: Math.min(12, Math.max(1.5, widths[tool] || 3)),
+                backgroundColor: colors.onSurface,
+                borderRadius: 999,
+              }}
+            />
+            <Text style={{ fontSize: 9, color: colors.muted, marginTop: 2, fontWeight: '600' }}>
+              {Math.round(widths[tool] || 3)}pt
+            </Text>
+          </Pressable>
         </ScrollView>
       </View>
     );
@@ -1168,29 +1218,33 @@ export default function DrawScreen() {
               {labelForTool(tool)} settings
             </Text>
 
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Thickness</Text>
-            <View style={{ flexDirection: 'row', gap: 6, marginBottom: spacing.md }}>
-              {[0, 1, 2].map((i) => {
-                const sample = isPenTool(tool)
-                  ? WIDTHS[tool][i]
-                  : tool === 'eraser'
-                  ? WIDTHS.eraser[i]
-                  : WIDTHS.pen[i];
-                return (
-                  <Pressable
-                    key={i}
-                    onPress={() => setWidthIdx(i as 0 | 1 | 2)}
-                    testID={`opt-width-${i}`}
-                    style={[
-                      styles.widthBtnLg,
-                      { borderColor: widthIdx === i ? colors.brand : colors.border, backgroundColor: colors.surfaceSecondary },
-                    ]}
-                  >
-                    <View style={{ width: 36, height: Math.min(20, sample), borderRadius: 999, backgroundColor: colors.onSurface }} />
-                  </Pressable>
-                );
-              })}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Thickness</Text>
+              <Text style={{ color: colors.onSurface, fontSize: typeScale.sm, fontWeight: '600' }}>
+                {(widths[tool] || 3).toFixed(1)} pt
+              </Text>
             </View>
+            {/* Preview + slider */}
+            <View style={{ alignItems: 'center', marginBottom: 4 }}>
+              <View
+                style={{
+                  width: Math.min(40, Math.max(4, widths[tool] || 3) * 2.5),
+                  height: Math.min(20, Math.max(1, widths[tool] || 3)),
+                  backgroundColor: tool === 'eraser' ? colors.divider : color,
+                  borderRadius: 999,
+                }}
+              />
+            </View>
+            <ThicknessSlider
+              value={widths[tool] || 3}
+              min={WIDTH_RANGE[tool].min}
+              max={WIDTH_RANGE[tool].max}
+              onChange={(v) => setToolWidth(tool, v)}
+              trackColor={colors.divider}
+              fillColor={colors.brand}
+              knobColor={colors.brand}
+            />
+            <View style={{ height: spacing.md }} />
 
             {tool !== 'eraser' && (
               <>
@@ -1881,6 +1935,70 @@ function DrawMenuRow({
       ) : null}
       {!destructive && <Ionicons name="chevron-forward" size={16} color={colors.muted} />}
     </Pressable>
+  );
+}
+
+
+function ThicknessSlider({
+  value,
+  min,
+  max,
+  onChange,
+  trackColor,
+  fillColor,
+  knobColor,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+  trackColor: string;
+  fillColor: string;
+  knobColor: string;
+}) {
+  const [trackW, setTrackW] = useState(200);
+  const clamp = (v: number) => Math.max(min, Math.min(max, v));
+  const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  const knobX = pct * trackW;
+
+  const pan = Gesture.Pan()
+    .runOnJS(true)
+    .minDistance(0)
+    .onBegin((e) => {
+      const nx = Math.max(0, Math.min(trackW, e.x));
+      onChange(clamp(min + (nx / Math.max(1, trackW)) * (max - min)));
+    })
+    .onUpdate((e) => {
+      const nx = Math.max(0, Math.min(trackW, e.x));
+      onChange(clamp(min + (nx / Math.max(1, trackW)) * (max - min)));
+    });
+
+  return (
+    <GestureDetector gesture={pan}>
+      <View
+        onLayout={(ev) => setTrackW(ev.nativeEvent.layout.width)}
+        style={{ height: 32, justifyContent: 'center' }}
+      >
+        <View style={{ height: 4, backgroundColor: trackColor, borderRadius: 2 }} />
+        <View style={{ position: 'absolute', height: 4, width: knobX, backgroundColor: fillColor, borderRadius: 2 }} />
+        <View
+          style={{
+            position: 'absolute',
+            left: Math.max(0, knobX - 12),
+            top: 4,
+            width: 24,
+            height: 24,
+            borderRadius: 12,
+            backgroundColor: knobColor,
+            shadowColor: '#000',
+            shadowOpacity: 0.25,
+            shadowRadius: 4,
+            shadowOffset: { width: 0, height: 2 },
+            elevation: 4,
+          }}
+        />
+      </View>
+    </GestureDetector>
   );
 }
 

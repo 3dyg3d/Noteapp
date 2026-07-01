@@ -74,7 +74,17 @@ export default function OpenTabsStrip({
             >
               <Pressable
                 testID={`opentab-${t.id}`}
-                onPress={() => { if (!active) router.replace(route as any); }}
+                onPress={() => {
+                  if (active) return;
+                  // Find the type of the CURRENT tab so we can decide whether to swap
+                  // params (same type — no transition) or do a stack replace.
+                  const cur = tabs.find((x) => x.id === currentId);
+                  if (cur && cur.type === t.type) {
+                    router.setParams({ id: t.id } as any);
+                  } else {
+                    router.replace(route as any);
+                  }
+                }}
                 style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingRight: 4, flex: 1 }}
               >
                 <Ionicons
@@ -98,18 +108,25 @@ export default function OpenTabsStrip({
               <Pressable
                 testID={`opentab-close-${t.id}`}
                 onPress={async () => {
-                  // Navigate FIRST if the closed tab is currently active — this keeps the
-                  // current screen visible while the new one mounts so there's no visible
-                  // "no active tab" reflow / flash before the next note loads.
                   if (active) {
                     const remaining = tabs.filter((x) => x.id !== t.id);
                     const last = remaining[remaining.length - 1];
-                    if (last) router.replace((last.type === 'handwriting' ? `/draw/${last.id}` : `/note/${last.id}`) as any);
-                    else router.replace('/');
+                    if (last) {
+                      // If the next tab is the SAME type as the one being closed, we can
+                      // just swap the route param — the screen stays mounted, no stack
+                      // transition, and the environment feels unchanged.
+                      if (last.type === t.type) {
+                        router.setParams({ id: last.id } as any);
+                      } else {
+                        router.replace((last.type === 'handwriting' ? `/draw/${last.id}` : `/note/${last.id}`) as any);
+                      }
+                    } else {
+                      router.replace('/');
+                    }
                   }
-                  // Small delay so the navigation transition can commit before the tab
-                  // list re-renders — prevents the closed tab from flickering during the swap.
-                  setTimeout(() => { closeTab(t.id); }, active ? 60 : 0);
+                  // Delay closing the tab record slightly so the strip doesn't flicker
+                  // during the (setParams) or (replace) swap.
+                  setTimeout(() => { closeTab(t.id); }, active ? 40 : 0);
                 }}
                 style={styles.closeBtn}
                 hitSlop={8}

@@ -50,18 +50,23 @@ export default function NoteEditor() {
   const drawingRef = useRef<any | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setNote(null); // clear previous note so old content doesn't briefly show when switching tabs
     (async () => {
       try {
         const [n, f] = await Promise.all([NotesApi.get(id as string), FoldersApi.list()]);
+        if (cancelled) return;
         setNote(n);
         setFolders(f);
         openTab({ id: n.id, title: n.title || 'Untitled', type: 'text' });
       } catch (e) {
         console.warn(e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, [id]);
 
   const scheduleSave = useCallback(
