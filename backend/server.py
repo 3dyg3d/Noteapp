@@ -43,6 +43,7 @@ class NoteBase(BaseModel):
     drawing_data: Optional[str] = None  # JSON blob for full handwritten canvas
     note_type: str = "text"             # "text" | "handwriting"
     folder_id: Optional[str] = None
+    label_ids: List[str] = Field(default_factory=list)  # tags/labels applied to this note
     color: Optional[str] = None
     pinned: bool = False
     locked: bool = False
@@ -61,6 +62,7 @@ class NoteUpdate(BaseModel):
     drawing_data: Optional[str] = None
     note_type: Optional[str] = None
     folder_id: Optional[str] = None
+    label_ids: Optional[List[str]] = None
     color: Optional[str] = None
     pinned: Optional[bool] = None
     locked: Optional[bool] = None
@@ -94,6 +96,26 @@ class Folder(FolderBase):
     created_at: str = Field(default_factory=now_iso)
 
 
+# ---------- Labels (a.k.a. tags) ----------
+class LabelBase(BaseModel):
+    name: str
+    color: str = "#7B8C73"
+
+
+class LabelCreate(LabelBase):
+    pass
+
+
+class LabelUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+
+
+class Label(LabelBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: str = Field(default_factory=now_iso)
+
+
 class SummarizeRequest(BaseModel):
     text: str
 
@@ -112,6 +134,7 @@ async def root():
 @api_router.get("/notes", response_model=List[Note])
 async def list_notes(
     folder_id: Optional[str] = None,
+    label_id: Optional[str] = None,
     q: Optional[str] = None,
     status: str = Query("active", pattern="^(active|trash)$"),
     pinned: Optional[bool] = None,
@@ -123,6 +146,8 @@ async def list_notes(
         query["deleted_at"] = {"$ne": None}
     if folder_id:
         query["folder_id"] = folder_id
+    if label_id:
+        query["label_ids"] = label_id
     if pinned is not None:
         query["pinned"] = pinned
     if q:
@@ -235,6 +260,56 @@ async def delete_folder(folder_id: str):
     # Detach notes & promote children to root
     await db.notes.update_many({"folder_id": folder_id}, {"$set": {"folder_id": None}})
     await db.folders.update_many({"parent_id": folder_id}, {"$set": {"parent_id": None}})
+    return {"ok": True}
+
+
+# Labels CRUD
+@api_router.get("/labels", response_model=List[Label])
+async def list_labels():
+    cursor = db.labels.find({}, {"_id": 0}).sort("created_at", 1)
+    labels = await cursor.to_list(1000)
+    return [Label(**lbl) for lbl in labels]
+
+
+@api_router.post("/labels", response_model=Label)
+async def create_label(payload: LabelCreate):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Label name required")
+    # Case-insensitive dedupe on name
+    existing = await db.labels.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}}, {"_id": 0})
+    if existing:
+        return Label(**existing)
+    label = Label(name=name, color=payload.color or "#7B8C73")
+    await db.labels.insert_one(label.dict())
+    return label
+
+
+@api_router.put("/labels/{label_id}", response_model=Label)
+async def update_label(label_id: str, payload: LabelUpdate):
+    existing = await db.labels.find_one({"id": label_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Label not found")
+    update_data = {k: v for k, v in payload.dict().items() if v is not None}
+    if "name" in update_data:
+        update_data["name"] = update_data["name"].strip()
+        if not update_data["name"]:
+            raise HTTPException(400, "Label name required")
+    await db.labels.update_one({"id": label_id}, {"$set": update_data})
+    doc = await db.labels.find_one({"id": label_id}, {"_id": 0})
+    return Label(**doc)
+
+
+@api_router.delete("/labels/{label_id}")
+async def delete_label(label_id: str):
+    result = await db.labels.delete_one({"id": label_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Label not found")
+    # Detach from all notes that reference this label.
+    await db.notes.update_many(
+        {"label_ids": label_id},
+        {"$pull": {"label_ids": label_id}},
+    )
     return {"ok": True}
 
 

@@ -836,9 +836,9 @@ export default function DrawScreen() {
   // `overscrollY` is the damped screen-space distance the user has dragged BEYOND the last
   // page. It is added to `ty` so the paper visibly bounces up during the pull. When the
   // user releases past the threshold, a new page is auto-added.
-  const OVERSCROLL_ADD_THRESHOLD = 140;   // px pulled past the end (after damping) needed to trigger add (was 72 — bumped for more deliberate action)
-  const OVERSCROLL_MAX = 200;             // absolute cap on damped overscroll
-  const OVERSCROLL_DAMP = 0.28;           // stiffer resistance (was 0.4)
+  const OVERSCROLL_ADD_THRESHOLD = 100;   // px pulled past the end (after damping) needed to trigger add (relaxed from 140)
+  const OVERSCROLL_MAX = 180;             // absolute cap on damped overscroll
+  const OVERSCROLL_DAMP = 0.35;           // moderate resistance (was 0.28 — stiffer)
 
   // 1-finger finger-drag on the paper → scroll vertically (always), horizontally only
   // when the paper edges are off-screen. Rejects stylus so the drawing gesture takes
@@ -1863,7 +1863,7 @@ export default function DrawScreen() {
                   borderRadius: 20,
                   backgroundColor: colors.surface,
                   borderWidth: 1,
-                  borderColor: overscrollY >= 140 ? colors.brand : colors.border,
+                  borderColor: overscrollY >= 100 ? colors.brand : colors.border,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,
@@ -1875,12 +1875,12 @@ export default function DrawScreen() {
                 }}
               >
                 <Ionicons
-                  name={overscrollY >= 140 ? 'add-circle' : 'arrow-up-circle-outline'}
+                  name={overscrollY >= 100 ? 'add-circle' : 'arrow-up-circle-outline'}
                   size={16}
-                  color={overscrollY >= 140 ? colors.brand : colors.muted}
+                  color={overscrollY >= 100 ? colors.brand : colors.muted}
                 />
                 <Text style={{ color: colors.onSurface, fontSize: 12, fontWeight: '600' }}>
-                  {overscrollY >= 140 ? 'Release to add page' : 'Pull to add page'}
+                  {overscrollY >= 100 ? 'Release to add page' : 'Pull to add page'}
                 </Text>
               </View>
             </View>

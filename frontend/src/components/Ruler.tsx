@@ -113,14 +113,24 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
     onChange({ ...state, x: nx, y: ny, angle: nAngle });
   };
 
-  // 1-finger drag → pan (UI-thread). Rejects stylus so the pen draws through.
-  // Clamps the ruler centre inside the viewport so the "0" never leaves the screen.
+  // 1-finger drag → pan (UI-thread). ONLY accepts finger touches (pointerType 0).
+  // Any pen / mouse / unknown pointer fails the gesture so the S-Pen draws THROUGH the
+  // ruler with zero drift. A small dead-zone stops incidental pen jitter from moving the
+  // ruler even when a finger and pen touch simultaneously.
   const pan = Gesture.Pan()
-    .minDistance(0)
+    .minDistance(8)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
       'worklet';
-      if (event.allTouches?.[0]?.pointerType === 1) manager.fail();
+      const touches = event.allTouches || [];
+      // Fail unless we can confirm at least one finger AND no stylus is in the batch.
+      let hasFinger = false;
+      for (let i = 0; i < touches.length; i++) {
+        const pt = touches[i]?.pointerType;
+        if (pt === 1) { manager.fail(); return; }   // stylus present → fail
+        if (pt === 0) hasFinger = true;
+      }
+      if (!hasFinger) manager.fail();               // no finger → fail (mouse / unknown)
     })
     .onStart(() => {
       'worklet';
@@ -142,11 +152,18 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
     });
 
   // 2-finger twist → rotate (UI-thread). Damped and thresholded so twist during a pan
-  // doesn't jerk the ruler.
+  // doesn't jerk the ruler. Requires TWO finger touches — fails on any stylus / mouse.
   const rotate = Gesture.Rotation()
     .onTouchesDown((event, manager) => {
       'worklet';
-      if (event.allTouches?.[0]?.pointerType === 1) manager.fail();
+      const touches = event.allTouches || [];
+      let fingerCount = 0;
+      for (let i = 0; i < touches.length; i++) {
+        const pt = touches[i]?.pointerType;
+        if (pt === 1) { manager.fail(); return; }   // any stylus → fail
+        if (pt === 0) fingerCount++;
+      }
+      if (fingerCount < 2 && touches.length < 2) manager.fail();
     })
     .onBegin(() => {
       'worklet';

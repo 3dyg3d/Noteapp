@@ -16,6 +16,7 @@ export interface Note {
   drawing_data?: string | null;
   note_type?: 'text' | 'handwriting';
   folder_id: string | null;
+  label_ids?: string[];
   color: string | null;
   pinned: boolean;
   locked: boolean;
@@ -29,6 +30,13 @@ export interface Folder {
   name: string;
   color: string;
   parent_id: string | null;
+  created_at: string;
+}
+
+export interface Label {
+  id: string;
+  name: string;
+  color: string;
   created_at: string;
 }
 
@@ -47,10 +55,11 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 export type NoteStatus = 'active' | 'trash';
 
 export const NotesApi = {
-  list: (opts: { q?: string; folderId?: string | null; status?: NoteStatus; pinned?: boolean } = {}) => {
+  list: (opts: { q?: string; folderId?: string | null; labelId?: string | null; status?: NoteStatus; pinned?: boolean } = {}) => {
     const params = new URLSearchParams();
     if (opts.q) params.set('q', opts.q);
     if (opts.folderId) params.set('folder_id', opts.folderId);
+    if (opts.labelId) params.set('label_id', opts.labelId);
     if (opts.status) params.set('status', opts.status);
     if (typeof opts.pinned === 'boolean') params.set('pinned', String(opts.pinned));
     const qs = params.toString();
@@ -76,6 +85,15 @@ export const FoldersApi = {
   update: (id: string, data: Partial<Folder>) =>
     http<Folder>(`/folders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   remove: (id: string) => http<{ ok: boolean }>(`/folders/${id}`, { method: 'DELETE' }),
+};
+
+export const LabelsApi = {
+  list: () => http<Label[]>('/labels'),
+  create: (data: { name: string; color?: string }) =>
+    http<Label>('/labels', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<Label>) =>
+    http<Label>(`/labels/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (id: string) => http<{ ok: boolean }>(`/labels/${id}`, { method: 'DELETE' }),
 };
 
 export const AiApi = {
