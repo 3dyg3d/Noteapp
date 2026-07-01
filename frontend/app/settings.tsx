@@ -131,19 +131,23 @@ export default function SettingsScreen() {
       )}
       <View
         style={{
-          width: wide ? 480 : '100%',
+          width: wide ? 460 : '100%',
           backgroundColor: colors.surface,
           alignItems: 'center',
+          overflow: 'hidden',
           shadowColor: '#000',
-          shadowOffset: { width: -4, height: 0 },
-          shadowOpacity: wide ? 0.18 : 0,
-          shadowRadius: 16,
-          elevation: wide ? 12 : 0,
-          borderLeftWidth: wide ? StyleSheet.hairlineWidth : 0,
-          borderLeftColor: colors.divider,
+          shadowOffset: { width: -6, height: 6 },
+          shadowOpacity: wide ? 0.32 : 0,
+          shadowRadius: 28,
+          elevation: wide ? 20 : 0,
+          // Rounded card that floats clearly away from the screen edges on tablets.
+          marginTop: wide ? Math.max(insets.top, 12) + 24 : 0,
+          marginBottom: wide ? Math.max(insets.bottom, 12) + 24 : 0,
+          marginRight: wide ? 28 : 0,
+          borderRadius: wide ? 28 : 0,
         }}
       >
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm, width: '100%' }]}>
+      <View style={[styles.header, { paddingTop: (wide ? spacing.md : insets.top + spacing.sm), width: '100%' }]}>
         <Text style={[styles.title, { color: colors.onSurface }]} testID="settings-title">
           Settings
         </Text>

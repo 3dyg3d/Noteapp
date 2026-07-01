@@ -38,7 +38,7 @@ function ThemedStack() {
           name="settings"
           options={{
             presentation: 'transparentModal',
-            animation: 'fade',
+            animation: 'slide_from_right',
             contentStyle: { backgroundColor: 'transparent' },
           }}
         />
