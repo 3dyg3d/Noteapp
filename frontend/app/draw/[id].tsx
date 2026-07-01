@@ -446,8 +446,8 @@ export default function DrawScreen() {
 
   // Visible gap between adjacent pages (world coords). Strokes are stored with their
   // gap-inclusive world Y so a stroke on page N has y ≥ N * (basePageH + PAGE_GAP).
-  // Existing (pre-gap) notes are migrated at load — see loader below.
-  const PAGE_GAP = 32;
+  // Existing notes (v1 no-gap, v2 gap=32) are migrated at load — see loader below.
+  const PAGE_GAP = 11;
   const basePageH = pageDims.h;
   const pageStrideY = basePageH + PAGE_GAP;
   const totalPageH = pageStrideY * pageCount - PAGE_GAP;
@@ -512,13 +512,16 @@ export default function DrawScreen() {
         if (n.drawing_data) {
           try {
             const doc: DrawingDoc = JSON.parse(n.drawing_data);
-            // Determine the page height so we can migrate legacy (v1) notes into gap-inclusive
-            // world Y. Migration only happens when docVersion is missing or < 2.
+            // Migrate legacy world-Y coordinates:
+            //   v1 (or missing): contiguous coords, no gap. Add PAGE_GAP × pageIdx.
+            //   v2: gap-inclusive coords with an OLD gap of 32. Rescale to the new gap.
+            //   v3+: leave as-is.
             let loadedItems: Item[] = doc.items || [];
-            if (!doc.docVersion || doc.docVersion < 2) {
-              // Compute basePageH for this doc's paper size/orientation. Fall back to current
-              // pageDims.h if we can't determine it (viewport not yet laid out).
-              const legacyBaseH = pageDims.h || 800;
+            const legacyBaseH = pageDims.h || 800;
+            const OLD_GAP_V2 = 32;
+            const currentVersion = doc.docVersion ?? 1;
+            if (currentVersion < 2) {
+              // v1 → v3: strokes stored without gaps. Add PAGE_GAP per completed page.
               loadedItems = loadedItems.map((it) => {
                 if (it.kind === 'stroke') {
                   return {
@@ -529,13 +532,31 @@ export default function DrawScreen() {
                     })),
                   } as Item;
                 }
-                // shape
                 const sIdx = Math.floor(it.start.y / Math.max(1, legacyBaseH));
                 const eIdx = Math.floor(it.end.y / Math.max(1, legacyBaseH));
                 return {
                   ...it,
                   start: { x: it.start.x, y: it.start.y + PAGE_GAP * sIdx },
                   end: { x: it.end.x, y: it.end.y + PAGE_GAP * eIdx },
+                } as Item;
+              });
+            } else if (currentVersion === 2) {
+              // v2 → v3: rescale from OLD_GAP_V2 to the current PAGE_GAP.
+              const oldStride = legacyBaseH + OLD_GAP_V2;
+              const newStride = legacyBaseH + PAGE_GAP;
+              const remap = (y: number) => {
+                const pageIdx = Math.floor(y / Math.max(1, oldStride));
+                const localY = y - pageIdx * oldStride;
+                return pageIdx * newStride + Math.min(localY, legacyBaseH);
+              };
+              loadedItems = loadedItems.map((it) => {
+                if (it.kind === 'stroke') {
+                  return { ...it, points: it.points.map((p) => ({ ...p, y: remap(p.y) })) } as Item;
+                }
+                return {
+                  ...it,
+                  start: { x: it.start.x, y: remap(it.start.y) },
+                  end: { x: it.end.x, y: remap(it.end.y) },
                 } as Item;
               });
             }
@@ -580,7 +601,7 @@ export default function DrawScreen() {
               canvasColor: canvasColorHex,
               lineSpacing,
               pageCount,
-              docVersion: 2,
+              docVersion: 3,
               items: nextItems,
             } as DrawingDoc),
             note_type: 'handwriting',
@@ -796,6 +817,21 @@ export default function DrawScreen() {
     .minPointers(2)
     .maxPointers(2)
     .averageTouches(true)
+    .onTouchesDown((event, manager) => {
+      'worklet';
+      // Never scroll while a stylus is touching — the pen is drawing.
+      const touches = event.allTouches || [];
+      for (let i = 0; i < touches.length; i++) {
+        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
+      }
+    })
+    .onTouchesMove((event, manager) => {
+      'worklet';
+      const touches = event.allTouches || [];
+      for (let i = 0; i < touches.length; i++) {
+        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
+      }
+    })
     .onStart(() => {
       scrollYStartRef.current = scrollY;
       scrollXStartRef.current = scrollX;
@@ -855,10 +891,23 @@ export default function DrawScreen() {
         manager.fail();
         return;
       }
-      // Only allow finger touches — stylus should draw via the other Pan gesture.
-      const pt = event.allTouches?.[0]?.pointerType;
-      if (pt !== 0) {
-        manager.fail();
+      // Fail if ANY stylus is present in the touch batch — the pen is drawing (possibly
+      // with a resting palm/finger on the screen too). We must never scroll during drawing.
+      const touches = event.allTouches || [];
+      let hasFinger = false;
+      for (let i = 0; i < touches.length; i++) {
+        const pt = touches[i]?.pointerType;
+        if (pt === 1) { manager.fail(); return; }
+        if (pt === 0) hasFinger = true;
+      }
+      if (!hasFinger) manager.fail();
+    })
+    .onTouchesMove((event, manager) => {
+      'worklet';
+      // Recheck as new touches arrive mid-scroll (e.g. pen goes down after a finger).
+      const touches = event.allTouches || [];
+      for (let i = 0; i < touches.length; i++) {
+        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
       }
     })
     .onStart(() => {
@@ -1351,12 +1400,8 @@ export default function DrawScreen() {
   const [zoomPresets, setZoomPresets] = useState<{ name: string; scale: number }[]>([]);
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [showPagesPanel, setShowPagesPanel] = useState(false);
-  // Thumbnail size (0..1). 0 = small (many per row), 1 = large (roughly one per row).
-  const [pageThumbSize, setPageThumbSize] = useState(0.3);
-  // Draft value updated live during a slider drag — only re-renders the tiny slider knob,
-  // not the whole thumbnail grid. On release we commit into pageThumbSize.
-  const [pageThumbSizeDraft, setPageThumbSizeDraft] = useState(0.3);
-  const thumbSliderWidthRef = useRef(0);
+  // Fixed compact thumbnail size for the page sorter (three columns on typical panel widths).
+  const pageThumbSize = 0.15;
 
   // Pages panel helpers — operate on world-y coordinates (gap-inclusive) so items align.
   const deletePage = useCallback((pageIdx: number) => {
@@ -2687,61 +2732,7 @@ export default function DrawScreen() {
                   </Pressable>
                 </View>
 
-                {/* Size slider — smooth: draft-value updates the knob during drag,
-                    committed value updates thumbnails only on release. */}
-                <View style={{ marginBottom: spacing.sm }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Ionicons name="apps-outline" size={14} color={colors.muted} />
-                    <View
-                      style={{
-                        flex: 1,
-                        height: 32,
-                        justifyContent: 'center',
-                      }}
-                      onLayout={(e) => {
-                        thumbSliderWidthRef.current = e.nativeEvent.layout.width;
-                      }}
-                      onStartShouldSetResponder={() => true}
-                      onMoveShouldSetResponder={() => true}
-                      onResponderTerminationRequest={() => false}
-                      onResponderGrant={(e) => {
-                        const lx = (e as any).nativeEvent.locationX ?? 0;
-                        const w = Math.max(1, thumbSliderWidthRef.current);
-                        setPageThumbSizeDraft(Math.max(0, Math.min(1, lx / w)));
-                      }}
-                      onResponderMove={(e) => {
-                        const lx = (e as any).nativeEvent.locationX ?? 0;
-                        const w = Math.max(1, thumbSliderWidthRef.current);
-                        setPageThumbSizeDraft(Math.max(0, Math.min(1, lx / w)));
-                      }}
-                      onResponderRelease={() => {
-                        // Commit the draft value → thumbnails now re-render at the new size.
-                        setPageThumbSize(pageThumbSizeDraft);
-                      }}
-                      onResponderTerminate={() => {
-                        setPageThumbSize(pageThumbSizeDraft);
-                      }}
-                    >
-                      <View style={{ height: 4, backgroundColor: colors.surfaceSecondary, borderRadius: 2 }} />
-                      <View
-                        pointerEvents="none"
-                        style={{
-                          position: 'absolute',
-                          left: `${pageThumbSizeDraft * 100}%`,
-                          top: 8,
-                          width: 18,
-                          height: 18,
-                          borderRadius: 9,
-                          backgroundColor: colors.brand,
-                          marginLeft: -9,
-                          borderWidth: 2,
-                          borderColor: colors.surface,
-                        }}
-                      />
-                    </View>
-                    <Ionicons name="grid-outline" size={16} color={colors.muted} />
-                  </View>
-                </View>
+                {/* Fixed compact thumbnail size — chose to keep 3–4 columns visible. */}
 
                 {/* Grid of thumbnails */}
                 <ScrollView
