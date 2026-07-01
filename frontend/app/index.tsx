@@ -906,7 +906,7 @@ export default function HomeScreen() {
           />
         }
         contentContainerStyle={{
-          paddingTop: selectionMode ? 120 : (category === 'trash' && notes.length > 0 ? 230 : 180),
+          paddingTop: selectionMode ? 200 : (category === 'trash' && notes.length > 0 ? 230 : 180),
           paddingBottom: insets.bottom + (selectionMode ? 160 : 140),
           paddingHorizontal: spacing.lg,
         }}
