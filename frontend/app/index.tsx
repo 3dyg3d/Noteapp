@@ -287,7 +287,7 @@ export default function HomeScreen() {
   };
   // Handwriting prep popup (paper size + template + color + line spacing before opening canvas)
   const [showHwPrep, setShowHwPrep] = useState(false);
-  const [hwSize, setHwSize] = useState<'fit' | 'a4' | 'a5' | 'letter' | 'index' | 'custom'>('fit');
+  const [hwSize, setHwSize] = useState<'a4' | 'a5' | 'letter' | 'index' | 'custom'>('a4');
   const [hwCustomW, setHwCustomW] = useState<string>('1024');
   const [hwCustomH, setHwCustomH] = useState<string>('1366');
   const [hwTemplate, setHwTemplate] = useState<'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo'>('blank');
@@ -1321,9 +1321,8 @@ export default function HomeScreen() {
                 PAPER SIZE
               </Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
-                {(['fit', 'a4', 'a5', 'letter', 'index', 'custom'] as const).map((s) => {
+                {(['a4', 'a5', 'letter', 'index', 'custom'] as const).map((s) => {
                   const label =
-                    s === 'fit' ? 'Fit' :
                     s === 'a4' ? 'A4' :
                     s === 'a5' ? 'A5' :
                     s === 'letter' ? 'Letter' :

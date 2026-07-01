@@ -50,7 +50,7 @@ interface ShapeData {
 type Item = StrokeData | ShapeData;
 
 type Paper = 'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo';
-type PaperSize = 'fit' | 'a4' | 'a5' | 'letter' | 'index' | 'custom';
+type PaperSize = 'a4' | 'a5' | 'letter' | 'index' | 'custom';
 
 interface DrawingDoc {
   paper: Paper;
@@ -66,7 +66,6 @@ interface DrawingDoc {
 
 // Ratio = width / height of the page in PORTRAIT
 const PAPER_SIZES: Record<Exclude<PaperSize, 'custom'>, { ratio: number; label: string }> = {
-  fit:    { ratio: 0,      label: 'Fit screen' }, // 0 = fill
   a4:     { ratio: 1 / 1.4142, label: 'A4' },
   a5:     { ratio: 1 / 1.4142, label: 'A5' },
   letter: { ratio: 8.5 / 11,   label: 'Letter' },
@@ -163,7 +162,7 @@ export default function DrawScreen() {
   // Doc & history
   const [items, setItems] = useState<Item[]>([]);
   const [paper, setPaper] = useState<Paper>('blank');
-  const [paperSize, setPaperSize] = useState<PaperSize>('fit');
+  const [paperSize, setPaperSize] = useState<PaperSize>('a4');
   const [customSize, setCustomSize] = useState<{ w: number; h: number } | null>(null);
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [paperColorId, setPaperColorId] = useState<string>('white');
@@ -174,17 +173,17 @@ export default function DrawScreen() {
   const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: 1024, h: 1366 });
   const pageDims = useMemo<{ w: number; h: number }>(() => {
     if (viewport.w <= 0 || viewport.h <= 0) return { w: 1024, h: 1366 };
-    if (paperSize === 'fit') return viewport;
     // ratio = width / height in the current orientation
     let ratio: number;
     if (paperSize === 'custom' && customSize) {
       ratio = customSize.w / Math.max(1, customSize.h);
     } else if (paperSize !== 'custom') {
-      // PAPER_SIZES.ratio is always the PORTRAIT ratio (w/h). Flip for landscape.
       const portraitRatio = PAPER_SIZES[paperSize].ratio;
       ratio = orientation === 'landscape' ? 1 / portraitRatio : portraitRatio;
     } else {
-      return viewport;
+      // custom size not set yet — fall back to A4 portrait
+      const portraitRatio = PAPER_SIZES.a4.ratio;
+      ratio = orientation === 'landscape' ? 1 / portraitRatio : portraitRatio;
     }
     // "Contain" fit: choose the largest w,h that fit inside the viewport while preserving
     // ratio (w/h). This makes A4/Letter look like a real document floating in the canvas
@@ -284,7 +283,11 @@ export default function DrawScreen() {
             const doc: DrawingDoc = JSON.parse(n.drawing_data);
             setItems(doc.items || []);
             setPaper(doc.paper || 'blank');
-            if (doc.paperSize) setPaperSize(doc.paperSize);
+            if (doc.paperSize) {
+              // Legacy notes may have paperSize === 'fit' — coerce to A4.
+              const s: any = doc.paperSize === 'fit' ? 'a4' : doc.paperSize;
+              setPaperSize(s);
+            }
             if (doc.customSize) setCustomSize(doc.customSize);
             if (doc.orientation) setOrientation(doc.orientation);
             if (doc.paperColor) setPaperColorId(doc.paperColor);
@@ -1288,7 +1291,7 @@ export default function DrawScreen() {
             <DrawMenuRow
               icon="resize-outline"
               label="Page size"
-              valueText={PAPER_SIZES[(paperSize === 'custom' ? 'fit' : paperSize) as Exclude<PaperSize, 'custom'>]?.label || 'Fit'}
+              valueText={paperSize === 'custom' ? 'Custom' : (PAPER_SIZES[paperSize]?.label || 'A4')}
               onPress={() => { setShowPaperMenu(false); setShowSubSize(true); }}
               testID="draw-menu-size"
             />
@@ -1992,7 +1995,7 @@ function PaperFrame({
   size: PaperSize;
   children: React.ReactNode;
 }) {
-  if (size === 'fit') return <View style={{ flex: 1 }}>{children}</View>;
+  if (size === 'custom') return <View style={{ flex: 1 }}>{children}</View>;
   const ratio = PAPER_SIZES[size].ratio; // portrait W/H
   // Letterbox so the page maintains its ratio
   return (
