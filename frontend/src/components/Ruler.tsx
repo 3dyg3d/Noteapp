@@ -46,8 +46,8 @@ interface Props {
 // "close-enough" ruler for both platforms without native DPI code.
 const POINTS_PER_CM = 38;
 const POINTS_PER_INCH = POINTS_PER_CM * 2.54;
-const RULER_H = 46;               // fixed on-screen height (independent of paper scale)
-const EDGE_PAD = 200;              // extra length beyond the viewport diagonal so ends are always off-screen
+const RULER_H = 62;               // fixed on-screen height (thicker, easier to grab and read)
+const EDGE_PAD = 0;                // no extra padding — clipped by parent's overflow: hidden
 
 export default function Ruler({ state, onChange, paperScale, viewport, colors }: Props) {
   // Reserved for future use — the ruler length is now derived from viewport diagonal so
@@ -132,19 +132,19 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           top: state.y - RULER_H / 2,
           width: displayLength,
           height: RULER_H,
-          // Clear-glass look — subtle translucency, thin border, soft shadow.
-          backgroundColor: 'rgba(255, 255, 255, 0.14)',
-          borderTopWidth: 1.2,
-          borderBottomWidth: 1.2,
-          borderColor: 'rgba(255, 255, 255, 0.65)',
+          // Clear-glass look — visible but non-intrusive.
+          backgroundColor: 'rgba(255, 255, 255, 0.32)',
+          borderTopWidth: 1.6,
+          borderBottomWidth: 1.4,
+          borderColor: 'rgba(255, 255, 255, 0.95)',
           transform: [{ rotate: `${state.angle}deg` }],
           overflow: 'visible',
           // subtle shadow for depth
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.18,
-          shadowRadius: 6,
-          elevation: 3,
+          shadowOpacity: 0.28,
+          shadowRadius: 8,
+          elevation: 4,
         }}
       >
         {/* Solid straight edge at the top for pen snapping visual reference */}
@@ -170,8 +170,8 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
               left: t.pos - 0.5,
               top: 0,
               width: 1,
-              height: t.isZero ? 18 : t.big ? 12 : 6,
-              backgroundColor: t.isZero ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.85)',
+              height: t.isZero ? 24 : t.big ? 16 : 8,
+              backgroundColor: t.isZero ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.95)',
             }}
           />
         ))}
@@ -183,13 +183,13 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
             pointerEvents="none"
             style={{
               position: 'absolute',
-              left: t.pos - 8,
-              top: 14,
-              width: 16,
+              left: t.pos - 10,
+              top: 18,
+              width: 20,
               textAlign: 'center',
-              fontSize: 9,
-              color: 'rgba(255, 255, 255, 0.9)',
-              fontWeight: '600',
+              fontSize: 10,
+              color: 'rgba(255, 255, 255, 0.95)',
+              fontWeight: '700',
             }}
           >
             {t.label}
@@ -201,11 +201,11 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           pointerEvents="none"
           style={{
             position: 'absolute',
-            left: halfLen - 8,
-            top: 20,
-            width: 16,
+            left: halfLen - 10,
+            top: 26,
+            width: 20,
             textAlign: 'center',
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: '800',
             color: 'rgba(255, 255, 255, 1)',
           }}
@@ -219,7 +219,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           style={{
             position: 'absolute',
             left: halfLen - 30,
-            bottom: 4,
+            bottom: 6,
             width: 60,
             alignItems: 'center',
           }}
@@ -229,12 +229,12 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
               paddingHorizontal: 8,
               paddingVertical: 2,
               borderRadius: 10,
-              backgroundColor: 'rgba(0, 0, 0, 0.35)',
+              backgroundColor: 'rgba(0, 0, 0, 0.45)',
               borderWidth: 0.5,
-              borderColor: 'rgba(255, 255, 255, 0.35)',
+              borderColor: 'rgba(255, 255, 255, 0.5)',
             }}
           >
-            <Text style={{ color: 'rgba(255, 255, 255, 0.95)', fontSize: 10, fontWeight: '700' }}>
+            <Text style={{ color: 'rgba(255, 255, 255, 1)', fontSize: 11, fontWeight: '700' }}>
               {angleStr}
             </Text>
           </View>
@@ -245,11 +245,11 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           pointerEvents="none"
           style={{
             position: 'absolute',
-            right: 6,
-            top: 4,
-            fontSize: 9,
+            right: 8,
+            top: 6,
+            fontSize: 10,
             fontWeight: '700',
-            color: 'rgba(255, 255, 255, 0.75)',
+            color: 'rgba(255, 255, 255, 0.9)',
           }}
         >
           {state.unit}

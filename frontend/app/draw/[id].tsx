@@ -429,8 +429,10 @@ export default function DrawScreen() {
   const [scale, setScale] = useState(1);
   const [scrollY, setScrollY] = useState(0); // vertical scroll across multi-page canvas
   const [scrollX, setScrollX] = useState(0); // horizontal pan (world coords, only valid when page overflows viewport)
+  const [overscrollY, setOverscrollY] = useState(0); // damped bounce past last page (pull-to-add-page)
   const scrollYStartRef = useRef(0);
   const scrollXStartRef = useRef(0);
+  const overscrollRef = useRef(0);
   const scaleStartRef = useRef(1);
   const MAX_SCALE = 16;
   const MIN_SCALE = 0.5;
@@ -457,7 +459,8 @@ export default function DrawScreen() {
   const clampedScrollX = Math.max(-maxAbsSX, Math.min(maxAbsSX, scrollX));
   const tx = naturalTx - clampedScrollX * scale;
   const topPad = spacing.md; // small breathing room above the page
-  const ty = topPad - scrollY * scale;
+  // Add overscroll pull-past-end so the paper visibly bounces up during a scroll-past-last-page.
+  const ty = topPad - scrollY * scale - overscrollY;
 
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
@@ -794,6 +797,86 @@ export default function DrawScreen() {
   const composedGesture = Gesture.Simultaneous(pinch, twoFingerPanY);
   const tapsGesture = Gesture.Exclusive(threeTap, twoTap);
 
+  // ----- Overscroll (pull-past-end to auto-add page) -----
+  // `overscrollY` is the damped screen-space distance the user has dragged BEYOND the last
+  // page. It is added to `ty` so the paper visibly bounces up during the pull. When the
+  // user releases past the threshold, a new page is auto-added.
+  const OVERSCROLL_ADD_THRESHOLD = 72;    // px pulled past the end (after damping) needed to trigger add
+  const OVERSCROLL_MAX = 140;             // absolute cap on damped overscroll
+  const OVERSCROLL_DAMP = 0.4;            // damping factor: raw overscroll * damp = shown overscroll
+
+  // 1-finger finger-drag on the paper → scroll vertically (always), horizontally only
+  // when the paper edges are off-screen. Rejects stylus so the drawing gesture takes
+  // over for the pen. Also handles overscroll for pull-to-add-page.
+  const fingerScrollPan = Gesture.Pan()
+    .runOnJS(true)
+    .minDistance(2)
+    .maxPointers(1)
+    .onTouchesDown((event, manager) => {
+      'worklet';
+      // Only activate finger-scroll when palm rejection is ON (i.e. touch is not used for drawing).
+      // When palm rejection is OFF the user has explicitly opted into touch-drawing.
+      if (palmRejectionSV.value !== 1) {
+        manager.fail();
+        return;
+      }
+      // Only allow finger touches — stylus should draw via the other Pan gesture.
+      const pt = event.allTouches?.[0]?.pointerType;
+      if (pt !== 0) {
+        manager.fail();
+      }
+    })
+    .onStart(() => {
+      scrollYStartRef.current = scrollY;
+      scrollXStartRef.current = scrollX;
+      overscrollRef.current = 0;
+      setOverscrollY(0);
+    })
+    .onUpdate((e) => {
+      // Vertical scroll with damped overscroll past the bottom edge.
+      const visibleH = viewport.h / Math.max(0.01, scale);
+      const maxScroll = Math.max(0, totalPageH - visibleH);
+      const rawY = scrollYStartRef.current - e.translationY / Math.max(0.5, scale);
+      if (rawY > maxScroll) {
+        // Overscrolled past the last page — apply damping and expose overscroll for add-page.
+        const rawOver = (rawY - maxScroll) * scale;
+        const damped = Math.min(OVERSCROLL_MAX, rawOver * OVERSCROLL_DAMP);
+        setScrollY(maxScroll);
+        overscrollRef.current = damped;
+        setOverscrollY(damped);
+      } else if (rawY < 0) {
+        setScrollY(0);
+        overscrollRef.current = 0;
+        setOverscrollY(0);
+      } else {
+        setScrollY(rawY);
+        overscrollRef.current = 0;
+        setOverscrollY(0);
+      }
+
+      // Horizontal pan — ONLY when the page overflows the viewport (edges off-screen).
+      const pageOnW = pageDims.w * scale;
+      if (pageOnW > viewport.w + 0.5) {
+        const maxAbs = (pageOnW - viewport.w) / (2 * scale);
+        const nextX = Math.max(-maxAbs, Math.min(maxAbs, scrollXStartRef.current - e.translationX / Math.max(0.5, scale)));
+        setScrollX(nextX);
+      }
+    })
+    .onEnd(() => {
+      // If pulled far enough past the bottom, add a page and jump so the new page top is visible.
+      if (overscrollRef.current > OVERSCROLL_ADD_THRESHOLD) {
+        haptic.success();
+        setPageCount((c) => c + 1);
+        setScrollY((prev) => prev + basePageH * 0.25);
+      }
+      overscrollRef.current = 0;
+      setOverscrollY(0);
+    })
+    .onFinalize(() => {
+      overscrollRef.current = 0;
+      setOverscrollY(0);
+    });
+
   // Convert screen-space gesture coords to world coords accounting for zoom only (no pan).
   const toWorld = (x: number, y: number) => ({
     x: (x - tx) / scale,
@@ -1002,7 +1085,7 @@ export default function DrawScreen() {
       }
     });
 
-  const finalGesture = Gesture.Simultaneous(pan, composedGesture, tapsGesture);
+  const finalGesture = Gesture.Simultaneous(pan, composedGesture, fingerScrollPan, tapsGesture);
 
   // ----- Render strokes -----
   const renderStroke = (s: StrokeData, key: string) => {
@@ -1445,7 +1528,7 @@ export default function DrawScreen() {
       <View style={{ flex: 1, flexDirection: isVerticalToolbar ? 'row' : 'column' }}>
         {toolbarPos === 'left' && renderToolbar()}
         <View
-          style={{ flex: 1, backgroundColor: canvasColorHex }}
+          style={{ flex: 1, backgroundColor: canvasColorHex, overflow: 'hidden' }}
           onLayout={(e) => setViewport({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
         >
           {Platform.OS !== 'web' ? (
@@ -1600,48 +1683,48 @@ export default function DrawScreen() {
             />
           )}
 
-          {/* Samsung Notes-style "Add page" pill — floats just below the last page, follows scroll/zoom. */}
-          {(() => {
-            const pillY = ty + totalPageH * scale;
-            const pillCenterX = tx + (pageDims.w * scale) / 2;
-            // Only render if pill is inside the viewport (avoid work when scrolled far up).
-            if (pillY < -60 || pillY > viewport.h + 20) return null;
-            return (
-              <Pressable
-                testID="add-page-inline-btn"
-                onPress={() => {
-                  haptic.success();
-                  setPageCount((c) => c + 1);
-                  // Scroll so the new page top is visible.
-                  setScrollY(pageCount * basePageH);
-                }}
-                style={({ pressed }) => ({
-                  position: 'absolute',
-                  left: pillCenterX - 74,
-                  top: pillY + 8,
-                  width: 148,
-                  height: 36,
-                  borderRadius: 18,
+          {/* Add-page is now triggered by dragging past the last page with resistance (see fingerScrollPan.onEnd). */}
+          {overscrollY > 8 && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: Math.max(insets.bottom + 12, overscrollY - 8),
+                alignItems: 'center',
+                opacity: Math.min(1, overscrollY / 40),
+              }}
+            >
+              <View
+                style={{
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                  borderRadius: 20,
                   backgroundColor: colors.surface,
                   borderWidth: 1,
-                  borderColor: colors.border,
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  borderColor: overscrollY >= 72 ? colors.brand : colors.border,
                   flexDirection: 'row',
+                  alignItems: 'center',
                   gap: 6,
                   shadowColor: '#000',
                   shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.15,
-                  shadowRadius: 4,
-                  elevation: 3,
-                  opacity: pressed ? 0.7 : 0.95,
-                })}
+                  shadowOpacity: 0.18,
+                  shadowRadius: 6,
+                  elevation: 4,
+                }}
               >
-                <Ionicons name="add" size={18} color={colors.onSurface} />
-                <Text style={{ color: colors.onSurface, fontWeight: '600', fontSize: 13 }}>Add page</Text>
-              </Pressable>
-            );
-          })()}
+                <Ionicons
+                  name={overscrollY >= 72 ? 'add-circle' : 'arrow-up-circle-outline'}
+                  size={16}
+                  color={overscrollY >= 72 ? colors.brand : colors.muted}
+                />
+                <Text style={{ color: colors.onSurface, fontSize: 12, fontWeight: '600' }}>
+                  {overscrollY >= 72 ? 'Release to add page' : 'Pull to add page'}
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* Ruler overlay — sits above the Skia canvas so it can receive its own gestures. */}
           {rulerEnabled && Platform.OS !== 'web' && (
