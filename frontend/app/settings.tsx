@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch, useWi
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
@@ -16,6 +17,7 @@ export default function SettingsScreen() {
   const { settings, update } = useAppSettings();
   const { width: winW } = useWindowDimensions();
   const wide = winW >= 720;
+  const router = useRouter();
 
   const [passcode, setPasscode] = useState('');
   const [hasPasscode, setHasPasscode] = useState(false);
@@ -119,12 +121,12 @@ export default function SettingsScreen() {
   ];
 
   return (
-    <View style={{ flex: 1, flexDirection: 'row', backgroundColor: wide ? 'rgba(0,0,0,0.35)' : colors.surface }}>
+    <View style={{ flex: 1, flexDirection: 'row', backgroundColor: wide ? 'transparent' : colors.surface }}>
       {wide && (
         <Pressable
           testID="settings-backdrop"
           onPress={() => router.back()}
-          style={{ flex: 1 }}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' }}
         />
       )}
       <View

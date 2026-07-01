@@ -31,7 +31,16 @@ function ThemedStack() {
           contentStyle: { backgroundColor: colors.surface },
           animation: 'slide_from_right',
         }}
-      />
+      >
+        <Stack.Screen
+          name="settings"
+          options={{
+            presentation: 'transparentModal',
+            animation: 'fade',
+            contentStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+      </Stack>
     </>
   );
 }

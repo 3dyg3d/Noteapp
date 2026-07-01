@@ -56,6 +56,7 @@ interface DrawingDoc {
   paper: Paper;
   paperSize?: PaperSize;
   customSize?: { w: number; h: number }; // pixel dimensions used when paperSize === 'custom'
+  orientation?: 'portrait' | 'landscape';
   paperColor?: string;
   canvasColor?: string;
   lineSpacing?: number; // pixel spacing for ruled / grid / dotted templates
@@ -164,11 +165,37 @@ export default function DrawScreen() {
   const [paper, setPaper] = useState<Paper>('blank');
   const [paperSize, setPaperSize] = useState<PaperSize>('fit');
   const [customSize, setCustomSize] = useState<{ w: number; h: number } | null>(null);
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [paperColorId, setPaperColorId] = useState<string>('white');
   const [lineSpacing, setLineSpacing] = useState<number | undefined>(undefined);
   const [canvasColorHex, setCanvasColorHex] = useState<string>('#d4d4d4');
-  // page size in world units (matches the visible page area, lets paper lines be Skia-rendered)
-  const [pageDims, setPageDims] = useState<{ w: number; h: number }>({ w: 1024, h: 1366 });
+  // Viewport = the actual on-screen container size. pageDims = the effective page size,
+  // derived from paperSize / orientation / customSize (fitting into viewport width).
+  const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: 1024, h: 1366 });
+  const pageDims = useMemo<{ w: number; h: number }>(() => {
+    if (viewport.w <= 0 || viewport.h <= 0) return { w: 1024, h: 1366 };
+    if (paperSize === 'fit') return viewport;
+    // ratio = width / height in the current orientation
+    let ratio: number;
+    if (paperSize === 'custom' && customSize) {
+      ratio = customSize.w / Math.max(1, customSize.h);
+    } else if (paperSize !== 'custom') {
+      // PAPER_SIZES.ratio is always the PORTRAIT ratio (w/h). Flip for landscape.
+      const portraitRatio = PAPER_SIZES[paperSize].ratio;
+      ratio = orientation === 'landscape' ? 1 / portraitRatio : portraitRatio;
+    } else {
+      return viewport;
+    }
+    // Fit width to viewport, derive height. For very-wide (landscape) papers we cap by height too.
+    let w = viewport.w;
+    let h = w / ratio;
+    if (h > viewport.h * 3) {
+      // extremely tall (would swamp scroll) — cap
+      h = viewport.h * 3;
+      w = h * ratio;
+    }
+    return { w, h };
+  }, [viewport.w, viewport.h, paperSize, customSize, orientation]);
   const historyRef = useRef<{ undo: Item[][]; redo: Item[][] }>({ undo: [], redo: [] });
 
   // Tool state
@@ -202,7 +229,11 @@ export default function DrawScreen() {
   // plus the user's vertical scroll offset across pages.
   const basePageH = pageDims.h;
   const totalPageH = basePageH * pageCount;
-  const tx = (pageDims.w / 2) * (1 - scale);
+  // Center the page horizontally inside the viewport when it's narrower than the container
+  // (which happens for landscape pages that don't fill the full viewport height, or in
+  // future when we ever compute a smaller page width).
+  const centerOffsetX = Math.max(0, (viewport.w - pageDims.w) / 2);
+  const tx = centerOffsetX + (pageDims.w / 2) * (1 - scale);
   const ty = (pageDims.h / 2) * (1 - scale) - scrollY * scale;
 
   // App settings (haptics + gestures + toolbar)
@@ -246,6 +277,7 @@ export default function DrawScreen() {
             setPaper(doc.paper || 'blank');
             if (doc.paperSize) setPaperSize(doc.paperSize);
             if (doc.customSize) setCustomSize(doc.customSize);
+            if (doc.orientation) setOrientation(doc.orientation);
             if (doc.paperColor) setPaperColorId(doc.paperColor);
             if (doc.canvasColor) setCanvasColorHex(doc.canvasColor);
             if (typeof doc.lineSpacing === 'number') setLineSpacing(doc.lineSpacing);
@@ -272,6 +304,7 @@ export default function DrawScreen() {
               paper: nextPaper,
               paperSize: nextSize,
               customSize: customSize ?? undefined,
+              orientation,
               paperColor: nextColor,
               canvasColor: canvasColorHex,
               lineSpacing,
@@ -289,7 +322,7 @@ export default function DrawScreen() {
         }
       }, 500);
     },
-    [id, canvasColorHex, lineSpacing, customSize, pageCount]
+    [id, canvasColorHex, lineSpacing, customSize, pageCount, orientation]
   );
 
   // Persist when pageCount changes (debounced via persist())
@@ -298,7 +331,7 @@ export default function DrawScreen() {
       persist(items, paper, paperSize, paperColorId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageCount]);
+  }, [pageCount, orientation]);
 
   const pushHistory = useCallback((prev: Item[]) => {
     historyRef.current.undo.push(prev);
@@ -730,9 +763,9 @@ export default function DrawScreen() {
           },
           vertical
             ? {
-                width: 80,
-                paddingTop: spacing.sm,
-                paddingBottom: insets.bottom + spacing.sm,
+                width: 60,
+                paddingTop: spacing.xs,
+                paddingBottom: insets.bottom + spacing.xs,
                 borderRightWidth: toolbarPos === 'left' ? StyleSheet.hairlineWidth : 0,
                 borderLeftWidth: toolbarPos === 'right' ? StyleSheet.hairlineWidth : 0,
                 borderRightColor: colors.divider,
@@ -869,7 +902,7 @@ export default function DrawScreen() {
         {toolbarPos === 'left' && renderToolbar()}
         <View
           style={{ flex: 1, backgroundColor: canvasColorHex }}
-          onLayout={(e) => setPageDims({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+          onLayout={(e) => setViewport({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
         >
           {Platform.OS !== 'web' ? (
             <GestureDetector gesture={finalGesture}>
@@ -1468,6 +1501,39 @@ export default function DrawScreen() {
                 Page size
               </Text>
             </View>
+
+            {/* Orientation toggle */}
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+              {(['portrait', 'landscape'] as const).map((o) => {
+                const active = orientation === o;
+                return (
+                  <Pressable
+                    key={o}
+                    testID={`sub-orientation-${o}`}
+                    onPress={() => { setOrientation(o); haptic.selection(); }}
+                    style={{
+                      flex: 1,
+                      paddingVertical: spacing.sm,
+                      borderRadius: radius.md,
+                      alignItems: 'center',
+                      flexDirection: 'row',
+                      justifyContent: 'center',
+                      gap: 6,
+                      backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                    }}
+                  >
+                    <Ionicons
+                      name={o === 'portrait' ? 'phone-portrait-outline' : 'phone-landscape-outline'}
+                      size={18}
+                      color={active ? colors.onBrandPrimary : colors.onSurface}
+                    />
+                    <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500', textTransform: 'capitalize' }}>
+                      {o}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <View style={{ gap: spacing.sm }}>
               {(Object.keys(PAPER_SIZES) as Exclude<PaperSize, 'custom'>[]).map((s) => {
                 const active = paperSize === s;
@@ -1775,15 +1841,15 @@ function ToolBtn({
       style={{
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: spacing.sm,
-        paddingVertical: 6,
-        borderRadius: radius.md,
+        paddingHorizontal: 6,
+        paddingVertical: 4,
+        borderRadius: radius.sm,
         backgroundColor: active ? colors.brand : 'transparent',
-        minWidth: 56,
+        minWidth: 44,
       }}
     >
-      <Ionicons name={icon} size={20} color={active ? colors.onBrandPrimary : colors.onSurface} />
-      <Text style={{ fontSize: 10, color: active ? colors.onBrandPrimary : colors.onSurface, marginTop: 2, fontWeight: '600' }}>
+      <Ionicons name={icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+      <Text style={{ fontSize: 9, color: active ? colors.onBrandPrimary : colors.onSurface, marginTop: 1, fontWeight: '600' }}>
         {label}
       </Text>
     </Pressable>
@@ -1796,8 +1862,8 @@ function Divider({ vertical }: { vertical?: boolean }) {
     <View
       style={
         vertical
-          ? { height: 1, width: 28, backgroundColor: colors.divider, marginVertical: 4 }
-          : { width: 1, height: 28, backgroundColor: colors.divider, marginHorizontal: 4 }
+          ? { height: 1, width: 20, backgroundColor: colors.divider, marginVertical: 2 }
+          : { width: 1, height: 20, backgroundColor: colors.divider, marginHorizontal: 3 }
       }
     />
   );
@@ -2133,14 +2199,14 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   colorDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
   },
   widthBtn: {
-    width: 36,
-    height: 28,
-    borderRadius: 14,
+    width: 30,
+    height: 24,
+    borderRadius: 12,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
