@@ -289,9 +289,9 @@ export default function DrawScreen() {
   const snapToRulerRef = useRef<boolean>(false);
   const rulerSnapWorld = (screenX: number, screenY: number) => {
     if (!rulerEnabled) return null;
-    const d = rulerEdgeDistance(rulerState, scale, { x: screenX, y: screenY });
+    const d = rulerEdgeDistance(rulerState, scale, { x: screenX, y: screenY }, viewport);
     if (d > 24) return null;
-    return rulerProject(rulerState, scale, { x: screenX, y: screenY });
+    return rulerProject(rulerState, scale, { x: screenX, y: screenY }, viewport);
   };
 
   // ---------- Laser + Select state ----------
@@ -428,7 +428,9 @@ export default function DrawScreen() {
   // Zoom (panning removed) — translation is derived to keep canvas centered while zooming.
   const [scale, setScale] = useState(1);
   const [scrollY, setScrollY] = useState(0); // vertical scroll across multi-page canvas
+  const [scrollX, setScrollX] = useState(0); // horizontal pan (world coords, only valid when page overflows viewport)
   const scrollYStartRef = useRef(0);
+  const scrollXStartRef = useRef(0);
   const scaleStartRef = useRef(1);
   const MAX_SCALE = 16;
   const MIN_SCALE = 0.5;
@@ -440,11 +442,20 @@ export default function DrawScreen() {
   // plus the user's vertical scroll offset across pages.
   const basePageH = pageDims.h;
   const totalPageH = basePageH * pageCount;
-  // Derived translation. Horizontal: pin the page center to the viewport center at any scale.
-  // Vertical: pin the *top* of the page to a small top margin (adjusted by user scroll).
-  // This prevents the paper from drifting down and leaving empty space above when zooming out.
-  const centerOffsetX = Math.max(0, (viewport.w - pageDims.w) / 2);
-  const tx = centerOffsetX + (pageDims.w / 2) * (1 - scale);
+  // Horizontal: center the page when it fits in the viewport; when zoomed in such that the
+  // page overflows the viewport, allow the user to pan sideways within bounds so neither
+  // side edge is dragged out of view.
+  const pageOnScreenW = pageDims.w * scale;
+  const canPanX = pageOnScreenW > viewport.w + 0.5;
+  // Natural (centered) horizontal translation. Works for both cases:
+  //  - When page fits: positive value, adds side margins.
+  //  - When page overflows: negative value, means the page's left edge is off-screen and
+  //    the page is centered with equal overflow on both sides.
+  const naturalTx = (viewport.w - pageOnScreenW) / 2;
+  // maxAbsSX: how far (in world coords) the user can shift from centered before an edge leaves viewport.
+  const maxAbsSX = canPanX ? (pageOnScreenW - viewport.w) / (2 * scale) : 0;
+  const clampedScrollX = Math.max(-maxAbsSX, Math.min(maxAbsSX, scrollX));
+  const tx = naturalTx - clampedScrollX * scale;
   const topPad = spacing.md; // small breathing room above the page
   const ty = topPad - scrollY * scale;
 
@@ -717,6 +728,22 @@ export default function DrawScreen() {
     else if (action === 'eraser') { haptic.medium(); setTool('eraser'); }
   };
 
+  // Reset horizontal pan to 0 whenever the page no longer overflows the viewport, so a
+  // subsequent zoom-in starts from the centered position (not from the previous pan).
+  useEffect(() => {
+    if (!canPanX && scrollX !== 0) setScrollX(0);
+  }, [canPanX, scrollX]);
+
+  // Clamp scrollY whenever scale or pageCount changes so we never leave the doc bounds
+  // (e.g. zooming out with a large scrollY should snap back to a valid position).
+  useEffect(() => {
+    const visibleH = viewport.h / Math.max(0.01, scale);
+    const maxScroll = Math.max(0, totalPageH - visibleH);
+    if (scrollY > maxScroll) setScrollY(maxScroll);
+    else if (scrollY < 0) setScrollY(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale, pageCount, totalPageH, viewport.h]);
+
   // Pinch zoom (2 fingers) — and 2-finger vertical pan for scrolling across multi-page canvas.
   const pinch = Gesture.Pinch()
     .runOnJS(true)
@@ -731,15 +758,25 @@ export default function DrawScreen() {
     .minPointers(2)
     .maxPointers(2)
     .averageTouches(true)
-    .onStart(() => { scrollYStartRef.current = scrollY; })
+    .onStart(() => {
+      scrollYStartRef.current = scrollY;
+      scrollXStartRef.current = scrollX;
+    })
     .onUpdate((e) => {
-      // Only vertical pan — horizontal translation is ignored.
-      // At scale s the visible document window is viewport.h / s tall; scroll can go up to
-      // totalPageH minus that window (or 0 if the page already fits).
+      // Vertical scroll — scrollY can go up to totalPageH minus visible window.
       const visibleH = viewport.h / Math.max(0.01, scale);
       const maxScroll = Math.max(0, totalPageH - visibleH);
-      const next = Math.max(0, Math.min(maxScroll, scrollYStartRef.current - e.translationY / Math.max(0.5, scale)));
-      setScrollY(next);
+      const nextY = Math.max(0, Math.min(maxScroll, scrollYStartRef.current - e.translationY / Math.max(0.5, scale)));
+      setScrollY(nextY);
+
+      // Horizontal pan — ONLY when the page overflows viewport (edges are off-screen).
+      // Clamped so the paper cannot be dragged out of view.
+      const pageOnW = pageDims.w * scale;
+      if (pageOnW > viewport.w + 0.5) {
+        const maxAbs = (pageOnW - viewport.w) / (2 * scale);
+        const nextX = Math.max(-maxAbs, Math.min(maxAbs, scrollXStartRef.current - e.translationX / Math.max(0.5, scale)));
+        setScrollX(nextX);
+      }
     });
 
   const twoTap = Gesture.Tap()
@@ -857,7 +894,7 @@ export default function DrawScreen() {
       let px = e.x;
       let py = e.y;
       if (snapToRulerRef.current) {
-        const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y });
+        const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y }, viewport);
         px = proj.x;
         py = proj.y;
       }
@@ -1563,12 +1600,56 @@ export default function DrawScreen() {
             />
           )}
 
+          {/* Samsung Notes-style "Add page" pill — floats just below the last page, follows scroll/zoom. */}
+          {(() => {
+            const pillY = ty + totalPageH * scale;
+            const pillCenterX = tx + (pageDims.w * scale) / 2;
+            // Only render if pill is inside the viewport (avoid work when scrolled far up).
+            if (pillY < -60 || pillY > viewport.h + 20) return null;
+            return (
+              <Pressable
+                testID="add-page-inline-btn"
+                onPress={() => {
+                  haptic.success();
+                  setPageCount((c) => c + 1);
+                  // Scroll so the new page top is visible.
+                  setScrollY(pageCount * basePageH);
+                }}
+                style={({ pressed }) => ({
+                  position: 'absolute',
+                  left: pillCenterX - 74,
+                  top: pillY + 8,
+                  width: 148,
+                  height: 36,
+                  borderRadius: 18,
+                  backgroundColor: colors.surface,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexDirection: 'row',
+                  gap: 6,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.15,
+                  shadowRadius: 4,
+                  elevation: 3,
+                  opacity: pressed ? 0.7 : 0.95,
+                })}
+              >
+                <Ionicons name="add" size={18} color={colors.onSurface} />
+                <Text style={{ color: colors.onSurface, fontWeight: '600', fontSize: 13 }}>Add page</Text>
+              </Pressable>
+            );
+          })()}
+
           {/* Ruler overlay — sits above the Skia canvas so it can receive its own gestures. */}
           {rulerEnabled && Platform.OS !== 'web' && (
             <Ruler
               state={rulerState}
               onChange={setRulerState}
               paperScale={scale}
+              viewport={viewport}
               colors={{
                 brand: colors.brand,
                 onSurface: colors.onSurface,
@@ -1669,32 +1750,7 @@ export default function DrawScreen() {
                 </Pressable>
               </>
             )}
-            {!settings.autoAddPage && (
-              <Pressable
-                testID="add-page-btn"
-                onPress={() => {
-                  haptic.success();
-                  setPageCount((c) => c + 1);
-                  setScrollY(pageCount * basePageH);
-                }}
-                style={({ pressed }) => ({
-                  width: 52,
-                  height: 52,
-                  borderRadius: 26,
-                  backgroundColor: colors.brand,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: pressed ? 0.85 : 1,
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 4 },
-                  shadowOpacity: 0.25,
-                  shadowRadius: 8,
-                  elevation: 8,
-                })}
-              >
-                <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
-              </Pressable>
-            )}
+            {/* FAB "Add page" removed — replaced by inline Samsung-style pill just below the last page. */}
           </View>
           {/* Page indicator */}
           {pageCount > 1 && (
@@ -2218,7 +2274,7 @@ export default function DrawScreen() {
               </Text>
             </Pressable>
             <Text style={{ color: colors.muted, fontSize: 11, marginTop: 6 }}>
-              Long-press a saved preset to remove it.
+              Tap ✎ to rename, ✕ to delete.
             </Text>
           </Pressable>
         </Pressable>
@@ -2261,6 +2317,68 @@ export default function DrawScreen() {
               <Pressable
                 onPress={() => { saveCurrentZoomAs(presetNameDraft); setSavingPreset(false); }}
                 style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.brand, alignItems: 'center' }}
+              >
+                <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Rename preset prompt */}
+      <Modal
+        visible={!!renamingPreset}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setRenamingPreset(null); setRenameDraft(''); }}
+      >
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' }}
+          onPress={() => { setRenamingPreset(null); setRenameDraft(''); }}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{ width: 280, backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg }}
+          >
+            <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.sm }}>
+              Rename preset
+            </Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.md }}>
+              New name for "{renamingPreset}".
+            </Text>
+            <TextInput
+              value={renameDraft}
+              onChangeText={setRenameDraft}
+              placeholder="Preset name"
+              placeholderTextColor={colors.muted}
+              autoFocus
+              style={{
+                borderWidth: 1,
+                borderColor: colors.border,
+                borderRadius: radius.sm,
+                padding: spacing.sm,
+                color: colors.onSurface,
+                marginBottom: spacing.md,
+              }}
+              testID="rename-preset-input"
+            />
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <Pressable
+                onPress={() => { setRenamingPreset(null); setRenameDraft(''); }}
+                style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.surfaceSecondary, alignItems: 'center' }}
+              >
+                <Text style={{ color: colors.onSurface }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (renamingPreset) {
+                    renamePreset(renamingPreset, renameDraft);
+                  }
+                  setRenamingPreset(null);
+                  setRenameDraft('');
+                }}
+                style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.brand, alignItems: 'center' }}
+                testID="rename-preset-save"
               >
                 <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
               </Pressable>
