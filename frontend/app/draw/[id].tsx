@@ -294,6 +294,25 @@ export default function DrawScreen() {
     return rulerProject(rulerState, scale, { x: screenX, y: screenY });
   };
 
+  // ---------- Laser + Select state ----------
+  // Laser strokes fade out over ~2s.
+  const [laserStrokes, setLaserStrokes] = useState<{ id: number; pts: Pt[]; t0: number }[]>([]);
+  const laserIdRef = useRef(0);
+  const [laserSpot, setLaserSpot] = useState<{ x: number; y: number } | null>(null);
+  // Selection: indices of items currently selected + active marquee/lasso path.
+  const [selectedIdx, setSelectedIdx] = useState<number[]>([]);
+  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [lassoPath, setLassoPath] = useState<Pt[] | null>(null);
+
+  // Laser fade tick — periodically expire strokes older than 2s.
+  useEffect(() => {
+    if (laserStrokes.length === 0) return;
+    const t = setInterval(() => {
+      setLaserStrokes((prev) => prev.filter((s) => Date.now() - s.t0 < 2200));
+    }, 400);
+    return () => clearInterval(t);
+  }, [laserStrokes.length]);
+
   // Tool state
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>('#1A1A1C');
@@ -775,6 +794,26 @@ export default function DrawScreen() {
         }
       }
       const w = toWorld(e.x, e.y);
+      // ----- Laser -----
+      if (family === 'laser') {
+        if (variantByFamily.laser === 'spot') {
+          setLaserSpot({ x: e.x, y: e.y });
+        } else {
+          const id = ++laserIdRef.current;
+          setLaserStrokes((prev) => [...prev, { id, pts: [{ x: w.x, y: w.y, t: Date.now() }], t0: Date.now() }]);
+        }
+        return;
+      }
+      // ----- Select -----
+      if (family === 'select') {
+        setSelectedIdx([]);
+        if (variantByFamily.select === 'rect') {
+          setMarquee({ x1: w.x, y1: w.y, x2: w.x, y2: w.y });
+        } else {
+          setLassoPath([{ x: w.x, y: w.y, t: Date.now() }]);
+        }
+        return;
+      }
       // Reject touches that started outside the page area (left/right margins or above/below pages)
       if (w.x < 0 || w.x > pageDims.w || w.y < 0 || w.y > totalPageH) {
         livePtsRef.current = [];
@@ -803,6 +842,28 @@ export default function DrawScreen() {
         py = proj.y;
       }
       const w = toWorld(px, py);
+      // Laser update
+      if (family === 'laser') {
+        if (variantByFamily.laser === 'spot') {
+          setLaserSpot({ x: e.x, y: e.y });
+        } else {
+          setLaserStrokes((prev) => {
+            if (prev.length === 0) return prev;
+            const last = prev[prev.length - 1];
+            return [...prev.slice(0, -1), { ...last, pts: [...last.pts, { x: w.x, y: w.y, t: Date.now() }] }];
+          });
+        }
+        return;
+      }
+      // Selection update
+      if (family === 'select') {
+        if (variantByFamily.select === 'rect') {
+          setMarquee((prev) => (prev ? { ...prev, x2: w.x, y2: w.y } : prev));
+        } else {
+          setLassoPath((prev) => (prev ? [...prev, { x: w.x, y: w.y, t: Date.now() }] : prev));
+        }
+        return;
+      }
       if (isPenTool(tool)) {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
         if (!last) return;
@@ -822,6 +883,46 @@ export default function DrawScreen() {
         livePtsRef.current = [];
         liveShapeRef.current = null;
         setLiveTick((n) => n + 1);
+        return;
+      }
+      // Laser: nothing to persist. Spot laser dot disappears when finger lifts.
+      if (family === 'laser') {
+        if (variantByFamily.laser === 'spot') setLaserSpot(null);
+        return;
+      }
+      // Selection: finalize hit test against items.
+      if (family === 'select') {
+        const inside = (x: number, y: number) => {
+          if (variantByFamily.select === 'rect') {
+            if (!marquee) return false;
+            const minX = Math.min(marquee.x1, marquee.x2);
+            const maxX = Math.max(marquee.x1, marquee.x2);
+            const minY = Math.min(marquee.y1, marquee.y2);
+            const maxY = Math.max(marquee.y1, marquee.y2);
+            return x >= minX && x <= maxX && y >= minY && y <= maxY;
+          }
+          // Lasso ray-cast polygon test
+          if (!lassoPath || lassoPath.length < 3) return false;
+          let inPoly = false;
+          for (let i = 0, j = lassoPath.length - 1; i < lassoPath.length; j = i++) {
+            const xi = lassoPath[i].x, yi = lassoPath[i].y;
+            const xj = lassoPath[j].x, yj = lassoPath[j].y;
+            const intersect = ((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi);
+            if (intersect) inPoly = !inPoly;
+          }
+          return inPoly;
+        };
+        const hit: number[] = [];
+        items.forEach((it, idx) => {
+          const pts: { x: number; y: number }[] =
+            it.kind === 'stroke'
+              ? it.points
+              : [it.start, it.end, { x: it.start.x, y: it.end.y }, { x: it.end.x, y: it.start.y }];
+          if (pts.some((p) => inside(p.x, p.y))) hit.push(idx);
+        });
+        setSelectedIdx(hit);
+        setMarquee(null);
+        setLassoPath(null);
         return;
       }
       // Auto-add a page when the last stroke approaches the bottom of the current pages.
@@ -1175,6 +1276,22 @@ export default function DrawScreen() {
               testID={`family-${f}`}
             />
           ))}
+          {/* Ruler toggle — sits alongside the tool families but is a modifier that
+              can be turned on/off independently of the currently selected drawing tool. */}
+          <ToolBtn
+            icon="analytics-outline"
+            label="Ruler"
+            active={rulerEnabled}
+            onPress={() => {
+              haptic.selection();
+              if (!rulerEnabled) {
+                // Recenter the ruler on the viewport when turning it on.
+                setRulerState((prev) => ({ ...prev, x: viewport.w / 2, y: viewport.h / 2, angle: 0 }));
+              }
+              setRulerEnabled((v) => !v);
+            }}
+            testID="tool-ruler"
+          />
           <Divider vertical={vertical} />
           {/* Quick colors — 6 user-customizable slots. Tap = open grid picker to
               reassign this slot (and set it as the active color). */}
@@ -1312,10 +1429,60 @@ export default function DrawScreen() {
                     ))}
                     {/* Clip strokes & live preview to the page bounds so nothing draws outside */}
                     <Group clip={{ x: 0, y: 0, width: pageDims.w, height: totalPageH }}>
-                      {items.map((it, i) =>
-                        it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
-                      )}
+                      {items.map((it, i) => {
+                        const el = it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`);
+                        const isSelected = selectedIdx.includes(i);
+                        if (!isSelected) return el;
+                        // Highlight overlay for selected items.
+                        return (
+                          <Group key={`sel-${i}`}>
+                            {el}
+                          </Group>
+                        );
+                      })}
                       {livePreview}
+                      {/* Laser strokes — bright red, ephemeral */}
+                      {laserStrokes.map((s) => {
+                        if (s.pts.length < 2) return null;
+                        const age = Date.now() - s.t0;
+                        const alpha = Math.max(0, 1 - age / 2000);
+                        const p = buildPathFromPoints(s.pts);
+                        return (
+                          <Path
+                            key={`laser-${s.id}`}
+                            path={p}
+                            color={`rgba(255, 40, 40, ${alpha.toFixed(2)})`}
+                            strokeWidth={4}
+                            style="stroke"
+                          />
+                        );
+                      })}
+                      {/* Marquee (rect select) preview */}
+                      {marquee && (
+                        <Path
+                          path={(() => {
+                            const p = Skia.Path.Make();
+                            const x = Math.min(marquee.x1, marquee.x2);
+                            const y = Math.min(marquee.y1, marquee.y2);
+                            const w = Math.abs(marquee.x2 - marquee.x1);
+                            const h = Math.abs(marquee.y2 - marquee.y1);
+                            p.addRect({ x, y, width: w, height: h });
+                            return p;
+                          })()}
+                          color={colors.brand}
+                          strokeWidth={2 / scale}
+                          style="stroke"
+                        />
+                      )}
+                      {/* Lasso preview */}
+                      {lassoPath && lassoPath.length > 1 && (
+                        <Path
+                          path={buildPathFromPoints(lassoPath)}
+                          color={colors.brand}
+                          strokeWidth={2 / scale}
+                          style="stroke"
+                        />
+                      )}
                     </Group>
                   </Group>
                 </Canvas>
@@ -1332,6 +1499,69 @@ export default function DrawScreen() {
               </Text>
             </View>
           )}
+          {/* Selection action bar — shown when the user has one or more items selected. */}
+          {selectedIdx.length > 0 && (
+            <View
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: insets.bottom + 12,
+                alignItems: 'center',
+              }}
+              pointerEvents="box-none"
+            >
+              <View style={{ flexDirection: 'row', gap: 8, backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 8, elevation: 6 }}>
+                <Text style={{ color: colors.onSurface, fontWeight: '600', alignSelf: 'center', marginRight: 4 }}>
+                  {selectedIdx.length} selected
+                </Text>
+                <Pressable
+                  testID="sel-delete"
+                  onPress={() => {
+                    haptic.warning();
+                    setItems((prev) => {
+                      pushHistory(prev);
+                      const next = prev.filter((_, idx) => !selectedIdx.includes(idx));
+                      persist(next, paper, paperSize, paperColorId);
+                      return next;
+                    });
+                    setSelectedIdx([]);
+                  }}
+                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.error }}
+                >
+                  <Text style={{ color: '#FFF', fontWeight: '600' }}>Delete</Text>
+                </Pressable>
+                <Pressable
+                  testID="sel-clear"
+                  onPress={() => setSelectedIdx([])}
+                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.surfaceSecondary }}
+                >
+                  <Text style={{ color: colors.onSurface, fontWeight: '600' }}>Clear</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
+          {/* Spot laser — small red dot at the current pointer location */}
+          {laserSpot && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: laserSpot.x - 12,
+                top: laserSpot.y - 12,
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                backgroundColor: 'rgba(255, 40, 40, 0.85)',
+                shadowColor: '#FF2828',
+                shadowOpacity: 0.8,
+                shadowRadius: 12,
+                elevation: 8,
+              }}
+            />
+          )}
+
           {/* Ruler overlay — sits above the Skia canvas so it can receive its own gestures. */}
           {rulerEnabled && Platform.OS !== 'web' && (
             <Ruler
@@ -2006,20 +2236,6 @@ export default function DrawScreen() {
               valueSwatch={paperColor}
               onPress={() => { setShowPaperMenu(false); setShowSubColor(true); }}
               testID="draw-menu-color"
-            />
-            <DrawMenuRow
-              icon={rulerEnabled ? 'checkbox' : 'square-outline'}
-              label={`Ruler (${rulerState.unit})`}
-              valueText={rulerEnabled ? 'On' : 'Off'}
-              onPress={() => {
-                haptic.selection();
-                if (!rulerEnabled) {
-                  // Recenter the ruler on the viewport when turning it on.
-                  setRulerState((prev) => ({ ...prev, x: viewport.w / 2, y: viewport.h / 2, angle: 0 }));
-                }
-                setRulerEnabled((v) => !v);
-              }}
-              testID="draw-menu-ruler"
             />
             {rulerEnabled && (
               <>
