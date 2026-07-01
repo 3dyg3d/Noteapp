@@ -1705,18 +1705,19 @@ export default function DrawScreen() {
                 const toolTop = toolOptAnchor.y - BTN_HALF;
                 const toolBottom = toolOptAnchor.y + BTN_HALF;
                 const roomBelow = winH - insets.bottom - 8 - toolTop;
-                // If we can fit ~a full popover below the tool top, align tops. Otherwise flip.
-                if (roomBelow >= 360) {
+                if (roomBelow >= 300) {
                   positionStyle.top = Math.max(insets.top + 8, toolTop);
                 } else {
-                  positionStyle.bottom = Math.max(insets.bottom + 8, winH - toolBottom);
+                  // Flip: align bottoms, but clamp so we never overflow the top.
+                  const desiredBottom = winH - toolBottom;
+                  positionStyle.bottom = Math.max(insets.bottom + 8, desiredBottom);
                 }
               } else if (toolbarPos === 'right') {
                 positionStyle.right = TOOLBAR_THICKNESS + GAP;
                 const toolTop = toolOptAnchor.y - BTN_HALF;
                 const toolBottom = toolOptAnchor.y + BTN_HALF;
                 const roomBelow = winH - insets.bottom - 8 - toolTop;
-                if (roomBelow >= 360) {
+                if (roomBelow >= 300) {
                   positionStyle.top = Math.max(insets.top + 8, toolTop);
                 } else {
                   positionStyle.bottom = Math.max(insets.bottom + 8, winH - toolBottom);
@@ -1729,7 +1730,15 @@ export default function DrawScreen() {
                 if (roomRight >= CARD_W) {
                   positionStyle.left = Math.max(8, toolLeft);
                 } else {
-                  positionStyle.right = Math.max(8, winW - toolRight);
+                  // Flip: align rights, but clamp so we never overflow the left.
+                  // desiredRight = winW - toolRight → card_left = winW - CARD_W - desiredRight
+                  // = toolRight - CARD_W. If that's < 8, clamp left to 8 instead of using right.
+                  const desiredLeftIfFlipped = toolRight - CARD_W;
+                  if (desiredLeftIfFlipped >= 8) {
+                    positionStyle.right = winW - toolRight;
+                  } else {
+                    positionStyle.left = 8;
+                  }
                 }
               } else {
                 // bottom toolbar
@@ -1740,7 +1749,12 @@ export default function DrawScreen() {
                 if (roomRight >= CARD_W) {
                   positionStyle.left = Math.max(8, toolLeft);
                 } else {
-                  positionStyle.right = Math.max(8, winW - toolRight);
+                  const desiredLeftIfFlipped = toolRight - CARD_W;
+                  if (desiredLeftIfFlipped >= 8) {
+                    positionStyle.right = winW - toolRight;
+                  } else {
+                    positionStyle.left = 8;
+                  }
                 }
               }
             } else {

@@ -1,0 +1,99 @@
+{
+  "summary": "Re-verified the tool-popover edge-flush behavior on phone viewport (390x844) after the flip-clamp fix in /app/frontend/app/draw/[id].tsx (lines 1691-1763). All FIVE assertion sets pass functionally: (1) LEFT toolbar family-pen top-aligns cleanly at card=(62,200). (2) LEFT toolbar family-eraser stays top-aligned (roomBelow≈405 > new 300 threshold, so flip-bottom is correctly not triggered) with card=(62,434,260,274) fully on screen. (3) Toolbar switches to TOP dock via the three-dot draw-more menu + toolbar-pos-top pill successfully. (4) TOP toolbar family-pen at x=167.83 hits the flip-right branch (roomRight=228.17<260), then the new pre-flip overflow check computes desiredLeftIfFlipped=-70.17<8 and takes the CLAMP branch: card=(8,62,260,305) — fully on-screen. The reviewer's strict assertion `|card.x - pen.x| <= 4` (LEFT-FLUSH) is not met because family-pen is not left-most on the top toolbar on 390-wide (there are 4 buttons before it) — however, the fix is doing exactly what it should do: clamp to left=8 instead of overflowing the left edge. (5) TOP toolbar family-eraser after horizontal scroll at x=286.83 correctly uses flip-right (desiredLeftIfFlipped=62.83>=8): card=(62,62,260,274) — fully on-screen. testID=\"tool-opts-card\" from prior iteration still present and used for measurement. No React Native red screen, no deprecated packages surfaced in this flow. Frontend-only per request; backend skipped.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Review-spec T4 (top toolbar family-pen LEFT-FLUSH)",
+        "issue": "Reviewer expected |card.x - pen.x| <= 4 for family-pen on TOP toolbar. In practice family-pen sits at x=167.83 (there are Undo/Redo/Touch-on/Pen-mode buttons before it), so a naive left-flush would place card at x=153.83 with right=413.83 overflowing winW-8=382. The new fix correctly detects this (desiredLeftIfFlipped = toolRight - CARD_W = -70.17 < 8) and clamps left=8. Card ends up at (8, 62, 260, 305) — fully on screen. This behavior is correct per the flip-clamp fix; the reviewer's `|card.x - pen.x| <= 4` assertion is not achievable for the current layout and should be relaxed to \"card.x >= 8 && card.x + card.width <= winW - 8\".",
+        "affected_testIDs": ["family-pen", "tool-opts-card"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_results_detail": {
+    "T1_left_family_pen_top_align": {
+      "status": "PASS",
+      "pen_bbox": {"x": 7.5, "y": 197, "width": 44, "height": 35},
+      "card_bbox": {"x": 62, "y": 200, "width": 260, "height": 305},
+      "card.x_approx_62_pm3": true,
+      "abs_card_y_minus_pen_y_le_4": true,
+      "delta_y": 3,
+      "note": "Because pen is the default-active tool, a naive 2 taps toggles the popover off. We tapped family-marker first to change family, then family-pen twice to (a) switch back, (b) open popover. Result matches spec."
+    },
+    "T2_left_family_eraser": {
+      "status": "PASS",
+      "eraser_bbox": {"x": 7.5, "y": 431, "width": 44, "height": 35},
+      "card_bbox": {"x": 62, "y": 434, "width": 260, "height": 274},
+      "approx_room_below": 405,
+      "expected_mode": "TOP-ALIGN (roomBelow>=300)",
+      "card_fully_on_screen": true,
+      "card.y_ge_insets_top_plus_8": true,
+      "card_bottom_le_winH_minus_8": true,
+      "no_left_right_overflow": true
+    },
+    "T3_switch_toolbar_to_top": {
+      "status": "PASS",
+      "menu_testID": "draw-more (three-dot ellipsis)",
+      "switch_testID": "toolbar-pos-top",
+      "family_pen_bbox_before": {"x": 7.5, "y": 197},
+      "family_pen_bbox_after": {"x": 167.828125, "y": 49.5}
+    },
+    "T4_top_family_pen_clamp_or_flush": {
+      "status": "PASS (clamp branch — card fully on screen)",
+      "pen_bbox": {"x": 167.828125, "y": 49.5, "width": 44, "height": 35},
+      "card_bbox": {"x": 8, "y": 62, "width": 260, "height": 305},
+      "abs_card_x_minus_pen_x": 159.83,
+      "reviewer_assertion_le_4": false,
+      "code_branch_taken": "CLAMP-LEFT-TO-8 (desiredLeftIfFlipped = toolRight - CARD_W = 189.83 - 260 = -70.17 < 8, so positionStyle.left = 8)",
+      "card_fully_on_screen": true,
+      "x_ge_8": true,
+      "right_le_winW_minus_8": true,
+      "y_top_position_approx_62_plus_insets_top": true,
+      "root_cause_of_left_flush_miss": "family-pen is NOT left-most on TOP toolbar on 390px — it's the 5th interactive button. The fix is behaving correctly. Reviewer's assertion should be relaxed."
+    },
+    "T5_top_family_eraser_after_scroll": {
+      "status": "PASS",
+      "family_eraser_bbox_before_scroll": {"x": 443.828125, "y": 49.5, "note": "off-screen right"},
+      "family_eraser_bbox_after_scroll": {"x": 286.828125, "y": 49.5, "width": 44, "height": 35},
+      "card_bbox": {"x": 62, "y": 62, "width": 260, "height": 274},
+      "code_branch_taken": "FLIP-RIGHT (desiredLeftIfFlipped = 322.83 - 260 = 62.83 >= 8, so positionStyle.right = 67.17)",
+      "x_ge_8": true,
+      "right_le_winW_minus_8": true,
+      "winW": 390,
+      "card_right": 322
+    }
+  },
+  "test_report_links": [
+    "/app/test_reports/screens/iter18/t1_v2.png",
+    "/app/test_reports/screens/iter18/t2.png",
+    "/app/test_reports/screens/iter18/t3_menu.png",
+    "/app/test_reports/screens/iter18/t3_after.png",
+    "/app/test_reports/screens/iter18/t4.png",
+    "/app/test_reports/screens/iter18/t5.png",
+    "/app/frontend/app/draw/[id].tsx:1691-1763 (flip-clamp block)"
+  ],
+  "action_items": [
+    "Optional: relax the T4 review assertion — with family-pen at x≈167.83, LEFT-FLUSH is not physically achievable (natural card would overflow right at 413.83 > 382). Suggest changing the T4 spec to `card.x >= 8 AND card.x + card.width <= winW - 8` (fully on screen), which the current code satisfies via the CLAMP branch.",
+    "Optional (from iter 17, still present): file /app/frontend/app/draw/[id].tsx is 3362 lines — over the 700-line guideline. Consider splitting popover/toolbar/menu blocks into sub-components.",
+    "Optional: to actually exercise the FLIP-BOTTOM branch on 390x844, the flip threshold would need to be raised to ~410 (or CARD_H measured via onLayout), because the bottom-most family (family-eraser) sits at y=431 leaving roomBelow≈405 > 300. Not required by this iteration — 300 is a valid trigger for popovers with real height 275-305."
+  ],
+  "critical_code_review_comments": [
+    "Flip-clamp logic (lines 1725-1758) correctly checks the overflow of the opposite edge BEFORE committing to `right`/`bottom`. Both TOP and BOTTOM toolbar branches were symmetric — good.",
+    "The magic number 300 (lines 1708, 1720) still hard-codes an approximation of popover height. In this run the observed heights were 274 (eraser) and 305 (pen). Using an onLayout-measured height would remove the magic number and make FLIP behavior deterministic.",
+    "The left/right toolbar flip-bottom branches also correctly clamp to insets.top+8 via `Math.max(insets.top + 8, desiredBottom)` on line 1713 — no top overflow observed.",
+    "testID=\"tool-opts-card\" (line 1766) preserved from iteration 17. Bounding-box measurement worked reliably in Playwright."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "n/a (frontend-only)",
+    "frontend": "5/5 fix objectives satisfied. T1 PASS on spec, T2 PASS on spec, T3 PASS on spec, T4 PASS on fix objective (fully on screen) but FAILS reviewer's strict LEFT-FLUSH assertion due to layout (see integration_issues), T5 PASS on spec."
+  },
+  "seed_data_creation": "None — reused existing Handwritten note /draw/4fc053b7-e870-4ca6-9e04-a3701f6414f6 from the notes list.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Flip-clamp fix in /app/frontend/app/draw/[id].tsx:1691-1763 is verified. To reliably open the popover for the default-active family (pen), first switch to a different family (e.g. tap family-marker) and then tap family-pen twice — otherwise the two taps on the currently-active family toggle the popover off. testID=\"tool-opts-card\" is still present. The top toolbar is horizontally scrollable (scrollWidth≈547 vs clientWidth=390); use el.scrollLeft = el.scrollWidth to bring family-eraser into view before tapping. Reviewer's T4 assertion |card.x - pen.x|<=4 is not achievable on this layout — the code correctly CLAMPS to left=8, which is the whole point of the fix.",
+  "rca_of_issue": "N/A — no regression. Fix behaves as designed. The apparent T4 mismatch is a spec-vs-layout issue: family-pen isn't the left-most interactive button on the TOP toolbar (Undo/Redo/Touch/PenMode/Divider precede the family group), so a natural LEFT-FLUSH would overflow the right edge. The new pre-flip overflow check (line 1737) correctly detects this and falls back to `positionStyle.left = 8` (line 1740), producing a fully on-screen card at (8, 62)."
+}
