@@ -186,13 +186,21 @@ export default function DrawScreen() {
     } else {
       return viewport;
     }
-    // Fit width to viewport, derive height. For very-wide (landscape) papers we cap by height too.
-    let w = viewport.w;
-    let h = w / ratio;
-    if (h > viewport.h * 3) {
-      // extremely tall (would swamp scroll) — cap
-      h = viewport.h * 3;
+    // "Contain" fit: choose the largest w,h that fit inside the viewport while preserving
+    // ratio (w/h). This makes A4/Letter look like a real document floating in the canvas
+    // rather than being stretched to fill the viewport width.
+    const margin = 0.96; // small breathing room
+    const vRatio = viewport.w / Math.max(1, viewport.h);
+    let w: number;
+    let h: number;
+    if (vRatio > ratio) {
+      // Viewport is wider than the paper — constrain by height.
+      h = viewport.h * margin;
       w = h * ratio;
+    } else {
+      // Viewport narrower than or equal to the paper — constrain by width.
+      w = viewport.w * margin;
+      h = w / ratio;
     }
     return { w, h };
   }, [viewport.w, viewport.h, paperSize, customSize, orientation]);
@@ -230,11 +238,12 @@ export default function DrawScreen() {
   const basePageH = pageDims.h;
   const totalPageH = basePageH * pageCount;
   // Derived translation. Horizontal: pin the page center to the viewport center at any scale.
-  // Vertical: pin the *top* of the page to the top of the viewport (adjusted by user scroll).
+  // Vertical: pin the *top* of the page to a small top margin (adjusted by user scroll).
   // This prevents the paper from drifting down and leaving empty space above when zooming out.
   const centerOffsetX = Math.max(0, (viewport.w - pageDims.w) / 2);
   const tx = centerOffsetX + (pageDims.w / 2) * (1 - scale);
-  const ty = -scrollY * scale;
+  const topPad = spacing.md; // small breathing room above the page
+  const ty = topPad - scrollY * scale;
 
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
