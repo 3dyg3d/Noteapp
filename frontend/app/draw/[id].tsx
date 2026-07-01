@@ -1961,44 +1961,44 @@ function ThicknessSlider({
   const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const knobX = pct * trackW;
 
-  const pan = Gesture.Pan()
-    .runOnJS(true)
-    .minDistance(0)
-    .onBegin((e) => {
-      const nx = Math.max(0, Math.min(trackW, e.x));
-      onChange(clamp(min + (nx / Math.max(1, trackW)) * (max - min)));
-    })
-    .onUpdate((e) => {
-      const nx = Math.max(0, Math.min(trackW, e.x));
-      onChange(clamp(min + (nx / Math.max(1, trackW)) * (max - min)));
-    });
+  // React Native's built-in touch responder — works inside a <Modal>, unlike
+  // react-native-gesture-handler which needs a GestureHandlerRootView wrapping
+  // the Modal's contents to function.
+  const handleTouch = (locationX: number) => {
+    const nx = Math.max(0, Math.min(trackW, locationX));
+    onChange(clamp(min + (nx / Math.max(1, trackW)) * (max - min)));
+  };
 
   return (
-    <GestureDetector gesture={pan}>
+    <View
+      onLayout={(ev) => setTrackW(ev.nativeEvent.layout.width)}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderGrant={(e) => handleTouch(e.nativeEvent.locationX)}
+      onResponderMove={(e) => handleTouch(e.nativeEvent.locationX)}
+      onResponderTerminationRequest={() => false}
+      style={{ height: 40, justifyContent: 'center', paddingVertical: 8 }}
+    >
+      <View style={{ height: 4, backgroundColor: trackColor, borderRadius: 2 }} />
+      <View style={{ position: 'absolute', left: 0, top: 18, height: 4, width: knobX, backgroundColor: fillColor, borderRadius: 2 }} />
       <View
-        onLayout={(ev) => setTrackW(ev.nativeEvent.layout.width)}
-        style={{ height: 32, justifyContent: 'center' }}
-      >
-        <View style={{ height: 4, backgroundColor: trackColor, borderRadius: 2 }} />
-        <View style={{ position: 'absolute', height: 4, width: knobX, backgroundColor: fillColor, borderRadius: 2 }} />
-        <View
-          style={{
-            position: 'absolute',
-            left: Math.max(0, knobX - 12),
-            top: 4,
-            width: 24,
-            height: 24,
-            borderRadius: 12,
-            backgroundColor: knobColor,
-            shadowColor: '#000',
-            shadowOpacity: 0.25,
-            shadowRadius: 4,
-            shadowOffset: { width: 0, height: 2 },
-            elevation: 4,
-          }}
-        />
-      </View>
-    </GestureDetector>
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: Math.max(0, knobX - 12),
+          top: 8,
+          width: 24,
+          height: 24,
+          borderRadius: 12,
+          backgroundColor: knobColor,
+          shadowColor: '#000',
+          shadowOpacity: 0.25,
+          shadowRadius: 4,
+          shadowOffset: { width: 0, height: 2 },
+          elevation: 4,
+        }}
+      />
+    </View>
   );
 }
 
