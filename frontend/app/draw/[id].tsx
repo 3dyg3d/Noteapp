@@ -493,21 +493,68 @@ export default function DrawScreen() {
     });
   };
 
+  // Eraser mode: 'stroke' removes the whole stroke on contact; 'partial' cuts out just
+  // the portion under the eraser (leaves the rest of the stroke behind).
+  const [eraserMode, setEraserMode] = useState<'stroke' | 'partial'>('stroke');
+  useEffect(() => {
+    AsyncStorage.getItem('galaxynotes:eraser-mode').then((v) => {
+      if (v === 'stroke' || v === 'partial') setEraserMode(v);
+    });
+  }, []);
+  const setEraserModePersist = useCallback((m: 'stroke' | 'partial') => {
+    setEraserMode(m);
+    AsyncStorage.setItem('galaxynotes:eraser-mode', m).catch(() => {});
+  }, []);
+
   const eraseAt = (x: number, y: number) => {
     const radius = widths.eraser / 2;
     setItems((prev) => {
-      const next = prev.filter((it) => {
+      let changed = false;
+      const nextItems: Item[] = [];
+      for (const it of prev) {
         if (it.kind === 'stroke') {
-          for (let i = 1; i < it.points.length; i++) {
-            if (distPtSeg({ x, y }, it.points[i - 1], it.points[i]) <= radius + it.width / 2) {
-              return false;
+          if (eraserMode === 'stroke') {
+            // Whole-stroke erase: remove if ANY segment intersects the eraser disc.
+            let hit = false;
+            for (let i = 1; i < it.points.length; i++) {
+              if (distPtSeg({ x, y }, it.points[i - 1], it.points[i]) <= radius + it.width / 2) {
+                hit = true;
+                break;
+              }
+            }
+            if (hit) { changed = true; continue; }
+            nextItems.push(it);
+          } else {
+            // Partial erase: keep only the points that are OUTSIDE the eraser disc, and
+            // split the stroke into sub-strokes wherever the pointer cut through it.
+            const r = radius + it.width / 2;
+            const segments: { x: number; y: number; t: number }[][] = [];
+            let cur: { x: number; y: number; t: number }[] = [];
+            for (const p of it.points) {
+              const inside = Math.hypot(p.x - x, p.y - y) <= r;
+              if (inside) {
+                if (cur.length >= 2) segments.push(cur);
+                cur = [];
+              } else {
+                cur.push(p);
+              }
+            }
+            if (cur.length >= 2) segments.push(cur);
+            if (segments.length === 1 && segments[0].length === it.points.length) {
+              // Nothing removed for this stroke.
+              nextItems.push(it);
+            } else {
+              changed = true;
+              // Emit one stroke per surviving segment.
+              for (const seg of segments) {
+                nextItems.push({ ...it, points: seg });
+              }
             }
           }
-          return true;
         } else {
+          // Shapes: only "stroke" (whole-shape) erase applies.
           const a = it.start;
           const b = it.end;
-          // simplified: check distance to bounding box corners and midpoints
           const candidates = [
             a,
             b,
@@ -515,17 +562,19 @@ export default function DrawScreen() {
             { x: b.x, y: a.y },
             { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
           ];
+          let hit = false;
           for (const c of candidates) {
-            if (Math.hypot(c.x - x, c.y - y) <= radius + it.width) return false;
+            if (Math.hypot(c.x - x, c.y - y) <= radius + it.width) { hit = true; break; }
           }
-          return true;
+          if (hit) { changed = true; continue; }
+          nextItems.push(it);
         }
-      });
-      if (next.length !== prev.length) {
-        pushHistory(prev);
-        persist(next, paper, paperSize, paperColorId);
       }
-      return next;
+      if (changed) {
+        pushHistory(prev);
+        persist(nextItems, paper, paperSize, paperColorId);
+      }
+      return changed ? nextItems : prev;
     });
   };
 
@@ -1222,7 +1271,7 @@ export default function DrawScreen() {
         <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowToolOpts(false)}>
           {(() => {
             const CARD_W = 260;
-            const APPROX_H = 220; // rough card height for placement (color grid grows with palette)
+            const APPROX_H = 400; // rough card height (title + slider + 8-row color grid + Done btn)
             const winW = winWidth;
             const winH = winHeight;
             let left: number;
@@ -1287,33 +1336,31 @@ export default function DrawScreen() {
 
             {tool !== 'eraser' && (
               <>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Color</Text>
-                  <Pressable
-                    onPress={() => setPickerFor({ slot: null })}
-                    testID="opt-more-colors"
-                    hitSlop={6}
-                  >
-                    <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>
-                      More…
-                    </Text>
-                  </Pressable>
-                </View>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                  {PALETTE.map((c) => (
-                    <Pressable
-                      key={c}
-                      onPress={() => setColor(c)}
-                      testID={`opt-color-${c}`}
-                      style={[
-                        styles.colorDot,
-                        {
-                          backgroundColor: c,
-                          borderColor: color === c ? colors.brand : colors.border,
-                          borderWidth: color === c ? 3 : 1,
-                        },
-                      ]}
-                    />
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Color</Text>
+                {/* Inline grid picker — 8 cols × 8 rows so the full palette lives inside
+                    the tool popover, no secondary modal needed. */}
+                <View style={{ gap: 3, alignSelf: 'center' }}>
+                  {COLOR_GRID.map((row, r) => (
+                    <View key={`row-${r}`} style={{ flexDirection: 'row', gap: 3 }}>
+                      {row.map((c) => {
+                        const selected = c.toLowerCase() === color.toLowerCase();
+                        return (
+                          <Pressable
+                            key={c}
+                            testID={`opt-color-${c}`}
+                            onPress={() => { haptic.selection(); setColor(c); }}
+                            style={{
+                              width: 24,
+                              height: 24,
+                              borderRadius: 4,
+                              backgroundColor: c,
+                              borderWidth: selected ? 2.5 : 1,
+                              borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
+                            }}
+                          />
+                        );
+                      })}
+                    </View>
                   ))}
                 </View>
               </>
@@ -1327,6 +1374,42 @@ export default function DrawScreen() {
                   ? 'Pencil is rendered at 75% opacity to look softer.'
                   : 'Marker is fully opaque.'}
               </Text>
+            )}
+
+            {tool === 'eraser' && (
+              <>
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Eraser mode</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: spacing.sm }}>
+                  {([
+                    { key: 'stroke' as const, label: 'Whole stroke', icon: 'trash-outline' as const },
+                    { key: 'partial' as const, label: 'Partial', icon: 'cut-outline' as const },
+                  ]).map((m) => {
+                    const active = eraserMode === m.key;
+                    return (
+                      <Pressable
+                        key={m.key}
+                        testID={`eraser-mode-${m.key}`}
+                        onPress={() => { haptic.selection(); setEraserModePersist(m.key); }}
+                        style={{
+                          flex: 1,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 4,
+                          paddingVertical: spacing.sm,
+                          borderRadius: radius.md,
+                          backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                        }}
+                      >
+                        <Ionicons name={m.icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                        <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontSize: typeScale.sm, fontWeight: active ? '700' : '500' }}>
+                          {m.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
             )}
 
             <Pressable
