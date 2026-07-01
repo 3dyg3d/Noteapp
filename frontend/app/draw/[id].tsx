@@ -15,7 +15,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ruler, { RulerState, rulerProject, rulerEdgeDistance } from '@/src/components/Ruler';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSharedValue } from 'react-native-reanimated';
@@ -133,29 +133,29 @@ type ToolFamily = 'pen' | 'pencil' | 'marker' | 'tape' | 'select' | 'laser' | 'e
 
 const FAMILY_ORDER: ToolFamily[] = ['pen', 'pencil', 'marker', 'tape', 'select', 'laser', 'eraser'];
 
-const FAMILY_META: Record<ToolFamily, { label: string; icon: any }> = {
-  pen:    { label: 'Pen',    icon: 'brush' },
-  pencil: { label: 'Pencil', icon: 'pencil-outline' },
-  marker: { label: 'Marker', icon: 'color-wand' },
-  tape:   { label: 'Tape',   icon: 'bookmark-outline' },
-  select: { label: 'Select', icon: 'scan-outline' },
-  laser:  { label: 'Laser',  icon: 'flashlight-outline' },
-  eraser: { label: 'Eraser', icon: 'close-circle-outline' },
+const FAMILY_META: Record<ToolFamily, { label: string; icon: any; lib?: 'ion' | 'mci' }> = {
+  pen:    { label: 'Pen',    icon: 'fountain-pen-tip', lib: 'mci' },
+  pencil: { label: 'Pencil', icon: 'pencil',           lib: 'mci' },
+  marker: { label: 'Marker', icon: 'marker',           lib: 'mci' },
+  tape:   { label: 'Tape',   icon: 'format-color-highlight', lib: 'mci' },
+  select: { label: 'Select', icon: 'selection',        lib: 'mci' },
+  laser:  { label: 'Laser',  icon: 'laser-pointer',    lib: 'mci' },
+  eraser: { label: 'Eraser', icon: 'eraser',           lib: 'mci' },
 };
 
-const FAMILY_VARIANTS: Record<ToolFamily, { key: string; label: string; icon: any }[]> = {
-  pen:    [ { key: 'fountain',  label: 'Fountain',  icon: 'create-outline' },
-            { key: 'ballpoint', label: 'Ballpoint', icon: 'brush' } ],
-  pencil: [ { key: 'pencil', label: 'Pencil', icon: 'pencil-outline' } ],
-  marker: [ { key: 'flat',  label: 'Flat tip',  icon: 'remove-outline' },
-            { key: 'round', label: 'Round tip', icon: 'ellipse' } ],
-  tape:   [ { key: 'tape', label: 'Tape', icon: 'bookmark-outline' } ],
-  select: [ { key: 'rect',  label: 'Rectangle', icon: 'scan-outline' },
-            { key: 'lasso', label: 'Lasso',     icon: 'analytics-outline' } ],
-  laser:  [ { key: 'line', label: 'Line laser', icon: 'remove-outline' },
-            { key: 'spot', label: 'Spot laser', icon: 'radio-button-on' } ],
-  eraser: [ { key: 'stroke', label: 'Stroke erase', icon: 'trash-outline' },
-            { key: 'area',   label: 'Area erase',   icon: 'cut-outline' } ],
+const FAMILY_VARIANTS: Record<ToolFamily, { key: string; label: string; icon: any; lib?: 'ion' | 'mci' }[]> = {
+  pen:    [ { key: 'fountain',  label: 'Fountain',  icon: 'fountain-pen', lib: 'mci' },
+            { key: 'ballpoint', label: 'Ballpoint', icon: 'pen',          lib: 'mci' } ],
+  pencil: [ { key: 'pencil', label: 'Pencil', icon: 'pencil-outline', lib: 'mci' } ],
+  marker: [ { key: 'flat',  label: 'Flat tip',  icon: 'marker',        lib: 'mci' },
+            { key: 'round', label: 'Round tip', icon: 'brush-variant', lib: 'mci' } ],
+  tape:   [ { key: 'tape', label: 'Tape', icon: 'format-color-highlight', lib: 'mci' } ],
+  select: [ { key: 'rect',  label: 'Rectangle', icon: 'select-drag', lib: 'mci' },
+            { key: 'lasso', label: 'Lasso',     icon: 'lasso',       lib: 'mci' } ],
+  laser:  [ { key: 'line', label: 'Line laser', icon: 'ray-start-arrow', lib: 'mci' },
+            { key: 'spot', label: 'Spot laser', icon: 'circle-slice-8',  lib: 'mci' } ],
+  eraser: [ { key: 'stroke', label: 'Stroke erase', icon: 'eraser',        lib: 'mci' },
+            { key: 'area',   label: 'Area erase',   icon: 'eraser-variant', lib: 'mci' } ],
 };
 
 // Convert a (family, variant) pair to the concrete internal drawing tool the
@@ -329,6 +329,7 @@ export default function DrawScreen() {
   // currently-active drawing color).
   const [quickColors, setQuickColors] = useState<string[]>(DEFAULT_QUICK_COLORS);
   const [recentColors, setRecentColors] = useState<string[]>([]); // last picks — most recent first, max 8
+  const [favoriteColors, setFavoriteColors] = useState<string[]>([]); // user-pinned colors, max 12
   const [pickerFor, setPickerFor] = useState<{ slot: number | null } | null>(null);
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null); // anchor for the grid picker Modal
   useEffect(() => {
@@ -353,6 +354,14 @@ export default function DrawScreen() {
         } catch {}
       }
     });
+    AsyncStorage.getItem('galaxynotes:favorite-colors').then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setFavoriteColors(parsed.slice(0, 12));
+        } catch {}
+      }
+    });
   }, []);
   const setQuickColorSlot = useCallback((slot: number, hex: string) => {
     setQuickColors((prev) => {
@@ -367,6 +376,16 @@ export default function DrawScreen() {
       const filtered = prev.filter((c) => c.toLowerCase() !== hex.toLowerCase());
       const next = [hex, ...filtered].slice(0, 8);
       AsyncStorage.setItem('galaxynotes:recent-colors', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+  const toggleFavoriteColor = useCallback((hex: string) => {
+    setFavoriteColors((prev) => {
+      const has = prev.some((c) => c.toLowerCase() === hex.toLowerCase());
+      const next = has
+        ? prev.filter((c) => c.toLowerCase() !== hex.toLowerCase())
+        : [hex, ...prev].slice(0, 12);
+      AsyncStorage.setItem('galaxynotes:favorite-colors', JSON.stringify(next)).catch(() => {});
       return next;
     });
   }, []);
@@ -1271,6 +1290,7 @@ export default function DrawScreen() {
             <ToolBtn
               key={`family-${f}`}
               icon={FAMILY_META[f].icon}
+              iconLib={FAMILY_META[f].lib}
               label={FAMILY_META[f].label}
               active={family === f}
               onPress={(e) => handleFamilyTap(f, e)}
@@ -1280,13 +1300,13 @@ export default function DrawScreen() {
           {/* Ruler toggle — sits alongside the tool families but is a modifier that
               can be turned on/off independently of the currently selected drawing tool. */}
           <ToolBtn
-            icon="analytics-outline"
+            icon="ruler"
+            iconLib="mci"
             label="Ruler"
             active={rulerEnabled}
             onPress={() => {
               haptic.selection();
               if (!rulerEnabled) {
-                // Recenter the ruler on the viewport when turning it on.
                 setRulerState((prev) => ({ ...prev, x: viewport.w / 2, y: viewport.h / 2, angle: 0 }));
               }
               setRulerEnabled((v) => !v);
@@ -1294,72 +1314,6 @@ export default function DrawScreen() {
             testID="tool-ruler"
           />
           <Divider vertical={vertical} />
-          {/* Quick colors — 6 user-customizable slots. Tap = open grid picker to
-              reassign this slot (and set it as the active color). */}
-          {quickColors.map((c, slot) => (
-            <Pressable
-              key={`quick-${slot}`}
-              onPress={(e) => {
-                haptic.selection();
-                const px = e?.nativeEvent?.pageX;
-                const py = e?.nativeEvent?.pageY;
-                if (typeof px === 'number' && typeof py === 'number') {
-                  setPickerAnchor({ x: px, y: py });
-                } else {
-                  setPickerAnchor(null);
-                }
-                setPickerFor({ slot });
-              }}
-              testID={`quick-color-${slot}`}
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9,
-                backgroundColor: c,
-                borderColor: color === c ? colors.brand : colors.border,
-                borderWidth: color === c ? 2 : 1,
-                marginHorizontal: 2,
-              }}
-            />
-          ))}
-          <Divider vertical={vertical} />
-          {/* Thickness chip — tap to open a popover with a draggable slider. */}
-          <Pressable
-            onPress={(e) => {
-              haptic.selection();
-              const px = e?.nativeEvent?.pageX;
-              const py = e?.nativeEvent?.pageY;
-              if (typeof px === 'number' && typeof py === 'number') {
-                setToolOptAnchor({ x: px, y: py });
-              } else {
-                setToolOptAnchor(null);
-              }
-              setShowToolOpts(true);
-            }}
-            testID="tool-thickness"
-            style={{
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingHorizontal: 8,
-              paddingVertical: 4,
-              borderRadius: radius.sm,
-              marginHorizontal: 2,
-              backgroundColor: colors.surfaceSecondary,
-              minWidth: 44,
-            }}
-          >
-            <View
-              style={{
-                width: 24,
-                height: Math.min(12, Math.max(1.5, widths[tool] || 3)),
-                backgroundColor: colors.onSurface,
-                borderRadius: 999,
-              }}
-            />
-            <Text style={{ fontSize: 9, color: colors.muted, marginTop: 2, fontWeight: '600' }}>
-              {Math.round(widths[tool] || 3)}pt
-            </Text>
-          </Pressable>
         </ScrollView>
       </View>
     );
@@ -1798,7 +1752,11 @@ export default function DrawScreen() {
                           backgroundColor: active ? colors.brand : colors.surfaceSecondary,
                         }}
                       >
-                        <Ionicons name={v.icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                        {v.lib === 'mci' ? (
+                          <MaterialCommunityIcons name={v.icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                        ) : (
+                          <Ionicons name={v.icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                        )}
                         <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontSize: typeScale.sm, fontWeight: active ? '700' : '500' }}>
                           {v.label}
                         </Text>
@@ -1982,6 +1940,46 @@ export default function DrawScreen() {
                 <Ionicons name="close" size={22} color={colors.muted} />
               </Pressable>
             </View>
+
+            {/* Favorites row (star to pin colors here from the grid via long-press). */}
+            {favoriteColors.length > 0 && (
+              <>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                  <Ionicons name="star" size={12} color={colors.brand} />
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Favorites</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 3, marginBottom: spacing.sm, flexWrap: 'wrap' }}>
+                  {favoriteColors.map((c) => {
+                    const selected = c.toLowerCase() === color.toLowerCase();
+                    return (
+                      <Pressable
+                        key={`fav-${c}`}
+                        testID={`fav-color-${c}`}
+                        onPress={() => {
+                          haptic.selection();
+                          setColor(c);
+                          pushRecentColor(c);
+                          if (pickerFor && pickerFor.slot !== null && pickerFor.slot !== undefined) {
+                            setQuickColorSlot(pickerFor.slot, c);
+                          }
+                          setPickerFor(null); setPickerAnchor(null);
+                        }}
+                        onLongPress={() => { haptic.warning(); toggleFavoriteColor(c); }}
+                        delayLongPress={400}
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 4,
+                          backgroundColor: c,
+                          borderWidth: selected ? 2 : 1,
+                          borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
+                        }}
+                      />
+                    );
+                  })}
+                </View>
+              </>
+            )}
 
             {/* Recent colors row (only if we have any). */}
             {recentColors.length > 0 && (
@@ -2921,14 +2919,17 @@ function ToolBtn({
   active,
   onPress,
   testID,
+  iconLib,
 }: {
   icon: any;
   label: string;
   active: boolean;
   onPress: (e?: any) => void;
   testID?: string;
+  iconLib?: 'ion' | 'mci';
 }) {
   const { colors } = useTheme();
+  const IconComp: any = iconLib === 'mci' ? MaterialCommunityIcons : Ionicons;
   return (
     <Pressable
       testID={testID}
@@ -2946,7 +2947,7 @@ function ToolBtn({
         minWidth: 44,
       }}
     >
-      <Ionicons name={icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+      <IconComp name={icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
       <Text style={{ fontSize: 9, color: active ? colors.onBrandPrimary : colors.onSurface, marginTop: 1, fontWeight: '600' }}>
         {label}
       </Text>
