@@ -330,6 +330,7 @@ export default function DrawScreen() {
   const [quickColors, setQuickColors] = useState<string[]>(DEFAULT_QUICK_COLORS);
   const [recentColors, setRecentColors] = useState<string[]>([]); // last picks — most recent first, max 8
   const [pickerFor, setPickerFor] = useState<{ slot: number | null } | null>(null);
+  const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null); // anchor for the grid picker Modal
   useEffect(() => {
     AsyncStorage.getItem('galaxynotes:quick-colors').then((raw) => {
       if (raw) {
@@ -1298,7 +1299,17 @@ export default function DrawScreen() {
           {quickColors.map((c, slot) => (
             <Pressable
               key={`quick-${slot}`}
-              onPress={() => { haptic.selection(); setPickerFor({ slot }); }}
+              onPress={(e) => {
+                haptic.selection();
+                const px = e?.nativeEvent?.pageX;
+                const py = e?.nativeEvent?.pageY;
+                if (typeof px === 'number' && typeof py === 'number') {
+                  setPickerAnchor({ x: px, y: py });
+                } else {
+                  setPickerAnchor(null);
+                }
+                setPickerFor({ slot });
+              }}
               testID={`quick-color-${slot}`}
               style={{
                 width: 18,
@@ -1945,8 +1956,13 @@ export default function DrawScreen() {
             onPress={(e) => e.stopPropagation && e.stopPropagation()}
             style={{
               position: 'absolute',
-              alignSelf: 'center',
-              top: '20%',
+              // Anchor near the tapped color chip if we have a position; else center-top fallback.
+              left: pickerAnchor
+                ? Math.max(8, Math.min(winWidth - 240 - 8, pickerAnchor.x - 30))
+                : Math.max(8, (winWidth - 240) / 2),
+              top: pickerAnchor
+                ? Math.max(insets.top + 8, Math.min(winHeight - 380, pickerAnchor.y - 380))
+                : winHeight * 0.2,
               width: 240,
               backgroundColor: colors.surface,
               borderRadius: radius.lg,
@@ -1985,7 +2001,7 @@ export default function DrawScreen() {
                           if (pickerFor && pickerFor.slot !== null && pickerFor.slot !== undefined) {
                             setQuickColorSlot(pickerFor.slot, c);
                           }
-                          setPickerFor(null);
+                          setPickerFor(null); setPickerAnchor(null);
                         }}
                         style={{
                           width: 22,
@@ -2019,7 +2035,7 @@ export default function DrawScreen() {
                           if (pickerFor && pickerFor.slot !== null && pickerFor.slot !== undefined) {
                             setQuickColorSlot(pickerFor.slot, c);
                           }
-                          setPickerFor(null);
+                          setPickerFor(null); setPickerAnchor(null);
                         }}
                         style={{
                           width: 22,
@@ -2841,25 +2857,38 @@ function ThicknessSlider({
   knobColor: string;
 }) {
   const [trackW, setTrackW] = useState(200);
+  const trackLeftRef = useRef(0); // absolute pageX of the track's left edge, captured once at layout
   const clamp = (v: number) => Math.max(min, Math.min(max, v));
   const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const knobX = pct * trackW;
 
   // React Native's built-in touch responder — works inside a <Modal>, unlike
-  // react-native-gesture-handler which needs a GestureHandlerRootView wrapping
-  // the Modal's contents to function.
-  const handleTouch = (locationX: number) => {
-    const nx = Math.max(0, Math.min(trackW, locationX));
-    onChange(clamp(min + (nx / Math.max(1, trackW)) * (max - min)));
+  // react-native-gesture-handler. We use absolute `pageX` (not the flaky `locationX`
+  // which drifts when the parent re-renders during the drag) and subtract the track's
+  // captured left edge to compute a stable position within the track.
+  const commit = (pageX: number) => {
+    const nx = Math.max(0, Math.min(trackW, pageX - trackLeftRef.current));
+    const raw = min + (nx / Math.max(1, trackW)) * (max - min);
+    // Round to 0.1 pt precision to prevent tiny sub-pixel jitter from re-triggering renders.
+    const rounded = Math.round(raw * 10) / 10;
+    if (rounded !== value) onChange(clamp(rounded));
   };
 
   return (
     <View
-      onLayout={(ev) => setTrackW(ev.nativeEvent.layout.width)}
+      onLayout={(ev) => {
+        setTrackW(ev.nativeEvent.layout.width);
+      }}
       onStartShouldSetResponder={() => true}
       onMoveShouldSetResponder={() => true}
-      onResponderGrant={(e) => handleTouch(e.nativeEvent.locationX)}
-      onResponderMove={(e) => handleTouch(e.nativeEvent.locationX)}
+      onResponderGrant={(e) => {
+        // Capture the track's absolute left edge at the start of the drag so that any
+        // subsequent parent re-renders (which move the popover around) don't cause the
+        // knob to jump. We derive it from the first touch's pageX minus its locationX.
+        trackLeftRef.current = e.nativeEvent.pageX - e.nativeEvent.locationX;
+        commit(e.nativeEvent.pageX);
+      }}
+      onResponderMove={(e) => commit(e.nativeEvent.pageX)}
       onResponderTerminationRequest={() => false}
       style={{ height: 40, justifyContent: 'center', paddingVertical: 8 }}
     >
