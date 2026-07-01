@@ -214,10 +214,8 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
               top: 0,
               width: displayLength,
               height: RULER_H,
+              // The translucent body itself defines the ruler edges — no border lines.
               backgroundColor: 'rgba(255, 255, 255, 0.42)',
-              borderTopWidth: 1.6,
-              borderBottomWidth: 1.4,
-              borderColor: 'rgba(255, 255, 255, 0.9)',
               overflow: 'visible',
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 2 },
@@ -228,18 +226,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           animatedStyle,
         ]}
       >
-        {/* Solid straight edge at the top — the pen-snapping line */}
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 0,
-            height: 1.5,
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          }}
-        />
+        {/* The translucent body defines the ruler edges — no explicit line drawn. */}
 
         {/* Tick marks — black graduation */}
         {ticks.map((t, i) => (

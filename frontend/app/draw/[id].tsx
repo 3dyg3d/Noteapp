@@ -1353,6 +1353,10 @@ export default function DrawScreen() {
   const [showPagesPanel, setShowPagesPanel] = useState(false);
   // Thumbnail size (0..1). 0 = small (many per row), 1 = large (roughly one per row).
   const [pageThumbSize, setPageThumbSize] = useState(0.3);
+  // Draft value updated live during a slider drag — only re-renders the tiny slider knob,
+  // not the whole thumbnail grid. On release we commit into pageThumbSize.
+  const [pageThumbSizeDraft, setPageThumbSizeDraft] = useState(0.3);
+  const thumbSliderWidthRef = useRef(0);
 
   // Pages panel helpers — operate on world-y coordinates (gap-inclusive) so items align.
   const deletePage = useCallback((pageIdx: number) => {
@@ -2683,45 +2687,53 @@ export default function DrawScreen() {
                   </Pressable>
                 </View>
 
-                {/* Size slider */}
+                {/* Size slider — smooth: draft-value updates the knob during drag,
+                    committed value updates thumbnails only on release. */}
                 <View style={{ marginBottom: spacing.sm }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Ionicons name="apps-outline" size={14} color={colors.muted} />
                     <View
                       style={{
                         flex: 1,
-                        height: 28,
+                        height: 32,
                         justifyContent: 'center',
+                      }}
+                      onLayout={(e) => {
+                        thumbSliderWidthRef.current = e.nativeEvent.layout.width;
                       }}
                       onStartShouldSetResponder={() => true}
                       onMoveShouldSetResponder={() => true}
+                      onResponderTerminationRequest={() => false}
                       onResponderGrant={(e) => {
-                        const w = (e as any).nativeEvent.layout?.width;
-                        // Position via percentage of the touch within the row
-                        const target = (e as any).nativeEvent;
-                        // Use pageX minus track's pageX would need measure — approximate via ratio of locationX/width later
-                        const lx = target.locationX ?? 0;
-                        const trackW = w || innerW - 20;
-                        setPageThumbSize(Math.max(0, Math.min(1, lx / Math.max(1, trackW))));
+                        const lx = (e as any).nativeEvent.locationX ?? 0;
+                        const w = Math.max(1, thumbSliderWidthRef.current);
+                        setPageThumbSizeDraft(Math.max(0, Math.min(1, lx / w)));
                       }}
                       onResponderMove={(e) => {
-                        const target = (e as any).nativeEvent;
-                        const lx = target.locationX ?? 0;
-                        const trackW = innerW - 22;
-                        setPageThumbSize(Math.max(0, Math.min(1, lx / Math.max(1, trackW))));
+                        const lx = (e as any).nativeEvent.locationX ?? 0;
+                        const w = Math.max(1, thumbSliderWidthRef.current);
+                        setPageThumbSizeDraft(Math.max(0, Math.min(1, lx / w)));
+                      }}
+                      onResponderRelease={() => {
+                        // Commit the draft value → thumbnails now re-render at the new size.
+                        setPageThumbSize(pageThumbSizeDraft);
+                      }}
+                      onResponderTerminate={() => {
+                        setPageThumbSize(pageThumbSizeDraft);
                       }}
                     >
                       <View style={{ height: 4, backgroundColor: colors.surfaceSecondary, borderRadius: 2 }} />
                       <View
+                        pointerEvents="none"
                         style={{
                           position: 'absolute',
-                          left: `${pageThumbSize * 100}%`,
-                          top: 6,
-                          width: 16,
-                          height: 16,
-                          borderRadius: 8,
+                          left: `${pageThumbSizeDraft * 100}%`,
+                          top: 8,
+                          width: 18,
+                          height: 18,
+                          borderRadius: 9,
                           backgroundColor: colors.brand,
-                          marginLeft: -8,
+                          marginLeft: -9,
                           borderWidth: 2,
                           borderColor: colors.surface,
                         }}
