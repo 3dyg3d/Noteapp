@@ -1690,20 +1690,37 @@ export default function DrawScreen() {
         <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => { setShowToolOpts(false); setExpandedColors(false); }}>
           {(() => {
             const CARD_W = 260;
-            const APPROX_H = 400; // rough card height (title + slider + 8-row color grid + Done btn)
+            const APPROX_H = 400;
             const winW = winWidth;
             const winH = winHeight;
+            // Approximate toolbar thickness (matches vertical width / horizontal height set in renderToolbar).
+            const TOOLBAR_THICKNESS = 60;
+            const GAP = 6;
             let left: number;
             let top: number;
             if (toolOptAnchor) {
-              // Horizontally: center on the tap point, clamp on-screen.
-              left = Math.max(8, Math.min(winW - CARD_W - 8, toolOptAnchor.x - CARD_W / 2));
-              // Vertically: prefer showing above the tap; if not enough room, show below.
-              const above = toolOptAnchor.y - APPROX_H - 12;
-              const below = toolOptAnchor.y + 12;
-              top = above > insets.top + 8 ? above : Math.min(winH - APPROX_H - 8, below);
+              // Position the popover on the OPPOSITE side of the toolbar so it never covers
+              // the tool buttons the user is looking at.
+              if (toolbarPos === 'left') {
+                left = TOOLBAR_THICKNESS + GAP;
+                // Start the popover at the tapped tool row (not shifted above/below).
+                top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, toolOptAnchor.y - 12));
+              } else if (toolbarPos === 'right') {
+                left = winW - TOOLBAR_THICKNESS - GAP - CARD_W;
+                top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, toolOptAnchor.y - 12));
+              } else if (toolbarPos === 'top') {
+                top = TOOLBAR_THICKNESS + GAP + insets.top;
+                // Start the popover at the tapped tool column.
+                left = Math.max(8, Math.min(winW - CARD_W - 8, toolOptAnchor.x - 24));
+              } else {
+                // bottom
+                top = winH - TOOLBAR_THICKNESS - GAP - APPROX_H - insets.bottom;
+                left = Math.max(8, Math.min(winW - CARD_W - 8, toolOptAnchor.x - 24));
+              }
+              // Clamp final position on-screen.
+              left = Math.max(8, Math.min(winW - CARD_W - 8, left));
+              top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, top));
             } else {
-              // Fallback: bottom of screen based on toolbar position.
               left = Math.max(8, (winW - CARD_W) / 2);
               top = winH - APPROX_H - (insets.bottom + 110);
             }
@@ -1852,18 +1869,18 @@ export default function DrawScreen() {
                   </View>
                 ) : (
                   // Default view: the 4 quick colors as chips (same set as toolbar).
-                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
+                  <View style={{ flexDirection: 'row', gap: 6, marginBottom: 4 }}>
                     {quickColors.map((c, i) => (
                       <Pressable
                         key={`opt-quick-${i}`}
                         testID={`opt-quick-${i}`}
                         onPress={() => { haptic.selection(); setColor(c); }}
                         style={{
-                          width: 34,
-                          height: 34,
-                          borderRadius: 17,
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
                           backgroundColor: c,
-                          borderWidth: color === c ? 3 : 1,
+                          borderWidth: color === c ? 2 : 1,
                           borderColor: color === c ? colors.brand : 'rgba(0,0,0,0.15)',
                         }}
                       />
