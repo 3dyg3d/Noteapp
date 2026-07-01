@@ -1690,77 +1690,74 @@ export default function DrawScreen() {
         <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => { setShowToolOpts(false); setExpandedColors(false); }}>
           {(() => {
             const CARD_W = 260;
-            const APPROX_H = 400;
+            // We do not use a fixed APPROX_H anymore. Instead we set `bottom` in the style
+            // for the flipped case so the popover's real height (whatever React lays out)
+            // aligns cleanly with the tool's bottom edge.
             const winW = winWidth;
             const winH = winHeight;
-            // Actual toolbar thickness matches the styles applied in renderToolbar (width 60 for
-            // vertical, ~52 for horizontal). Keep the popover flush against the toolbar with only
-            // a hair of a gap so it clearly "belongs" to the tapped tool.
             const TOOLBAR_THICKNESS = 60;
             const GAP = 2;
-            // Approximate visual size of a tool button so we can align the popover's edge to
-            // the button's edge (not just the tap-center).
-            const BTN_HALF = 14;
-            let left: number;
-            let top: number;
+            const BTN_HALF = 14; // half-height of a ToolBtn (~28px tall)
+            const positionStyle: any = {};
             if (toolOptAnchor) {
               if (toolbarPos === 'left') {
-                left = TOOLBAR_THICKNESS + GAP;
-                // Prefer aligning the TOP edge of the popover with the TOP edge of the tool.
-                const preferTop = toolOptAnchor.y - BTN_HALF;
-                if (preferTop + APPROX_H <= winH - insets.bottom - 8) {
-                  top = Math.max(insets.top + 8, preferTop);
+                positionStyle.left = TOOLBAR_THICKNESS + GAP;
+                const toolTop = toolOptAnchor.y - BTN_HALF;
+                const toolBottom = toolOptAnchor.y + BTN_HALF;
+                const roomBelow = winH - insets.bottom - 8 - toolTop;
+                // If we can fit ~a full popover below the tool top, align tops. Otherwise flip.
+                if (roomBelow >= 360) {
+                  positionStyle.top = Math.max(insets.top + 8, toolTop);
                 } else {
-                  // Not enough room below — flip so the BOTTOM edge of the popover lines up
-                  // with the BOTTOM edge of the tool.
-                  top = Math.max(insets.top + 8, toolOptAnchor.y + BTN_HALF - APPROX_H);
+                  positionStyle.bottom = Math.max(insets.bottom + 8, winH - toolBottom);
                 }
               } else if (toolbarPos === 'right') {
-                left = winW - TOOLBAR_THICKNESS - GAP - CARD_W;
-                const preferTop = toolOptAnchor.y - BTN_HALF;
-                if (preferTop + APPROX_H <= winH - insets.bottom - 8) {
-                  top = Math.max(insets.top + 8, preferTop);
+                positionStyle.right = TOOLBAR_THICKNESS + GAP;
+                const toolTop = toolOptAnchor.y - BTN_HALF;
+                const toolBottom = toolOptAnchor.y + BTN_HALF;
+                const roomBelow = winH - insets.bottom - 8 - toolTop;
+                if (roomBelow >= 360) {
+                  positionStyle.top = Math.max(insets.top + 8, toolTop);
                 } else {
-                  top = Math.max(insets.top + 8, toolOptAnchor.y + BTN_HALF - APPROX_H);
+                  positionStyle.bottom = Math.max(insets.bottom + 8, winH - toolBottom);
                 }
               } else if (toolbarPos === 'top') {
-                top = TOOLBAR_THICKNESS + GAP + insets.top;
-                // Prefer aligning the LEFT edge of the popover with the LEFT edge of the tool.
-                const preferLeft = toolOptAnchor.x - BTN_HALF;
-                if (preferLeft + CARD_W <= winW - 8) {
-                  left = Math.max(8, preferLeft);
+                positionStyle.top = TOOLBAR_THICKNESS + GAP + insets.top;
+                const toolLeft = toolOptAnchor.x - BTN_HALF;
+                const toolRight = toolOptAnchor.x + BTN_HALF;
+                const roomRight = winW - 8 - toolLeft;
+                if (roomRight >= CARD_W) {
+                  positionStyle.left = Math.max(8, toolLeft);
                 } else {
-                  // Flip: align the RIGHT edge of the popover with the RIGHT edge of the tool.
-                  left = Math.max(8, toolOptAnchor.x + BTN_HALF - CARD_W);
+                  positionStyle.right = Math.max(8, winW - toolRight);
                 }
               } else {
-                // bottom
-                top = winH - TOOLBAR_THICKNESS - GAP - APPROX_H - insets.bottom;
-                const preferLeft = toolOptAnchor.x - BTN_HALF;
-                if (preferLeft + CARD_W <= winW - 8) {
-                  left = Math.max(8, preferLeft);
+                // bottom toolbar
+                positionStyle.bottom = TOOLBAR_THICKNESS + GAP + insets.bottom;
+                const toolLeft = toolOptAnchor.x - BTN_HALF;
+                const toolRight = toolOptAnchor.x + BTN_HALF;
+                const roomRight = winW - 8 - toolLeft;
+                if (roomRight >= CARD_W) {
+                  positionStyle.left = Math.max(8, toolLeft);
                 } else {
-                  left = Math.max(8, toolOptAnchor.x + BTN_HALF - CARD_W);
+                  positionStyle.right = Math.max(8, winW - toolRight);
                 }
               }
-              // Final safety clamp so the popover always stays fully visible.
-              left = Math.max(8, Math.min(winW - CARD_W - 8, left));
-              top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, top));
             } else {
-              left = Math.max(8, (winW - CARD_W) / 2);
-              top = winH - APPROX_H - (insets.bottom + 110);
+              positionStyle.left = Math.max(8, (winW - CARD_W) / 2);
+              positionStyle.bottom = insets.bottom + 110;
             }
             return (
               <Pressable
+                testID="tool-opts-card"
                 onPress={(e) => e.stopPropagation && e.stopPropagation()}
                 style={[
                   styles.toolOptCard,
                   {
                     backgroundColor: colors.surface,
-                    left,
-                    top,
+                    ...positionStyle,
                     width: CARD_W,
-                    maxHeight: Math.min(560, winH - top - 16),
+                    maxHeight: winH - insets.top - insets.bottom - 24,
                     shadowColor: '#000',
                   },
                 ]}
