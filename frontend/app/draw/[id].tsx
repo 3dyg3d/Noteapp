@@ -2260,12 +2260,12 @@ export default function DrawScreen() {
             onPress={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              top: insets.top + 52,
-              right: spacing.sm,
-              width: 280,
+              top: insets.top + 40,
+              right: 4,
+              width: 260,
               maxHeight: '80%',
               backgroundColor: colors.surface,
-              borderRadius: radius.lg,
+              borderRadius: radius.md,
               paddingVertical: spacing.sm,
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 10 },
@@ -2335,13 +2335,48 @@ export default function DrawScreen() {
                 testID="draw-menu-spacing"
               />
             )}
-            <DrawMenuRow
-              icon="apps-outline"
-              label="Toolbar position"
-              valueText={toolbarPos.charAt(0).toUpperCase() + toolbarPos.slice(1)}
-              onPress={() => { setShowPaperMenu(false); setShowSubToolbar(true); }}
-              testID="draw-menu-toolbar"
-            />
+            {/* Inline toolbar position picker — 4 options as a segmented row. */}
+            <Text
+              style={{
+                color: colors.muted,
+                fontSize: typeScale.sm,
+                fontWeight: '600',
+                paddingHorizontal: spacing.lg,
+                paddingTop: spacing.sm,
+                marginBottom: 4,
+              }}
+            >
+              Toolbar position
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: spacing.lg, marginBottom: spacing.sm }}>
+              {(['top', 'bottom', 'left', 'right'] as const).map((pos) => {
+                const active = toolbarPos === pos;
+                const icon: any =
+                  pos === 'top'    ? 'align-vertical-top' :
+                  pos === 'bottom' ? 'align-vertical-bottom' :
+                  pos === 'left'   ? 'align-horizontal-left' : 'align-horizontal-right';
+                return (
+                  <Pressable
+                    key={pos}
+                    testID={`toolbar-pos-${pos}`}
+                    onPress={() => { haptic.selection(); update({ toolbarPosition: pos }); }}
+                    style={{
+                      flex: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      paddingVertical: 8,
+                      borderRadius: radius.sm,
+                      backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                    }}
+                  >
+                    <MaterialCommunityIcons name={icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                    <Text style={{ fontSize: 9, color: active ? colors.onBrandPrimary : colors.onSurface, marginTop: 2, fontWeight: '600', textTransform: 'capitalize' }}>
+                      {pos}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
             <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm, marginHorizontal: spacing.lg }} />
 
@@ -2707,78 +2742,9 @@ export default function DrawScreen() {
       </Modal>
 
       {/* SUB: Toolbar position */}
-      <Modal visible={showSubToolbar} transparent animationType="fade" onRequestClose={() => setShowSubToolbar(false)}>
-        <Pressable
-          style={styles.backdrop}
-          onPress={() => setShowSubToolbar(false)}
-        >
-          <Pressable
-            onPress={(e) => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              top: insets.top + 52,
-              right: spacing.sm,
-              width: 280,
-              backgroundColor: colors.surface,
-              borderRadius: radius.lg,
-              padding: spacing.md,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 10 },
-              shadowOpacity: 0.22,
-              shadowRadius: 24,
-              elevation: 16,
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm }}>
-              <Pressable onPress={() => { setShowSubToolbar(false); setShowPaperMenu(true); }} hitSlop={6}>
-                <Ionicons name="chevron-back" size={20} color={colors.onSurface} />
-              </Pressable>
-              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.base, fontWeight: '700', marginLeft: spacing.sm }}>
-                Toolbar position
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'center' }}>
-              {(['left', 'right', 'top', 'bottom'] as ToolbarPosition[]).map((pos) => {
-                const active = toolbarPos === pos;
-                const iconName: any =
-                  pos === 'left'
-                    ? 'chevron-back-circle-outline'
-                    : pos === 'right'
-                    ? 'chevron-forward-circle-outline'
-                    : pos === 'top'
-                    ? 'chevron-up-circle-outline'
-                    : 'chevron-down-circle-outline';
-                return (
-                  <Pressable
-                    key={pos}
-                    testID={`sub-toolbar-${pos}`}
-                    onPress={() => { haptic.selection(); update({ toolbarPosition: pos }); }}
-                    style={({ pressed }) => ({
-                      width: 110,
-                      paddingVertical: spacing.md,
-                      borderRadius: radius.md,
-                      backgroundColor: active
-                        ? colors.brandTertiary
-                        : pressed
-                        ? colors.surfaceTertiary
-                        : colors.surfaceSecondary,
-                      borderWidth: 2,
-                      borderColor: active ? colors.brand : 'transparent',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 4,
-                    })}
-                  >
-                    <Ionicons name={iconName} size={24} color={active ? colors.brand : colors.onSurface} />
-                    <Text style={{ color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500', fontSize: typeScale.sm }}>
-                      {pos.charAt(0).toUpperCase() + pos.slice(1)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </Pressable>
-        </Pressable>
+      {/* SUB: Toolbar position (removed — replaced with inline segmented row in the paper menu) */}
+      <Modal visible={false} transparent animationType="fade" onRequestClose={() => {}}>
+        <View />
       </Modal>
 
       {/* Title edit modal */}
