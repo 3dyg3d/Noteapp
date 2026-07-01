@@ -229,12 +229,12 @@ export default function DrawScreen() {
   // plus the user's vertical scroll offset across pages.
   const basePageH = pageDims.h;
   const totalPageH = basePageH * pageCount;
-  // Center the page horizontally inside the viewport when it's narrower than the container
-  // (which happens for landscape pages that don't fill the full viewport height, or in
-  // future when we ever compute a smaller page width).
+  // Derived translation. Horizontal: pin the page center to the viewport center at any scale.
+  // Vertical: pin the *top* of the page to the top of the viewport (adjusted by user scroll).
+  // This prevents the paper from drifting down and leaving empty space above when zooming out.
   const centerOffsetX = Math.max(0, (viewport.w - pageDims.w) / 2);
   const tx = centerOffsetX + (pageDims.w / 2) * (1 - scale);
-  const ty = (pageDims.h / 2) * (1 - scale) - scrollY * scale;
+  const ty = -scrollY * scale;
 
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
@@ -462,7 +462,10 @@ export default function DrawScreen() {
     .onStart(() => { scrollYStartRef.current = scrollY; })
     .onUpdate((e) => {
       // Only vertical pan — horizontal translation is ignored.
-      const maxScroll = Math.max(0, totalPageH - basePageH);
+      // At scale s the visible document window is viewport.h / s tall; scroll can go up to
+      // totalPageH minus that window (or 0 if the page already fits).
+      const visibleH = viewport.h / Math.max(0.01, scale);
+      const maxScroll = Math.max(0, totalPageH - visibleH);
       const next = Math.max(0, Math.min(maxScroll, scrollYStartRef.current - e.translationY / Math.max(0.5, scale)));
       setScrollY(next);
     });
@@ -965,10 +968,11 @@ export default function DrawScreen() {
                   const startY: number = (e as any)._py ?? e.nativeEvent.pageY;
                   const startScroll: number = (e as any)._sy ?? scrollY;
                   const dy = e.nativeEvent.pageY - startY;
-                  // Map thumb drag to canvas scroll.
-                  const trackH = pageDims.h - 2 * spacing.sm;
-                  const ratio = totalPageH / Math.max(1, basePageH);
-                  const maxScroll = Math.max(0, totalPageH - basePageH);
+                  // Map thumb drag to canvas scroll (scale-aware).
+                  const visibleH = viewport.h / Math.max(0.01, scale);
+                  const maxScroll = Math.max(0, totalPageH - visibleH);
+                  const trackH = viewport.h - 2 * spacing.sm;
+                  const ratio = maxScroll / Math.max(1, trackH - 40);
                   const next = Math.max(0, Math.min(maxScroll, startScroll + dy * ratio));
                   setScrollY(next);
                 }}
@@ -976,8 +980,8 @@ export default function DrawScreen() {
                   position: 'absolute',
                   left: -8,
                   width: 22,
-                  height: Math.max(40, (basePageH / Math.max(1, totalPageH)) * (pageDims.h - 2 * spacing.sm)),
-                  top: (scrollY / Math.max(1, totalPageH)) * (pageDims.h - 2 * spacing.sm),
+                  height: Math.max(40, ((viewport.h / Math.max(0.01, scale)) / Math.max(1, totalPageH)) * (viewport.h - 2 * spacing.sm)),
+                  top: (scrollY / Math.max(1, totalPageH)) * (viewport.h - 2 * spacing.sm),
                   backgroundColor: colors.brand,
                   borderRadius: 11,
                   opacity: 0.9,
