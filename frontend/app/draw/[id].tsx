@@ -1693,31 +1693,57 @@ export default function DrawScreen() {
             const APPROX_H = 400;
             const winW = winWidth;
             const winH = winHeight;
-            // Approximate toolbar thickness (matches vertical width / horizontal height set in renderToolbar).
+            // Actual toolbar thickness matches the styles applied in renderToolbar (width 60 for
+            // vertical, ~52 for horizontal). Keep the popover flush against the toolbar with only
+            // a hair of a gap so it clearly "belongs" to the tapped tool.
             const TOOLBAR_THICKNESS = 60;
-            const GAP = 6;
+            const GAP = 2;
+            // Approximate visual size of a tool button so we can align the popover's edge to
+            // the button's edge (not just the tap-center).
+            const BTN_HALF = 14;
             let left: number;
             let top: number;
             if (toolOptAnchor) {
-              // Position the popover on the OPPOSITE side of the toolbar so it never covers
-              // the tool buttons the user is looking at.
               if (toolbarPos === 'left') {
                 left = TOOLBAR_THICKNESS + GAP;
-                // Start the popover at the tapped tool row (not shifted above/below).
-                top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, toolOptAnchor.y - 12));
+                // Prefer aligning the TOP edge of the popover with the TOP edge of the tool.
+                const preferTop = toolOptAnchor.y - BTN_HALF;
+                if (preferTop + APPROX_H <= winH - insets.bottom - 8) {
+                  top = Math.max(insets.top + 8, preferTop);
+                } else {
+                  // Not enough room below — flip so the BOTTOM edge of the popover lines up
+                  // with the BOTTOM edge of the tool.
+                  top = Math.max(insets.top + 8, toolOptAnchor.y + BTN_HALF - APPROX_H);
+                }
               } else if (toolbarPos === 'right') {
                 left = winW - TOOLBAR_THICKNESS - GAP - CARD_W;
-                top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, toolOptAnchor.y - 12));
+                const preferTop = toolOptAnchor.y - BTN_HALF;
+                if (preferTop + APPROX_H <= winH - insets.bottom - 8) {
+                  top = Math.max(insets.top + 8, preferTop);
+                } else {
+                  top = Math.max(insets.top + 8, toolOptAnchor.y + BTN_HALF - APPROX_H);
+                }
               } else if (toolbarPos === 'top') {
                 top = TOOLBAR_THICKNESS + GAP + insets.top;
-                // Start the popover at the tapped tool column.
-                left = Math.max(8, Math.min(winW - CARD_W - 8, toolOptAnchor.x - 24));
+                // Prefer aligning the LEFT edge of the popover with the LEFT edge of the tool.
+                const preferLeft = toolOptAnchor.x - BTN_HALF;
+                if (preferLeft + CARD_W <= winW - 8) {
+                  left = Math.max(8, preferLeft);
+                } else {
+                  // Flip: align the RIGHT edge of the popover with the RIGHT edge of the tool.
+                  left = Math.max(8, toolOptAnchor.x + BTN_HALF - CARD_W);
+                }
               } else {
                 // bottom
                 top = winH - TOOLBAR_THICKNESS - GAP - APPROX_H - insets.bottom;
-                left = Math.max(8, Math.min(winW - CARD_W - 8, toolOptAnchor.x - 24));
+                const preferLeft = toolOptAnchor.x - BTN_HALF;
+                if (preferLeft + CARD_W <= winW - 8) {
+                  left = Math.max(8, preferLeft);
+                } else {
+                  left = Math.max(8, toolOptAnchor.x + BTN_HALF - CARD_W);
+                }
               }
-              // Clamp final position on-screen.
+              // Final safety clamp so the popover always stays fully visible.
               left = Math.max(8, Math.min(winW - CARD_W - 8, left));
               top = Math.max(insets.top + 8, Math.min(winH - APPROX_H - 8, top));
             } else {
