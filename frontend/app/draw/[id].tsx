@@ -519,26 +519,27 @@ export default function DrawScreen() {
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
       'worklet';
-      // Runs synchronously on the UI thread so `manager.fail()` aborts the gesture before
-      // any stroke can be created.
+      // RNGH exposes `event.pointerType` as a numeric enum (see PointerType.ts):
+      //   0 = TOUCH, 1 = STYLUS, 2 = MOUSE, 3 = KEY, 4 = OTHER
+      // We reject touch (finger) input synchronously when palm rejection is on so that
+      // the gesture never activates and no stroke is created.
       if (palmRejectionSV.value !== 1) return;
-      const allT: any = (event as any).allTouches || [];
-      const chgT: any = (event as any).changedTouches || [];
-      const touch: any = allT[0] || chgT[0];
-      const toolType: number | undefined = touch?.toolType;
-      const pointerType: string | undefined = (event as any).pointerType;
-      const isStylus =
-        toolType === 2 ||
-        toolType === 4 ||
-        pointerType === 'stylus' ||
-        pointerType === 'pen';
-      if (!isStylus) {
+      const pt = (event as any).pointerType;
+      if (pt === 0) {
+        // Finger — reject before the gesture can begin.
         manager.fail();
       }
     })
     .onBegin((e) => {
+      // Mirror pointerType on the JS side so palm rejection still works if the worklet
+      // path is bypassed for any reason. 0 = TOUCH (finger).
+      const pt = (e as any).pointerType;
+      // Default to allowing when pointerType is undefined (older devices) — but
+      // still explicitly block when we know it's a finger.
+      isStylusRef.current = pt !== 0;
       if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
+        liveShapeRef.current = null;
         return;
       }
       const w = toWorld(e.x, e.y);
@@ -948,26 +949,7 @@ export default function DrawScreen() {
         >
           {Platform.OS !== 'web' ? (
             <GestureDetector gesture={finalGesture}>
-              <View
-                style={{ flex: 1 }}
-                onStartShouldSetResponderCapture={(e) => {
-                  // React Native PointerEvent gives us `pointerType` on Android (S-Pen reports
-                  // 'pen'). We capture this BEFORE the RNGH gesture starts and stash it in
-                  // `isStylusRef` so palm rejection can reject finger touches.
-                  const pt = (e.nativeEvent as any).pointerType;
-                  if (pt === 'pen' || pt === 'stylus') {
-                    isStylusRef.current = true;
-                  } else if (pt === 'touch' || pt === 'finger') {
-                    isStylusRef.current = false;
-                  } else {
-                    // Undefined pointerType (older Android / iOS finger) — assume touch.
-                    // If a user is actually using a stylus that doesn't report pointerType,
-                    // they can toggle "Pen only" OFF from the toolbar to allow finger drawing.
-                    isStylusRef.current = false;
-                  }
-                  return false; // don't actually claim the responder; let RNGH handle it
-                }}
-              >
+              <View style={{ flex: 1 }}>
                 <Canvas style={StyleSheet.absoluteFill}>
                   <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
                     {Array.from({ length: pageCount }).map((_, i) => (
