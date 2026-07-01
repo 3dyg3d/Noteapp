@@ -89,7 +89,21 @@ const PAPER_COLORS: { id: string; light: string; dark: string }[] = [
 // Full palette shown in tool popovers (long-press / re-tap tool).
 const PALETTE = ['#1A1A1C', '#FFFFFF', '#B85C5C', '#D4A352', '#7B8C73', '#6E7A8A', '#8B7AA8', '#638C61', '#E11D48', '#2563EB', '#059669', '#DB2777'];
 // Quick colors shown as inline chips on the main toolbar — the four everyday colors.
-const QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */];
+// These are DEFAULTS; the user can long-press a slot to reassign it via the grid picker.
+const DEFAULT_QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */];
+
+// A Photoshop-style grid palette (8 columns × 8 rows) used everywhere the user
+// picks a color. Rows are: grayscale, red, orange, yellow, green, blue, purple, brown.
+const COLOR_GRID: string[][] = [
+  ['#000000','#333333','#4D4D4D','#666666','#808080','#B3B3B3','#CCCCCC','#FFFFFF'],
+  ['#7F0000','#B30000','#E30000','#FF3B30','#FF6961','#FFB3AB','#FFD9D6','#FFECEB'],
+  ['#7F3F00','#B36200','#E38800','#FF9500','#FFB759','#FFD59A','#FFE6C2','#FFF2E0'],
+  ['#7F6500','#B38F00','#E3B800','#FFCC00','#FFE066','#FFEE9C','#FFF6C7','#FFFBE6'],
+  ['#00532A','#00753E','#009F55','#34C759','#69D97C','#A5E9B3','#CDF1D5','#EAF9EC'],
+  ['#003E7A','#0057B7','#0075FF','#007AFF','#4C9DFF','#8CBFFF','#C4DDFF','#E4EFFF'],
+  ['#3C0072','#5A00A6','#7D2AE8','#AF52DE','#C387E8','#D7ADEF','#E9CFF6','#F5E7FA'],
+  ['#3D1F00','#5A2E00','#7B4200','#A66324','#C4864A','#D9AA79','#E9C9A8','#F6E5D2'],
+];
 
 // Continuous-slider ranges per tool (in points). Users can pick any value in [min, max].
 const WIDTH_RANGE: Record<Tool, { min: number; max: number }> = {
@@ -221,6 +235,29 @@ export default function DrawScreen() {
   // Tool state
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>('#1A1A1C');
+
+  // User-customizable quick colors on the toolbar.
+  const [quickColors, setQuickColors] = useState<string[]>(DEFAULT_QUICK_COLORS);
+  const [pickerFor, setPickerFor] = useState<{ slot: number | null } | null>(null); // null=closed, slot=null means "pick for active color"
+  useEffect(() => {
+    AsyncStorage.getItem('galaxynotes:quick-colors').then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length === 4) setQuickColors(parsed);
+        } catch {}
+      }
+    });
+  }, []);
+  const setQuickColorSlot = useCallback((slot: number, hex: string) => {
+    setQuickColors((prev) => {
+      const next = prev.slice();
+      next[slot] = hex;
+      AsyncStorage.setItem('galaxynotes:quick-colors', JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+
   const [widths, setWidths] = useState<Record<Tool, number>>(DEFAULT_WIDTHS);
   // Persist per-tool widths across sessions.
   useEffect(() => {
@@ -888,12 +925,14 @@ export default function DrawScreen() {
           <ToolBtn icon="ellipse-outline" label="Shape" active={isShapeTool(tool)} onPress={() => setShowToolPalette(true)} testID="tool-shape" />
           <ToolBtn icon="close-circle-outline" label="Eraser" active={tool === 'eraser'} onPress={(e) => handleToolTap('eraser', e)} testID="tool-eraser" />
           <Divider vertical={vertical} />
-          {/* Quick colors — 4 everyday colors. Full palette lives in the tool popover. */}
-          {QUICK_COLORS.map((c) => (
+          {/* Quick colors — 4 user-customizable slots. Tap = apply. Long-press = reassign via grid picker. */}
+          {quickColors.map((c, slot) => (
             <Pressable
-              key={c}
-              onPress={() => setColor(c)}
-              testID={`color-${c}`}
+              key={`quick-${slot}`}
+              onPress={() => { haptic.selection(); setColor(c); }}
+              onLongPress={() => { haptic.medium(); setPickerFor({ slot }); }}
+              delayLongPress={280}
+              testID={`quick-color-${slot}`}
               style={[
                 styles.colorDot,
                 {
@@ -1248,7 +1287,18 @@ export default function DrawScreen() {
 
             {tool !== 'eraser' && (
               <>
-                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 6 }}>Color</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Color</Text>
+                  <Pressable
+                    onPress={() => setPickerFor({ slot: null })}
+                    testID="opt-more-colors"
+                    hitSlop={6}
+                  >
+                    <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>
+                      More…
+                    </Text>
+                  </Pressable>
+                </View>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                   {PALETTE.map((c) => (
                     <Pressable
@@ -1289,6 +1339,80 @@ export default function DrawScreen() {
           </Pressable>
             );
           })()}
+        </Pressable>
+      </Modal>
+
+      {/* Grid color picker — used both for reassigning quick-color slots (long-press)
+          and for a "More…" full palette from the tool popover. */}
+      <Modal
+        visible={pickerFor !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPickerFor(null)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setPickerFor(null)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              alignSelf: 'center',
+              top: '20%',
+              width: 320,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.28,
+              shadowRadius: 20,
+              elevation: 12,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md }}>
+              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700' }}>
+                {pickerFor?.slot !== null && pickerFor?.slot !== undefined ? `Set quick color ${(pickerFor.slot ?? 0) + 1}` : 'Pick color'}
+              </Text>
+              <Pressable onPress={() => setPickerFor(null)} hitSlop={8} testID="picker-close">
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+
+            {/* Photoshop-style grid: 8 columns × 8 rows */}
+            <View style={{ gap: 4 }}>
+              {COLOR_GRID.map((row, r) => (
+                <View key={`row-${r}`} style={{ flexDirection: 'row', gap: 4 }}>
+                  {row.map((c) => {
+                    const selected = c.toLowerCase() === color.toLowerCase();
+                    return (
+                      <Pressable
+                        key={c}
+                        testID={`grid-color-${c}`}
+                        onPress={() => {
+                          haptic.selection();
+                          setColor(c);
+                          if (pickerFor && pickerFor.slot !== null && pickerFor.slot !== undefined) {
+                            setQuickColorSlot(pickerFor.slot, c);
+                          }
+                          setPickerFor(null);
+                        }}
+                        style={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: 6,
+                          backgroundColor: c,
+                          borderWidth: selected ? 3 : 1,
+                          borderColor: selected ? colors.brand : 'rgba(0,0,0,0.15)',
+                        }}
+                      />
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.md, textAlign: 'center' }}>
+              Long-press a quick color on the toolbar to reassign it.
+            </Text>
+          </Pressable>
         </Pressable>
       </Modal>
 
