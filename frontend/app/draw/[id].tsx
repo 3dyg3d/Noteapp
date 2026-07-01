@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { useSharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
@@ -216,6 +217,12 @@ export default function DrawScreen() {
   palmRejectionRef.current = settings.palmRejection;
   const autoAddPageRef = useRef(settings.autoAddPage);
   autoAddPageRef.current = settings.autoAddPage;
+  // Worklet-readable mirror so the synchronous onTouchesDown callback (running on the UI
+  // thread) can reject finger touches BEFORE the Pan activates on the native side.
+  const palmRejectionSV = useSharedValue(settings.palmRejection ? 1 : 0);
+  useEffect(() => {
+    palmRejectionSV.value = settings.palmRejection ? 1 : 0;
+  }, [settings.palmRejection, palmRejectionSV]);
 
   // Active drawing state (refs to avoid re-renders per touch)
   const livePtsRef = useRef<{ x: number; y: number; t: number }[]>([]);
@@ -458,11 +465,13 @@ export default function DrawScreen() {
     .minDistance(0)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
-      const allT = (event.allTouches as any[]) || [];
-      const chgT = (event.changedTouches as any[]) || [];
-      const touch: any = allT[0] ?? chgT[0];
-      // Android exposes `toolType` per-touch: 0=UNKNOWN, 1=finger, 2=stylus, 3=mouse, 4=eraser.
-      // iOS / web fall back to `pointerType` on the event: 'touch' = finger, 'stylus' / 'pen'.
+      'worklet';
+      // Runs synchronously on the UI thread so `manager.fail()` aborts the gesture before
+      // any stroke can be created.
+      if (palmRejectionSV.value !== 1) return;
+      const allT: any = (event as any).allTouches || [];
+      const chgT: any = (event as any).changedTouches || [];
+      const touch: any = allT[0] || chgT[0];
       const toolType: number | undefined = touch?.toolType;
       const pointerType: string | undefined = (event as any).pointerType;
       const isStylus =
@@ -470,20 +479,9 @@ export default function DrawScreen() {
         toolType === 4 ||
         pointerType === 'stylus' ||
         pointerType === 'pen';
-      // When palm rejection is on, ONLY allow strokes we can prove are from a stylus.
-      // No neutral fall-through — the user explicitly opted into "Pen only".
-      if (palmRejectionRef.current) {
-        if (!isStylus) {
-          isStylusRef.current = false;
-          manager.fail();
-          return;
-        }
-        isStylusRef.current = true;
-        return;
+      if (!isStylus) {
+        manager.fail();
       }
-      // Palm rejection off: be permissive — treat unknown as drawable so devices that don't
-      // report toolType still work.
-      isStylusRef.current = isStylus || (toolType === undefined && pointerType === undefined);
     })
     .onBegin((e) => {
       if (palmRejectionRef.current && !isStylusRef.current) {
@@ -491,6 +489,12 @@ export default function DrawScreen() {
         return;
       }
       const w = toWorld(e.x, e.y);
+      // Reject touches that started outside the page area (left/right margins or above/below pages)
+      if (w.x < 0 || w.x > pageDims.w || w.y < 0 || w.y > totalPageH) {
+        livePtsRef.current = [];
+        liveShapeRef.current = null;
+        return;
+      }
       if (isPenTool(tool)) {
         livePtsRef.current = [{ x: w.x, y: w.y, t: Date.now() }];
         setLiveTick((n) => n + 1);
@@ -884,10 +888,13 @@ export default function DrawScreen() {
                         />
                       </Group>
                     ))}
-                    {items.map((it, i) =>
-                      it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
-                    )}
-                    {livePreview}
+                    {/* Clip strokes & live preview to the page bounds so nothing draws outside */}
+                    <Group clip={{ x: 0, y: 0, width: pageDims.w, height: totalPageH }}>
+                      {items.map((it, i) =>
+                        it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`)
+                      )}
+                      {livePreview}
+                    </Group>
                   </Group>
                 </Canvas>
               </View>

@@ -153,6 +153,32 @@ frontend:
             Also defaulted the touches array to `event.allTouches ?? event.changedTouches` so we
             still inspect a touch when allTouches isn't populated yet.
 
+  - task: "Settings as side panel on tablets"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/settings.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            User reported: "in large screen like tablets the settings shouldnt cover the whole
+            screen, it can flow down and be on the right". Restructured the Settings root view
+            from a single full-width column to a row of [backdrop, right panel] on tablets
+            (`winW >= 720`):
+              - Outer container: `flexDirection: 'row'` with semi-transparent dark backdrop
+                (`rgba(0,0,0,0.35)`).
+              - Left side on tablet: a Pressable (`testID="settings-backdrop"`) with `flex: 1`
+                that calls `router.back()` when tapped — so users can dismiss the panel and
+                return to home/draw with a single tap outside.
+              - Right panel: fixed `width: 480` on tablet, takes the full width on phones
+                (`'100%'`). Has a soft shadow + 1-px divider on its left edge for affordance.
+                Background remains `colors.surface`.
+            Tab bar and content View no longer apply `maxWidth: contentMaxW` (now redundant
+            inside the 480-wide panel). All existing tabs, sections and toggles still render.
+
   - task: "Multi-page handwriting canvas (auto-add or manual add)"
     implemented: true
     working: "NA"

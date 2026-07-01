@@ -1,0 +1,67 @@
+{
+  "summary": "Verified the new 'Settings as side panel on tablets' behavior in /app/frontend/app/settings.tsx. Static wiring is correct (wide = winW >= 720, row layout, dark backdrop on tablet, 480px right-side panel with shadow + 1px left border, contentMaxW removed). Tablet (1024x1366) renders the dimmed backdrop on the LEFT and the 480-wide white panel on the RIGHT (panel bbox x=544, w=480) containing Settings title, all four tabs (General / Pen & Gestures / Security / About), and all toggles (toggle-status-bar, toggle-haptics, toggle-palm-rejection, toggle-auto-add-page). Phone (390x844) still renders full-screen (no backdrop, panel width 100%). However, tapping the backdrop on tablet does NOT close Settings — it throws 'ReferenceError: router is not defined' because `router.back()` is called on settings.tsx:126 but `router` is never imported from 'expo-router'. This is a one-line fix the main agent must apply. Regression smoke on home → FAB → Drawing template → handwriting canvas PASSED: tool-pen-mode/tool-pen/draw-back/draw-more all present, and the kebab still shows Page color / Page template / Page size / Toolbar position / Settings / Rename / Undo / Redo / Clear canvas / Move to trash.",
+  "verification_per_item": {
+    "1_static_wiring": {
+      "wide_constant_from_useWindowDimensions": "PASS — settings.tsx:17-18 `const { width: winW } = useWindowDimensions(); const wide = winW >= 720;`",
+      "outer_view_flexDirection_row_dynamic_bg": "PASS — settings.tsx:122 `<View style={{ flex: 1, flexDirection: 'row', backgroundColor: wide ? 'rgba(0,0,0,0.35)' : colors.surface }}>`",
+      "backdrop_pressable_only_when_wide": "PASS (wiring) — settings.tsx:123-129 `{wide && (<Pressable testID=\"settings-backdrop\" onPress={() => router.back()} style={{ flex: 1 }} />)}`",
+      "right_panel_width_480_or_100pct_with_shadow_and_border": "PASS — settings.tsx:130-143 `width: wide ? 480 : '100%'`, shadow + elevation only on tablet, `borderLeftWidth: wide ? StyleSheet.hairlineWidth : 0` with `borderLeftColor: colors.divider`.",
+      "contentMaxW_removed_everywhere": "PASS — grep for `contentMaxW` in settings.tsx returns 0 matches. Header, tab bar ScrollView, content View all use `width: '100%'`."
+    },
+    "2_tablet_smoke_1024x1366": {
+      "settings_title_visible": "PASS",
+      "backdrop_present_and_fills_left_544px": "PASS — settings-backdrop bbox = {x:0, y:0, w:544, h:1366}",
+      "right_panel_480_wide_on_right": "PASS — right panel bbox = {x:544, y:0, w:480, h:1366}",
+      "all_four_tabs_visible": "PASS — settings-tab-general / -pen / -security / -about all visible",
+      "pen_tab_toggles_reachable": "PASS — toggle-palm-rejection and toggle-auto-add-page both visible after tapping settings-tab-pen",
+      "general_tab_toggles_reachable": "PASS — toggle-status-bar and toggle-haptics both visible after tapping settings-tab-general",
+      "backdrop_tap_closes_screen": "FAIL — Tapping settings-backdrop throws `ReferenceError: router is not defined` (caught as PAGEERROR). URL stayed at /settings. Root cause: `router` is referenced on settings.tsx:126 but never imported from 'expo-router'."
+    },
+    "3_phone_smoke_390x844": {
+      "settings_renders_full_screen": "PASS — settings-title visible, backdrop NOT present (correct since wide=false at 390px).",
+      "no_console_errors_on_phone": "PASS — Only pre-existing benign deprecation warnings ('shadow*' style props, props.pointerEvents). No PAGEERROR."
+    },
+    "4_regression": {
+      "home_renders": "PASS — FAB visible, no errors.",
+      "handwriting_screen_renders": "PASS — Navigated /draw/<uuid>; tool-pen-mode, tool-pen, draw-back, draw-more all visible.",
+      "handwriting_kebab_items": "PASS — Page color / Page template / Page size / Toolbar position / Settings / Rename / Undo / Redo / Clear canvas (labelled 'Clear canvas', not just 'Clear') / Move to trash all present.",
+      "bottom_toolbar_pen_mode_toggle_present": "PASS — tool-pen-mode visible on draw screen.",
+      "text_note_screen": "Not exercised in this run — out-of-scope changes are isolated to settings.tsx; no shared code touched."
+    }
+  },
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "settings.tsx backdrop",
+        "issue": "Tapping <Pressable testID=\"settings-backdrop\"> throws `ReferenceError: router is not defined`. The handler calls `router.back()` but `router` is never imported. Add `import { router } from 'expo-router';` at the top of /app/frontend/app/settings.tsx. This breaks the entire 'tap-outside-to-dismiss' UX on tablet.",
+        "testID": "settings-backdrop",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_9.json"
+  ],
+  "action_items": [
+    "Add `import { router } from 'expo-router';` to /app/frontend/app/settings.tsx (or use `useRouter()` hook). Without this, tapping settings-backdrop on tablet crashes with ReferenceError and the dismiss-by-tap UX is broken."
+  ],
+  "critical_code_review_comments": [
+    "settings.tsx:126 — `router.back()` referenced without import. JS does not throw until the Pressable is actually tapped (because the symbol is only evaluated inside the onPress callback), which is why static rendering works but interaction crashes. Suggest using `import { useRouter } from 'expo-router'` + `const router = useRouter()` for consistency with hook-based usage, OR `import { router } from 'expo-router'` for the imperative API.",
+    "settings.tsx line 122 — outer View uses string literal 'rgba(0,0,0,0.35)' for backdrop, which is fine for both themes; consider moving to a theme token (e.g., colors.scrim) for dark-mode polish.",
+    "settings.tsx line 130-143 — shadow* props trigger React Native Web deprecation warnings ('shadow*' style props are deprecated. Use boxShadow). Non-blocking but noisy in console."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (backend not in scope)",
+    "frontend": "92% — 11/12 verification checks PASS; backdrop dismiss interaction FAILS due to missing router import."
+  },
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Only ONE issue blocks the feature: missing `router` import in /app/frontend/app/settings.tsx. After main agent adds the import, re-test on tablet viewport (1024x1366): navigate to /settings, tap settings-backdrop, expect router.back() to take you back (URL changes away from /settings, no PAGEERROR). All other tablet/phone wiring already verified in this iteration.",
+  "rca_of_issue": "Reproduction: 1) Set viewport to 1024x1366. 2) Navigate to http://localhost:3000/settings. 3) Tap the dimmed left area (settings-backdrop). Expected: returns to previous screen via router.back(). Actual: nothing happens visually, and the browser console emits `PAGEERROR: router is not defined`. RCA: /app/frontend/app/settings.tsx imports React, React Native primitives, safe-area-context, Ionicons, AsyncStorage, theme and settings hooks, but does NOT import `router` from 'expo-router'. Line 126 references the global `router` symbol which is undefined in the module scope. The crash is deferred to the click handler so the screen renders fine until the user actually taps the backdrop. Mitigation: add `import { router } from 'expo-router';` (one-line fix)."
+}

@@ -16,7 +16,6 @@ export default function SettingsScreen() {
   const { settings, update } = useAppSettings();
   const { width: winW } = useWindowDimensions();
   const wide = winW >= 720;
-  const contentMaxW = wide ? 560 : winW;
 
   const [passcode, setPasscode] = useState('');
   const [hasPasscode, setHasPasscode] = useState(false);
@@ -120,8 +119,29 @@ export default function SettingsScreen() {
   ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface, alignItems: 'center' }}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm, width: '100%', maxWidth: contentMaxW }]}>
+    <View style={{ flex: 1, flexDirection: 'row', backgroundColor: wide ? 'rgba(0,0,0,0.35)' : colors.surface }}>
+      {wide && (
+        <Pressable
+          testID="settings-backdrop"
+          onPress={() => router.back()}
+          style={{ flex: 1 }}
+        />
+      )}
+      <View
+        style={{
+          width: wide ? 480 : '100%',
+          backgroundColor: colors.surface,
+          alignItems: 'center',
+          shadowColor: '#000',
+          shadowOffset: { width: -4, height: 0 },
+          shadowOpacity: wide ? 0.18 : 0,
+          shadowRadius: 16,
+          elevation: wide ? 12 : 0,
+          borderLeftWidth: wide ? StyleSheet.hairlineWidth : 0,
+          borderLeftColor: colors.divider,
+        }}
+      >
+      <View style={[styles.header, { paddingTop: insets.top + spacing.sm, width: '100%' }]}>
         <Text style={[styles.title, { color: colors.onSurface }]} testID="settings-title">
           Settings
         </Text>
@@ -132,7 +152,7 @@ export default function SettingsScreen() {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.sm }}
-        style={{ width: '100%', maxWidth: contentMaxW, flexGrow: 0, marginBottom: spacing.sm }}
+        style={{ width: '100%', flexGrow: 0, marginBottom: spacing.sm }}
       >
         {tabs.map((t) => {
           const active = activeTab === t.key;
@@ -175,7 +195,7 @@ export default function SettingsScreen() {
         style={{ width: '100%' }}
         contentContainerStyle={{ alignItems: 'center', paddingBottom: insets.bottom + 100 }}
       >
-        <View style={{ width: '100%', maxWidth: contentMaxW, padding: spacing.lg }}>
+        <View style={{ width: '100%', padding: spacing.lg }}>
         {activeTab === 'general' && (<>
         <Text style={[styles.section, { color: colors.muted }]}>APPEARANCE</Text>
         <View style={styles.themeRow}>
@@ -377,6 +397,7 @@ export default function SettingsScreen() {
         </>)}
         </View>
       </ScrollView>
+      </View>
     </View>
   );
 }
