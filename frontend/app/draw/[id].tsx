@@ -14,6 +14,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ruler, { RulerState, rulerProject, rulerEdgeDistance } from '@/src/components/Ruler';
 import { Ionicons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
@@ -279,6 +280,19 @@ export default function DrawScreen() {
     return { w, h };
   }, [viewport.w, viewport.h, paperSize, customSize, orientation]);
   const historyRef = useRef<{ undo: Item[][]; redo: Item[][] }>({ undo: [], redo: [] });
+
+  // ---------- Ruler (declared here so pan gesture below can reference the refs) ----------
+  const [rulerEnabled, setRulerEnabled] = useState(false);
+  const [rulerState, setRulerState] = useState<RulerState>({
+    x: 300, y: 300, angle: 0, unit: 'cm', scaleWithPaper: true, lengthPx: 340,
+  });
+  const snapToRulerRef = useRef<boolean>(false);
+  const rulerSnapWorld = (screenX: number, screenY: number) => {
+    if (!rulerEnabled) return null;
+    const d = rulerEdgeDistance(rulerState, scale, { x: screenX, y: screenY });
+    if (d > 24) return null;
+    return rulerProject(rulerState, scale, { x: screenX, y: screenY });
+  };
 
   // Tool state
   const [tool, setTool] = useState<Tool>('pen');
@@ -746,6 +760,20 @@ export default function DrawScreen() {
         liveShapeRef.current = null;
         return;
       }
+      // Ruler snap: if the pen begins near the ruler edge, project this stroke onto it.
+      snapToRulerRef.current = false;
+      if (rulerEnabled) {
+        const proj = rulerSnapWorld(e.x, e.y);
+        if (proj) {
+          snapToRulerRef.current = true;
+          const w = toWorld(proj.x, proj.y);
+          if (isPenTool(tool)) {
+            livePtsRef.current = [{ x: w.x, y: w.y, t: Date.now() }];
+            setLiveTick((n) => n + 1);
+            return;
+          }
+        }
+      }
       const w = toWorld(e.x, e.y);
       // Reject touches that started outside the page area (left/right margins or above/below pages)
       if (w.x < 0 || w.x > pageDims.w || w.y < 0 || w.y > totalPageH) {
@@ -766,7 +794,15 @@ export default function DrawScreen() {
     })
     .onUpdate((e) => {
       if (palmRejectionRef.current && !isStylusRef.current) return;
-      const w = toWorld(e.x, e.y);
+      // If snapping to ruler, project each point onto the ruler line before adding.
+      let px = e.x;
+      let py = e.y;
+      if (snapToRulerRef.current) {
+        const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y });
+        px = proj.x;
+        py = proj.y;
+      }
+      const w = toWorld(px, py);
       if (isPenTool(tool)) {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
         if (!last) return;
@@ -1001,6 +1037,63 @@ export default function DrawScreen() {
     setScale(1);
   };
 
+  // ---------- Zoom presets ----------
+  const [zoomPresets, setZoomPresets] = useState<{ name: string; scale: number }[]>([]);
+  const [showZoomMenu, setShowZoomMenu] = useState(false);
+  const [zoomMenuAnchor, setZoomMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetNameDraft, setPresetNameDraft] = useState('');
+
+  useEffect(() => {
+    AsyncStorage.getItem('galaxynotes:zoom-presets').then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setZoomPresets(parsed.slice(0, 12));
+        } catch {}
+      }
+    });
+  }, []);
+
+  const persistZoomPresets = useCallback((next: { name: string; scale: number }[]) => {
+    setZoomPresets(next);
+    AsyncStorage.setItem('galaxynotes:zoom-presets', JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const saveCurrentZoomAs = (name: string) => {
+    const label = (name || `${Math.round(scale * 100)}%`).trim().slice(0, 24);
+    if (!label) return;
+    const filtered = zoomPresets.filter((p) => p.name.toLowerCase() !== label.toLowerCase());
+    persistZoomPresets([...filtered, { name: label, scale: Number(scale.toFixed(3)) }].slice(0, 12));
+  };
+
+  const removePreset = (name: string) => {
+    persistZoomPresets(zoomPresets.filter((p) => p.name !== name));
+  };
+
+  // ---------- Ruler preferences (state is declared above, here we just persist prefs) ----------
+  // Persist ruler preferences (not position — it re-centers each time).
+  useEffect(() => {
+    AsyncStorage.getItem('galaxynotes:ruler-prefs').then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          setRulerState((prev) => ({
+            ...prev,
+            unit: parsed.unit === 'in' ? 'in' : 'cm',
+            scaleWithPaper: parsed.scaleWithPaper !== false,
+          }));
+        } catch {}
+      }
+    });
+  }, []);
+  useEffect(() => {
+    AsyncStorage.setItem('galaxynotes:ruler-prefs', JSON.stringify({
+      unit: rulerState.unit,
+      scaleWithPaper: rulerState.scaleWithPaper,
+    })).catch(() => {});
+  }, [rulerState.unit, rulerState.scaleWithPaper]);
+
   if (loading || !note) {
     // Keep the transition minimal — just a plain matching surface, no spinner. This
     // eliminates the "flash of loading state" when switching between open tabs.
@@ -1167,13 +1260,22 @@ export default function DrawScreen() {
                   Saving…
                 </Text>
               )}
-              {scale !== 1 && (
-                <Pressable onPress={resetZoom} testID="draw-reset-zoom" style={[styles.zoomPill, { backgroundColor: colors.brand }]}>
-                  <Text style={{ color: colors.onBrandPrimary, fontWeight: '700', fontSize: 12 }}>
-                    {Math.round(scale * 100)}%
-                  </Text>
-                </Pressable>
-              )}
+              <Pressable
+                onPress={(e) => {
+                  const px = e?.nativeEvent?.pageX;
+                  const py = e?.nativeEvent?.pageY;
+                  setZoomMenuAnchor({ x: typeof px === 'number' ? px : 0, y: typeof py === 'number' ? py : 60 });
+                  setShowZoomMenu(true);
+                }}
+                onLongPress={() => { haptic.medium(); setPresetNameDraft(''); setSavingPreset(true); }}
+                delayLongPress={400}
+                testID="draw-zoom-pill"
+                style={[styles.zoomPill, { backgroundColor: scale === 1 ? colors.surfaceSecondary : colors.brand }]}
+              >
+                <Text style={{ color: scale === 1 ? colors.onSurface : colors.onBrandPrimary, fontWeight: '700', fontSize: 12 }}>
+                  {Math.round(scale * 100)}%
+                </Text>
+              </Pressable>
               <Pressable onPress={() => setShowPaperMenu(true)} testID="draw-more" style={styles.tabsRowIcon} hitSlop={6}>
                 <Ionicons name="ellipsis-vertical" size={22} color={colors.onSurface} />
               </Pressable>
@@ -1229,6 +1331,20 @@ export default function DrawScreen() {
                 Open this note on Android or iOS in Expo Go to draw with full pressure-aware stylus support.
               </Text>
             </View>
+          )}
+          {/* Ruler overlay — sits above the Skia canvas so it can receive its own gestures. */}
+          {rulerEnabled && Platform.OS !== 'web' && (
+            <Ruler
+              state={rulerState}
+              onChange={setRulerState}
+              paperScale={scale}
+              colors={{
+                brand: colors.brand,
+                onSurface: colors.onSurface,
+                muted: colors.muted,
+                surface: colors.surface,
+              }}
+            />
           )}
           {/* Vertical scroll thumb (right edge) — stylus-friendly, works regardless of palm rejection */}
           {pageCount > 1 && (
@@ -1693,6 +1809,125 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
+      {/* Zoom presets menu (tap zoom pill) + save prompt (long-press zoom pill) */}
+      <Modal visible={showZoomMenu} transparent animationType="fade" onRequestClose={() => setShowZoomMenu(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowZoomMenu(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: Math.min(winHeight - 300, (zoomMenuAnchor?.y ?? 60) + 16),
+              right: 12,
+              width: 220,
+              backgroundColor: colors.surface,
+              borderRadius: radius.md,
+              padding: spacing.md,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.22,
+              shadowRadius: 16,
+              elevation: 12,
+            }}
+          >
+            <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.base, marginBottom: spacing.sm }}>
+              Zoom
+            </Text>
+            {[
+              { name: 'Fit / 100%', s: 1 },
+              { name: '150%', s: 1.5 },
+              { name: '200%', s: 2 },
+              { name: '300%', s: 3 },
+            ].map((p) => (
+              <Pressable
+                key={`z-${p.name}`}
+                onPress={() => { haptic.selection(); setScale(p.s); setShowZoomMenu(false); }}
+                style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+              >
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>{p.name}</Text>
+                {Math.abs(scale - p.s) < 0.02 && <Ionicons name="checkmark" size={16} color={colors.brand} />}
+              </Pressable>
+            ))}
+            {zoomPresets.length > 0 && (
+              <>
+                <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: 4 }} />
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 4 }}>SAVED</Text>
+                {zoomPresets.map((p) => (
+                  <Pressable
+                    key={`saved-${p.name}`}
+                    onPress={() => { haptic.selection(); setScale(p.scale); setShowZoomMenu(false); }}
+                    onLongPress={() => { haptic.warning(); removePreset(p.name); }}
+                    delayLongPress={500}
+                    style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                  >
+                    <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>{p.name}</Text>
+                    <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>{Math.round(p.scale * 100)}%</Text>
+                  </Pressable>
+                ))}
+              </>
+            )}
+            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: 4 }} />
+            <Pressable
+              onPress={() => { setShowZoomMenu(false); setPresetNameDraft(''); setSavingPreset(true); }}
+              style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+              testID="save-zoom"
+            >
+              <Ionicons name="bookmark-outline" size={16} color={colors.brand} />
+              <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>
+                Save current ({Math.round(scale * 100)}%)
+              </Text>
+            </Pressable>
+            <Text style={{ color: colors.muted, fontSize: 11, marginTop: 6 }}>
+              Long-press a saved preset to remove it.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Save preset name prompt */}
+      <Modal visible={savingPreset} transparent animationType="fade" onRequestClose={() => setSavingPreset(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' }} onPress={() => setSavingPreset(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{ width: 280, backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg }}
+          >
+            <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.sm }}>
+              Save zoom
+            </Text>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.md }}>
+              Save current zoom ({Math.round(scale * 100)}%) as a named preset.
+            </Text>
+            <TextInput
+              value={presetNameDraft}
+              onChangeText={setPresetNameDraft}
+              placeholder="e.g. Editing, Detail, Draft"
+              placeholderTextColor={colors.muted}
+              style={{
+                borderWidth: 1,
+                borderColor: colors.border,
+                borderRadius: radius.sm,
+                padding: spacing.sm,
+                color: colors.onSurface,
+                marginBottom: spacing.md,
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <Pressable
+                onPress={() => setSavingPreset(false)}
+                style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.surfaceSecondary, alignItems: 'center' }}
+              >
+                <Text style={{ color: colors.onSurface }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => { saveCurrentZoomAs(presetNameDraft); setSavingPreset(false); }}
+                style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.sm, backgroundColor: colors.brand, alignItems: 'center' }}
+              >
+                <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Shape palette */}
       <Modal visible={showToolPalette} transparent animationType="fade" onRequestClose={() => setShowToolPalette(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowToolPalette(false)}>
@@ -1772,6 +2007,38 @@ export default function DrawScreen() {
               onPress={() => { setShowPaperMenu(false); setShowSubColor(true); }}
               testID="draw-menu-color"
             />
+            <DrawMenuRow
+              icon={rulerEnabled ? 'checkbox' : 'square-outline'}
+              label={`Ruler (${rulerState.unit})`}
+              valueText={rulerEnabled ? 'On' : 'Off'}
+              onPress={() => {
+                haptic.selection();
+                if (!rulerEnabled) {
+                  // Recenter the ruler on the viewport when turning it on.
+                  setRulerState((prev) => ({ ...prev, x: viewport.w / 2, y: viewport.h / 2, angle: 0 }));
+                }
+                setRulerEnabled((v) => !v);
+              }}
+              testID="draw-menu-ruler"
+            />
+            {rulerEnabled && (
+              <>
+                <DrawMenuRow
+                  icon="options-outline"
+                  label="Ruler unit"
+                  valueText={rulerState.unit === 'cm' ? 'Centimeters' : 'Inches'}
+                  onPress={() => setRulerState((prev) => ({ ...prev, unit: prev.unit === 'cm' ? 'in' : 'cm' }))}
+                  testID="draw-menu-ruler-unit"
+                />
+                <DrawMenuRow
+                  icon="expand-outline"
+                  label="Ruler zoom"
+                  valueText={rulerState.scaleWithPaper ? 'Scale with paper' : 'True dimensions'}
+                  onPress={() => setRulerState((prev) => ({ ...prev, scaleWithPaper: !prev.scaleWithPaper }))}
+                  testID="draw-menu-ruler-scale"
+                />
+              </>
+            )}
             <DrawMenuRow
               icon="grid-outline"
               label="Page template"
