@@ -814,6 +814,7 @@ export default function DrawScreen() {
 
   const twoFingerPanY = Gesture.Pan()
     .runOnJS(true)
+    .withRef(twoFingerPanRef)
     .minPointers(2)
     .maxPointers(2)
     .averageTouches(true)
@@ -881,6 +882,7 @@ export default function DrawScreen() {
   // over for the pen. Also handles overscroll for pull-to-add-page.
   const fingerScrollPan = Gesture.Pan()
     .runOnJS(true)
+    .withRef(fingerScrollPanRef)
     .minDistance(2)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
@@ -974,8 +976,15 @@ export default function DrawScreen() {
   // report pointerType — if a user's finger still writes they can disable palm rejection.
   const isStylusRef = useRef<boolean>(true);
 
+  // Gesture refs — passed to the Ruler so its pan/rotate can run SIMULTANEOUSLY with
+  // the drawing/scroll gestures. This eliminates cross-tree gesture races that made
+  // pen writing on the ruler feel jagged.
+  const drawingPanRef = useRef<any>(null);
+  const fingerScrollPanRef = useRef<any>(null);
+  const twoFingerPanRef = useRef<any>(null);
   const pan = Gesture.Pan()
     .runOnJS(true)
+    .withRef(drawingPanRef)
     .minDistance(0)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
@@ -1944,6 +1953,7 @@ export default function DrawScreen() {
                 muted: colors.muted,
                 surface: colors.surface,
               }}
+              externalGestureRefs={[drawingPanRef, fingerScrollPanRef, twoFingerPanRef]}
             />
           )}
           {/* Vertical scroll thumb (right edge) — stylus-friendly, works regardless of palm rejection */}

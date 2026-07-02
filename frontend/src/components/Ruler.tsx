@@ -41,6 +41,11 @@ interface Props {
     muted: string;
     surface: string;
   };
+  // Optional external gesture refs (drawing Pan + finger-scroll Pan). Passing them lets the
+  // ruler's gestures run simultaneously with drawing/scroll so pen strokes don't wait for
+  // the ruler to decide/fail. This eliminates the "jagged pen writing" caused by cross-
+  // GestureDetector race.
+  externalGestureRefs?: React.MutableRefObject<any>[];
 }
 
 // Approximate points-per-cm on a typical mobile screen. Real DPI varies but this gives a
@@ -48,15 +53,13 @@ interface Props {
 const POINTS_PER_CM = 38;
 const POINTS_PER_INCH = POINTS_PER_CM * 2.54;
 const RULER_H = 155;                    // thick, easy to read
-const TOP_STRIP_H = 34;                 // top-of-ruler band that passes touches through to the canvas
-                                         // — so the S-Pen writes on the snap edge without any gesture race
 const INFINITE_MULTIPLIER = 3.2;        // 3.2× diagonal so the ends never enter the viewport at any rotation
 const ROTATION_DAMP = 0.75;             // ruler rotates at 75 % of finger twist — deliberate but not stiff
 const ROTATION_START_THRESHOLD_RAD = 0.035; // ~2° before rotation starts (cuts incidental jitter)
 
 const AnimatedView = Animated.createAnimatedComponent(View);
 
-export default function Ruler({ state, onChange, paperScale, viewport, colors }: Props) {
+export default function Ruler({ state, onChange, paperScale, viewport, colors, externalGestureRefs }: Props) {
   void colors;
 
   // Shared values driving the transform. Initial values seeded from React state.
@@ -117,10 +120,9 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
 
   // 1-finger drag → pan (UI-thread). ONLY accepts finger touches (pointerType 0).
   // Any pen / mouse / unknown pointer fails the gesture so the S-Pen draws THROUGH the
-  // ruler with zero drift. A small dead-zone stops incidental pen jitter from moving the
-  // ruler even when a finger and pen touch simultaneously.
+  // ruler with zero drift.
   const pan = Gesture.Pan()
-    .minDistance(8)
+    .minDistance(0)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
       'worklet';
@@ -187,7 +189,17 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
       runOnJS(commit)(x.value, y.value, angle.value);
     });
 
-  const combined = Gesture.Simultaneous(pan, rotate);
+  // Build the composed gesture and, when external refs are supplied, tell RNGH the
+  // ruler's pan/rotate should run SIMULTANEOUSLY with those external gestures (drawing
+  // pan, finger-scroll pan). That eliminates the cross-tree race that caused the pen
+  // strokes to feel jagged when writing on the ruler.
+  let panG = pan;
+  let rotG = rotate;
+  if (externalGestureRefs && externalGestureRefs.length > 0) {
+    panG = pan.simultaneousWithExternalGesture(...externalGestureRefs) as any;
+    rotG = rotate.simultaneousWithExternalGesture(...externalGestureRefs) as any;
+  }
+  const combined = Gesture.Simultaneous(panG, rotG);
 
   // Animated transform for the container. Fully worklet-driven → smooth 60/120 fps.
   const animatedStyle = useAnimatedStyle(() => {
@@ -221,58 +233,30 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
 
   return (
     <>
-      {/* Ruler container — pointerEvents="box-none" so the top-of-ruler strip lets pen
-          strokes through to the canvas without gesture competition. Only the lower grip
-          (below TOP_STRIP_H) has a GestureDetector attached. */}
-      <AnimatedView
-        pointerEvents="box-none"
-        style={[
-          {
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: displayLength,
-            height: RULER_H,
-            overflow: 'visible',
-          },
-          animatedStyle,
-        ]}
-      >
-        {/* Top strip: pen writing / snap band. Translucent-white visual but pointerEvents="none"
-            so pen strokes reach the canvas directly (no gesture race). */}
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 0,
-            height: TOP_STRIP_H,
-            backgroundColor: 'rgba(255, 255, 255, 0.42)',
-          }}
-        />
-
-        {/* Interactive grip — the lower band with the GestureDetector for pan / rotate.
-            Its visual body is a translucent white bar so users still see the ruler here. */}
-        <GestureDetector gesture={combined}>
-          <View
-            style={{
+      <GestureDetector gesture={combined}>
+        <AnimatedView
+          style={[
+            {
               position: 'absolute',
               left: 0,
-              right: 0,
-              top: TOP_STRIP_H,
-              bottom: 0,
+              top: 0,
+              width: displayLength,
+              height: RULER_H,
+              // The translucent body itself defines the ruler edges — no border lines.
               backgroundColor: 'rgba(255, 255, 255, 0.42)',
+              overflow: 'visible',
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.2,
               shadowRadius: 8,
               elevation: 4,
-            }}
-          />
-        </GestureDetector>
+            },
+            animatedStyle,
+          ]}
+        >
+          {/* The translucent body defines the ruler edges — no explicit line drawn. */}
 
-        {/* Tick marks — black graduation. Non-interactive. */}
+          {/* Tick marks — black graduation. Non-interactive. */}
         {ticks.map((t, i) => (
           <View
             key={i}
@@ -340,6 +324,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           {state.unit}
         </Text>
       </AnimatedView>
+      </GestureDetector>
     {/* Live angle chip — un-rotated so it stays readable while the ruler spins. Updates
         every frame via useAnimatedProps on a TextInput. Non-interactive (pen and gestures
         pass through). */}
