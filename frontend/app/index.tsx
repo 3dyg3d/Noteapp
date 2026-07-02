@@ -19,7 +19,7 @@ import { BlurView } from 'expo-blur';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors } from '@/src/theme/tokens';
-import { NotesApi, FoldersApi, LabelsApi, Note, Folder, Label, ChecklistItem, NoteStatus } from '@/src/api/client';
+import { NotesApi, FoldersApi, Note, Folder, ChecklistItem, NoteStatus } from '@/src/api/client';
 import { haptic, useAppSettings } from '@/src/state/useAppSettings';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 
@@ -190,6 +190,9 @@ export default function HomeScreen() {
   // Multi-select
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const selectionMode = selectedIds.size > 0;
+
+  // Info modal — surface metadata for a single note or a folder.
+  const [infoTarget, setInfoTarget] = useState<{ kind: 'note'; note: Note } | { kind: 'folder'; folder: Folder } | null>(null);
 
   const status: NoteStatus = category === 'trash' ? 'trash' : 'active';
   const folderFilter = useMemo(() => {
@@ -840,6 +843,18 @@ export default function HomeScreen() {
                   <TopBulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
                   <TopBulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
                   <TopBulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
+                  {selectedIds.size === 1 && (
+                    <TopBulkBtn
+                      icon="information-circle-outline"
+                      label="Info"
+                      onPress={() => {
+                        const id = Array.from(selectedIds)[0];
+                        const n = notes.find((nn) => nn.id === id);
+                        if (n) setInfoTarget({ kind: 'note', note: n });
+                      }}
+                      testID="bulk-info"
+                    />
+                  )}
                   <TopBulkBtn icon="trash-outline" label="Trash" onPress={bulkDelete} destructive testID="bulk-delete" />
                 </>
               ) : (
@@ -1145,6 +1160,114 @@ export default function HomeScreen() {
                 </Text>
               </Pressable>
             ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Info modal — metadata for a note or folder */}
+      <Modal
+        visible={!!infoTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInfoTarget(null)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setInfoTarget(null)}>
+          <Pressable
+            style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]}
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+          >
+            <View style={styles.sheetHandle} />
+            {infoTarget?.kind === 'note' && (() => {
+              const n = infoTarget.note;
+              // Compute size (bytes of the serialised payload — a reasonable proxy for on-disk size).
+              const payload = JSON.stringify({
+                title: n.title,
+                content: n.content,
+                checklist: n.checklist,
+                drawing_data: n.drawing_data,
+                images: n.images?.length ?? 0,
+              });
+              const sizeBytes = new Blob([payload]).size;
+              const sizeLabel = sizeBytes < 1024 ? `${sizeBytes} B` : sizeBytes < 1024 * 1024 ? `${(sizeBytes / 1024).toFixed(1)} KB` : `${(sizeBytes / 1024 / 1024).toFixed(2)} MB`;
+              const chars = (n.content || '').length + (n.checklist || []).reduce((sum, ci) => sum + (ci.text || '').length, 0);
+              const words = (n.content || '').split(/\s+/).filter(Boolean).length;
+              const imgCount = n.images?.length ?? 0;
+              // Count handwritten pages if present.
+              let pageCount = 0;
+              let strokeCount = 0;
+              if (n.drawing_data) {
+                try {
+                  const doc = JSON.parse(n.drawing_data);
+                  pageCount = doc.pageCount ?? 1;
+                  strokeCount = Array.isArray(doc.items) ? doc.items.length : 0;
+                } catch {}
+              }
+              const folderName = n.folder_id ? (folders.find((f) => f.id === n.folder_id)?.name ?? 'Unknown folder') : 'None';
+              return (
+                <>
+                  <Text style={[styles.sheetTitle, { color: colors.onSurface }]}>Note info</Text>
+                  <ScrollView contentContainerStyle={{ paddingBottom: spacing.lg }} showsVerticalScrollIndicator={false}>
+                    <InfoRow label="Title" value={n.title || 'Untitled'} colors={colors} />
+                    <InfoRow label="Type" value={n.note_type === 'handwriting' ? 'Handwritten' : 'Text'} colors={colors} />
+                    <InfoRow label="Created" value={fmtDate(n.created_at)} colors={colors} />
+                    <InfoRow label="Modified" value={fmtDate(n.updated_at)} colors={colors} />
+                    <InfoRow label="Folder" value={folderName} colors={colors} />
+                    <InfoRow label="Size" value={sizeLabel} colors={colors} />
+                    {n.note_type === 'handwriting' ? (
+                      <>
+                        <InfoRow label="Pages" value={String(pageCount)} colors={colors} />
+                        <InfoRow label="Strokes / shapes" value={String(strokeCount)} colors={colors} />
+                      </>
+                    ) : (
+                      <>
+                        <InfoRow label="Characters" value={String(chars)} colors={colors} />
+                        <InfoRow label="Words" value={String(words)} colors={colors} />
+                        {imgCount > 0 && <InfoRow label="Images" value={String(imgCount)} colors={colors} />}
+                        {(n.checklist?.length ?? 0) > 0 && (
+                          <InfoRow label="Checklist items" value={`${n.checklist.filter((c) => c.done).length}/${n.checklist.length} done`} colors={colors} />
+                        )}
+                      </>
+                    )}
+                    <InfoRow label="Pinned" value={n.pinned ? 'Yes' : 'No'} colors={colors} />
+                    <InfoRow label="Locked" value={n.locked ? 'Yes' : 'No'} colors={colors} />
+                    {n.deleted_at ? <InfoRow label="Trashed" value={fmtDate(n.deleted_at)} colors={colors} /> : null}
+                    <InfoRow label="ID" value={n.id} colors={colors} mono />
+                  </ScrollView>
+                </>
+              );
+            })()}
+            {infoTarget?.kind === 'folder' && (() => {
+              const f = infoTarget.folder;
+              const notesInside = notes.filter((n) => n.folder_id === f.id).length;
+              const subfolders = folders.filter((ff) => ff.parent_id === f.id).length;
+              const parentName = f.parent_id ? (folders.find((ff) => ff.id === f.parent_id)?.name ?? 'Unknown') : 'None (root)';
+              return (
+                <>
+                  <Text style={[styles.sheetTitle, { color: colors.onSurface }]}>Folder info</Text>
+                  <ScrollView contentContainerStyle={{ paddingBottom: spacing.lg }} showsVerticalScrollIndicator={false}>
+                    <InfoRow label="Name" value={f.name} colors={colors} />
+                    <InfoRow
+                      label="Color"
+                      value={f.color}
+                      colors={colors}
+                      accessory={<View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: f.color, marginLeft: 8 }} />}
+                    />
+                    <InfoRow label="Created" value={fmtDate(f.created_at)} colors={colors} />
+                    <InfoRow label="Parent" value={parentName} colors={colors} />
+                    <InfoRow label="Notes inside" value={String(notesInside)} colors={colors} />
+                    <InfoRow label="Sub-folders" value={String(subfolders)} colors={colors} />
+                    <InfoRow label="ID" value={f.id} colors={colors} mono />
+                  </ScrollView>
+                </>
+              );
+            })()}
+            <Pressable
+              onPress={() => setInfoTarget(null)}
+              style={{ paddingVertical: spacing.md, borderRadius: radius.sm, backgroundColor: colors.brand, alignItems: 'center', marginTop: spacing.sm }}
+              testID="info-close-btn"
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Close</Text>
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1768,6 +1891,11 @@ export default function HomeScreen() {
         onCancel={() => setFolderModal(null)}
         onSave={saveFolderModal}
         onDelete={folderModal?.folder ? deleteFolderFromModal : undefined}
+        onInfo={folderModal?.folder ? () => {
+          const f = folderModal.folder!;
+          setFolderModal(null);
+          setInfoTarget({ kind: 'folder', folder: f });
+        } : undefined}
       />
       </View>
     </View>
@@ -1781,6 +1909,7 @@ function FolderModal({
   onCancel,
   onSave,
   onDelete,
+  onInfo,
 }: {
   visible: boolean;
   folder?: Folder;
@@ -1788,6 +1917,7 @@ function FolderModal({
   onCancel: () => void;
   onSave: (name: string, color: string) => void;
   onDelete?: () => void;
+  onInfo?: () => void;
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -1864,6 +1994,15 @@ function FolderModal({
                 style={[styles.btn, { borderColor: colors.error, borderWidth: 1 }]}
               >
                 <Text style={{ color: colors.error, fontWeight: '700' }}>Delete</Text>
+              </Pressable>
+            )}
+            {folder && onInfo && (
+              <Pressable
+                testID="folder-info"
+                onPress={onInfo}
+                style={[styles.btn, { borderColor: colors.brand, borderWidth: 1, paddingHorizontal: spacing.md }]}
+              >
+                <Ionicons name="information-circle-outline" size={20} color={colors.brand} />
               </Pressable>
             )}
             <Pressable
@@ -2279,3 +2418,63 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
+
+// ---------- Info modal helpers ----------
+
+/** Format an ISO-ish date string for the info modal ("Jun 12, 2026, 3:04 PM"). */
+function fmtDate(iso?: string | null): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return String(iso);
+  }
+}
+
+interface InfoRowProps {
+  label: string;
+  value: string;
+  colors: any;
+  mono?: boolean;
+  accessory?: React.ReactNode;
+}
+function InfoRow({ label, value, colors, mono, accessory }: InfoRowProps) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.divider,
+      }}
+    >
+      <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600' }}>{label}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1, marginLeft: spacing.md }}>
+        <Text
+          numberOfLines={mono ? 1 : 2}
+          ellipsizeMode={mono ? 'middle' : 'tail'}
+          style={{
+            color: colors.onSurface,
+            fontSize: typeScale.sm,
+            fontWeight: '600',
+            textAlign: 'right',
+            fontFamily: mono ? (Platform.OS === 'ios' ? 'Menlo' : 'monospace') : undefined,
+          }}
+        >
+          {value}
+        </Text>
+        {accessory}
+      </View>
+    </View>
+  );
+}

@@ -189,15 +189,25 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
       runOnJS(commit)(x.value, y.value, angle.value);
     });
 
-  // Build the composed gesture and, when external refs are supplied, tell RNGH the
-  // ruler's pan/rotate should run SIMULTANEOUSLY with those external gestures (drawing
-  // pan, finger-scroll pan). That eliminates the cross-tree race that caused the pen
-  // strokes to feel jagged when writing on the ruler.
-  let panG = pan;
-  let rotG = rotate;
+  // Build the composed gesture with proper priority so ALL three interactions coexist:
+  //  • Pen (drawing): highest priority. Ruler pan/rotate REQUIRE the drawing pan to
+  //    FAIL before activating — so pen writing on the ruler is never blocked.
+  //  • Finger on ruler: ruler pan/rotate BLOCK the canvas scroll gestures so a finger
+  //    drag on the ruler moves the ruler (not the paper).
+  //  • Finger off ruler: only the canvas scroll gestures see the touch — they aren't
+  //    on the ruler View at all.
+  let panG: any = pan;
+  let rotG: any = rotate;
   if (externalGestureRefs && externalGestureRefs.length > 0) {
-    panG = pan.simultaneousWithExternalGesture(...externalGestureRefs) as any;
-    rotG = rotate.simultaneousWithExternalGesture(...externalGestureRefs) as any;
+    // First ref is the drawing pan (must fail before ruler activates).
+    // Remaining refs are scroll gestures (blocked when ruler activates).
+    const [drawingRef, ...scrollRefs] = externalGestureRefs;
+    panG = pan.requireExternalGestureToFail(drawingRef);
+    rotG = rotate.requireExternalGestureToFail(drawingRef);
+    if (scrollRefs.length > 0) {
+      panG = panG.blocksExternalGesture(...scrollRefs);
+      rotG = rotG.blocksExternalGesture(...scrollRefs);
+    }
   }
   const combined = Gesture.Simultaneous(panG, rotG);
 
