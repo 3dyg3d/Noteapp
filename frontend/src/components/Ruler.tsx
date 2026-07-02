@@ -48,6 +48,8 @@ interface Props {
 const POINTS_PER_CM = 38;
 const POINTS_PER_INCH = POINTS_PER_CM * 2.54;
 const RULER_H = 155;                    // thick, easy to read
+const TOP_STRIP_H = 34;                 // top-of-ruler band that passes touches through to the canvas
+                                         // — so the S-Pen writes on the snap edge without any gesture race
 const INFINITE_MULTIPLIER = 3.2;        // 3.2× diagonal so the ends never enter the viewport at any rotation
 const ROTATION_DAMP = 0.75;             // ruler rotates at 75 % of finger twist — deliberate but not stiff
 const ROTATION_START_THRESHOLD_RAD = 0.035; // ~2° before rotation starts (cuts incidental jitter)
@@ -152,18 +154,15 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
     });
 
   // 2-finger twist → rotate (UI-thread). Damped and thresholded so twist during a pan
-  // doesn't jerk the ruler. Requires TWO finger touches — fails on any stylus / mouse.
+  // doesn't jerk the ruler. Gesture.Rotation() enforces a 2-pointer requirement natively;
+  // we only need to fail on stylus so the pen isn't blocked.
   const rotate = Gesture.Rotation()
     .onTouchesDown((event, manager) => {
       'worklet';
       const touches = event.allTouches || [];
-      let fingerCount = 0;
       for (let i = 0; i < touches.length; i++) {
-        const pt = touches[i]?.pointerType;
-        if (pt === 1) { manager.fail(); return; }   // any stylus → fail
-        if (pt === 0) fingerCount++;
+        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
       }
-      if (fingerCount < 2 && touches.length < 2) manager.fail();
     })
     .onBegin(() => {
       'worklet';
@@ -222,30 +221,58 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
 
   return (
     <>
-      <GestureDetector gesture={combined}>
-        <AnimatedView
-          style={[
-            {
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              width: displayLength,
-              height: RULER_H,
-              // The translucent body itself defines the ruler edges — no border lines.
-              backgroundColor: 'rgba(255, 255, 255, 0.42)',
-              overflow: 'visible',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.2,
-            shadowRadius: 8,
-            elevation: 4,
+      {/* Ruler container — pointerEvents="box-none" so the top-of-ruler strip lets pen
+          strokes through to the canvas without gesture competition. Only the lower grip
+          (below TOP_STRIP_H) has a GestureDetector attached. */}
+      <AnimatedView
+        pointerEvents="box-none"
+        style={[
+          {
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: displayLength,
+            height: RULER_H,
+            overflow: 'visible',
           },
           animatedStyle,
         ]}
       >
-        {/* The translucent body defines the ruler edges — no explicit line drawn. */}
+        {/* Top strip: pen writing / snap band. Translucent-white visual but pointerEvents="none"
+            so pen strokes reach the canvas directly (no gesture race). */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 0,
+            height: TOP_STRIP_H,
+            backgroundColor: 'rgba(255, 255, 255, 0.42)',
+          }}
+        />
 
-        {/* Tick marks — black graduation */}
+        {/* Interactive grip — the lower band with the GestureDetector for pan / rotate.
+            Its visual body is a translucent white bar so users still see the ruler here. */}
+        <GestureDetector gesture={combined}>
+          <View
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: TOP_STRIP_H,
+              bottom: 0,
+              backgroundColor: 'rgba(255, 255, 255, 0.42)',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 8,
+              elevation: 4,
+            }}
+          />
+        </GestureDetector>
+
+        {/* Tick marks — black graduation. Non-interactive. */}
         {ticks.map((t, i) => (
           <View
             key={i}
@@ -313,7 +340,6 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors }:
           {state.unit}
         </Text>
       </AnimatedView>
-    </GestureDetector>
     {/* Live angle chip — un-rotated so it stays readable while the ruler spins. Updates
         every frame via useAnimatedProps on a TextInput. Non-interactive (pen and gestures
         pass through). */}
