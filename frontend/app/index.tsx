@@ -664,7 +664,7 @@ export default function HomeScreen() {
       <ScrollView style={{ flex: 1 }}>
         {folders.length === 0 && (
           <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
-            No folders yet. Tap "New" to create one.
+            No folders yet. Tap &quot;New&quot; to create one.
           </Text>
         )}
         {visibleTree.map(({ folder: f, depth, hasChildren }) => {
@@ -1179,7 +1179,7 @@ export default function HomeScreen() {
             <View style={styles.sheetHandle} />
             {infoTarget?.kind === 'note' && (() => {
               const n = infoTarget.note;
-              // Compute size (bytes of the serialised payload — a reasonable proxy for on-disk size).
+              // Compute a rough size (bytes of the serialised payload — proxy for on-disk size).
               const payload = JSON.stringify({
                 title: n.title,
                 content: n.content,
@@ -1187,7 +1187,13 @@ export default function HomeScreen() {
                 drawing_data: n.drawing_data,
                 images: n.images?.length ?? 0,
               });
-              const sizeBytes = new Blob([payload]).size;
+              // In React Native, Blob may not be available in Hermes — fall back to a
+              // UTF-8 byte estimate. This isn't exact but is close enough for a proxy.
+              const sizeBytes = (() => {
+                try { return new (globalThis as any).Blob([payload]).size; } catch {}
+                try { return new TextEncoder().encode(payload).length; } catch {}
+                return payload.length;
+              })();
               const sizeLabel = sizeBytes < 1024 ? `${sizeBytes} B` : sizeBytes < 1024 * 1024 ? `${(sizeBytes / 1024).toFixed(1)} KB` : `${(sizeBytes / 1024 / 1024).toFixed(2)} MB`;
               const chars = (n.content || '').length + (n.checklist || []).reduce((sum, ci) => sum + (ci.text || '').length, 0);
               const words = (n.content || '').split(/\s+/).filter(Boolean).length;

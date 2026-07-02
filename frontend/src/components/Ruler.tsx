@@ -189,25 +189,16 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
       runOnJS(commit)(x.value, y.value, angle.value);
     });
 
-  // Build the composed gesture with proper priority so ALL three interactions coexist:
-  //  • Pen (drawing): highest priority. Ruler pan/rotate REQUIRE the drawing pan to
-  //    FAIL before activating — so pen writing on the ruler is never blocked.
-  //  • Finger on ruler: ruler pan/rotate BLOCK the canvas scroll gestures so a finger
-  //    drag on the ruler moves the ruler (not the paper).
-  //  • Finger off ruler: only the canvas scroll gestures see the touch — they aren't
-  //    on the ruler View at all.
+  // Build the composed gesture. When external gesture refs are supplied, run the ruler's
+  // gestures SIMULTANEOUSLY with them — no waiting, no priority race. Each gesture uses
+  // its own onTouchesDown filter (stylus vs finger) to decide whether to activate, so
+  // the ruler only moves on finger touches and the pen/scroll continue to work
+  // independently.
   let panG: any = pan;
   let rotG: any = rotate;
   if (externalGestureRefs && externalGestureRefs.length > 0) {
-    // First ref is the drawing pan (must fail before ruler activates).
-    // Remaining refs are scroll gestures (blocked when ruler activates).
-    const [drawingRef, ...scrollRefs] = externalGestureRefs;
-    panG = pan.requireExternalGestureToFail(drawingRef);
-    rotG = rotate.requireExternalGestureToFail(drawingRef);
-    if (scrollRefs.length > 0) {
-      panG = panG.blocksExternalGesture(...scrollRefs);
-      rotG = rotG.blocksExternalGesture(...scrollRefs);
-    }
+    panG = pan.simultaneousWithExternalGesture(...externalGestureRefs);
+    rotG = rotate.simultaneousWithExternalGesture(...externalGestureRefs);
   }
   const combined = Gesture.Simultaneous(panG, rotG);
 
@@ -252,14 +243,12 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
               top: 0,
               width: displayLength,
               height: RULER_H,
-              // The translucent body itself defines the ruler edges — no border lines.
+              // The translucent body itself defines the ruler edges.
+              // NOTE: no shadow / elevation — Android renders elevation shadows on the
+              // pre-transform bounding box, which produces obvious color/tint artefacts
+              // (dark rectangle bleeding through) as the ruler is rotated.
               backgroundColor: 'rgba(255, 255, 255, 0.42)',
               overflow: 'visible',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.2,
-              shadowRadius: 8,
-              elevation: 4,
             },
             animatedStyle,
           ]}

@@ -1184,16 +1184,7 @@ export default function DrawScreen() {
       }
     });
 
-  // Drawing takes STRICT priority: if a stylus is drawing, no scroll gesture can activate.
-  // `Exclusive(pan, fingerScrollPan)` means pan wins whenever it activates; fingerScrollPan
-  // only activates when pan fails (i.e. finger touch with palm rejection ON).
-  // Two-finger canvas gestures (pinch + twoFingerPanY) are already independent (they need
-  // 2 pointers) but they also filter stylus in their own onTouchesDown to be safe.
-  const finalGesture = Gesture.Simultaneous(
-    Gesture.Exclusive(pan, fingerScrollPan),
-    composedGesture,
-    tapsGesture,
-  );
+  const finalGesture = Gesture.Simultaneous(pan, composedGesture, fingerScrollPan, tapsGesture);
 
   // ----- Render strokes -----
   const renderStroke = (s: StrokeData, key: string) => {
