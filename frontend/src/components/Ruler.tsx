@@ -189,18 +189,14 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
       runOnJS(commit)(x.value, y.value, angle.value);
     });
 
-  // Build the composed gesture. When external gesture refs are supplied, run the ruler's
-  // gestures SIMULTANEOUSLY with them — no waiting, no priority race. Each gesture uses
-  // its own onTouchesDown filter (stylus vs finger) to decide whether to activate, so
-  // the ruler only moves on finger touches and the pen/scroll continue to work
-  // independently.
-  let panG: any = pan;
-  let rotG: any = rotate;
-  if (externalGestureRefs && externalGestureRefs.length > 0) {
-    panG = pan.simultaneousWithExternalGesture(...externalGestureRefs);
-    rotG = rotate.simultaneousWithExternalGesture(...externalGestureRefs);
-  }
-  const combined = Gesture.Simultaneous(panG, rotG);
+  // Two independent gestures — no cross-tree composition. Each gesture uses its own
+  // pointerType filter so drawing / scroll / ruler stay out of each other's way.
+  const combined = Gesture.Simultaneous(pan, rotate);
+  // externalGestureRefs is retained in the API surface for future use but is intentionally
+  // NOT wired in — previous attempts to use simultaneousWithExternalGesture /
+  // requireExternalGestureToFail either blocked the ruler entirely (refs never populated
+  // in time) or created gesture race conditions that made the ruler jumpy.
+  void externalGestureRefs;
 
   // Animated transform for the container. Fully worklet-driven → smooth 60/120 fps.
   const animatedStyle = useAnimatedStyle(() => {

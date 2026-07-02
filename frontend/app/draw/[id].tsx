@@ -838,6 +838,8 @@ export default function DrawScreen() {
       scrollXStartRef.current = scrollX;
     })
     .onUpdate((e) => {
+      // Runtime guard: pen must never move the paper.
+      if (isStylusRef.current) return;
       // Vertical scroll — scrollY can go up to totalPageH minus visible window.
       const visibleH = viewport.h / Math.max(0.01, scale);
       const maxScroll = Math.max(0, totalPageH - visibleH);
@@ -919,6 +921,9 @@ export default function DrawScreen() {
       setOverscrollY(0);
     })
     .onUpdate((e) => {
+      // Runtime guard: if the pen is currently drawing (set by the drawing pan's
+      // onBegin), do nothing — the pen must never move the paper.
+      if (isStylusRef.current) return;
       // Vertical scroll with damped overscroll past the bottom edge.
       const visibleH = viewport.h / Math.max(0.01, scale);
       const maxScroll = Math.max(0, totalPageH - visibleH);
@@ -1956,100 +1961,9 @@ export default function DrawScreen() {
               externalGestureRefs={[drawingPanRef, fingerScrollPanRef, twoFingerPanRef]}
             />
           )}
-          {/* Vertical scroll thumb (right edge) — stylus-friendly, works regardless of palm rejection */}
-          {pageCount > 1 && (
-            <View
-              testID="scroll-thumb-track"
-              style={{
-                position: 'absolute',
-                top: spacing.sm,
-                bottom: spacing.sm,
-                right: 2,
-                width: 6,
-                backgroundColor: colors.surfaceSecondary,
-                borderRadius: 3,
-                opacity: 0.7,
-              }}
-            >
-              <Pressable
-                testID="scroll-thumb"
-                onTouchStart={(e) => { (e as any)._sy = scrollY; (e as any)._py = e.nativeEvent.pageY; }}
-                onTouchMove={(e) => {
-                  const startY: number = (e as any)._py ?? e.nativeEvent.pageY;
-                  const startScroll: number = (e as any)._sy ?? scrollY;
-                  const dy = e.nativeEvent.pageY - startY;
-                  // Map thumb drag to canvas scroll (scale-aware).
-                  const visibleH = viewport.h / Math.max(0.01, scale);
-                  const maxScroll = Math.max(0, totalPageH - visibleH);
-                  const trackH = viewport.h - 2 * spacing.sm;
-                  const ratio = maxScroll / Math.max(1, trackH - 40);
-                  const next = Math.max(0, Math.min(maxScroll, startScroll + dy * ratio));
-                  setScrollY(next);
-                }}
-                style={{
-                  position: 'absolute',
-                  left: -8,
-                  width: 22,
-                  height: Math.max(40, ((viewport.h / Math.max(0.01, scale)) / Math.max(1, totalPageH)) * (viewport.h - 2 * spacing.sm)),
-                  top: (scrollY / Math.max(1, totalPageH)) * (viewport.h - 2 * spacing.sm),
-                  backgroundColor: colors.brand,
-                  borderRadius: 11,
-                  opacity: 0.9,
-                }}
-              />
-            </View>
-          )}
-          {/* Manual "Add page" FAB + page jump buttons (stack vertically, bottom-right) */}
-          <View style={{ position: 'absolute', right: spacing.lg, bottom: insets.bottom + spacing.lg, alignItems: 'center', gap: spacing.sm }}>
-            {pageCount > 1 && (
-              <>
-                <Pressable
-                  testID="page-up-btn"
-                  onPress={() => {
-                    haptic.selection();
-                    const currentPage = Math.floor(scrollY / Math.max(1, pageStrideY));
-                    setScrollY(Math.max(0, (currentPage - 1) * pageStrideY));
-                  }}
-                  style={({ pressed }) => ({
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
-                    backgroundColor: colors.surface,
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: pressed ? 0.7 : 1,
-                  })}
-                >
-                  <Ionicons name="chevron-up" size={22} color={colors.onSurface} />
-                </Pressable>
-                <Pressable
-                  testID="page-down-btn"
-                  onPress={() => {
-                    haptic.selection();
-                    const currentPage = Math.floor(scrollY / Math.max(1, pageStrideY));
-                    const maxScroll = Math.max(0, totalPageH - basePageH);
-                    setScrollY(Math.min(maxScroll, (currentPage + 1) * pageStrideY));
-                  }}
-                  style={({ pressed }) => ({
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
-                    backgroundColor: colors.surface,
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: pressed ? 0.7 : 1,
-                  })}
-                >
-                  <Ionicons name="chevron-down" size={22} color={colors.onSurface} />
-                </Pressable>
-              </>
-            )}
-            {/* FAB "Add page" removed — replaced by inline Samsung-style pill just below the last page. */}
-          </View>
+          {/* Vertical scroll thumb + page jump buttons removed on user request — page
+              scrolling is now handled entirely via 1-finger drag on the paper (and pull-
+              to-add-page at the bottom). */}
           {/* Page indicator */}
           {pageCount > 1 && (
             <View
