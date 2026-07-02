@@ -812,6 +812,11 @@ export default function DrawScreen() {
       setScale(next);
     });
 
+  // Currently-drawing flag (declared early because scroll gestures reference it).
+  // Set to true in the drawing pan's onBegin whenever a stylus starts drawing.
+  // Default to `true` so on devices that don't report pointerType, the pen still works.
+  const isStylusRef = useRef<boolean>(true);
+
   const twoFingerPanY = Gesture.Pan()
     .runOnJS(true)
     .withRef(twoFingerPanRef)
@@ -977,9 +982,8 @@ export default function DrawScreen() {
   // Track whether the active touch is from a stylus / S-Pen vs a finger.
   // Set from React Native PointerEvent (onStartShouldSetResponderCapture) before the
   // RNGH gesture begins, then consulted in every gesture callback so palm rejection
-  // works. Default to `true` so the app is usable on very old devices that don't
-  // report pointerType — if a user's finger still writes they can disable palm rejection.
-  const isStylusRef = useRef<boolean>(true);
+  // works. (The ref itself was hoisted above the scroll gestures — see earlier
+  // declaration.)
 
   // Gesture refs — passed to the Ruler so its pan/rotate can run SIMULTANEOUSLY with
   // the drawing/scroll gestures. This eliminates cross-tree gesture races that made

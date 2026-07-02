@@ -118,23 +118,18 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
     onChange({ ...state, x: nx, y: ny, angle: nAngle });
   };
 
-  // 1-finger drag → pan (UI-thread). ONLY accepts finger touches (pointerType 0).
-  // Any pen / mouse / unknown pointer fails the gesture so the S-Pen draws THROUGH the
-  // ruler with zero drift.
+  // 1-finger drag → pan (UI-thread). Fails on stylus so the S-Pen draws through; any
+  // other pointer type (finger, or unknown on older RNGH versions) is allowed to move
+  // the ruler. Being permissive here makes sure the ruler actually reacts on all builds.
   const pan = Gesture.Pan()
     .minDistance(0)
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
       'worklet';
       const touches = event.allTouches || [];
-      // Fail unless we can confirm at least one finger AND no stylus is in the batch.
-      let hasFinger = false;
       for (let i = 0; i < touches.length; i++) {
-        const pt = touches[i]?.pointerType;
-        if (pt === 1) { manager.fail(); return; }   // stylus present → fail
-        if (pt === 0) hasFinger = true;
+        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
       }
-      if (!hasFinger) manager.fail();               // no finger → fail (mouse / unknown)
     })
     .onStart(() => {
       'worklet';
