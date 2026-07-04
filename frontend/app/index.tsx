@@ -14,12 +14,12 @@ import {
   BackHandler,
   ToastAndroid,
   Animated as RNAnimated,
+  PanResponder,
   useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors, labelColors } from '@/src/theme/tokens';
@@ -1000,9 +1000,11 @@ export default function HomeScreen() {
 
   const isEmpty = !loading && notes.length === 0;
 
-  // Captured at the start of a pinch gesture so the update can compute the new
-  // scale relative to where the gesture began (rather than compounding).
-  const pinchStartScaleRef = useRef<number>(1);
+  // Home-grid pinch state (PanResponder-based, since RNGH's Pinch loses to
+  // FlatList's ScrollView on some Android builds). Tracks the initial finger
+  // distance + starting `homeTileScale` so we can compute a stable scale
+  // multiplier as the fingers move.
+  const pinchStateRef = useRef({ startDistance: 0, startScale: 1, active: false });
 
   // File-manager view (folder tiles + folder notes list). Extracted from the
   // FlatList's ListHeaderComponent so the return JSX stays readable and the
@@ -1559,24 +1561,52 @@ export default function HomeScreen() {
       </View>
 
       {/* Pinch to zoom home tiles.
-          Two-finger pinch on the grid rescales `homeTileScale` live. A bare
-          Gesture.Pinch() intentionally requires 2+ pointers, so a single-
-          finger scroll on the FlatList underneath still works normally — RNGH
-          only claims the touch when the second finger lands. */}
-      <GestureDetector
-        gesture={Gesture.Pinch()
-          .onStart(() => {
-            pinchStartScaleRef.current = tileScale;
-          })
-          .onUpdate((e) => {
-            const raw = pinchStartScaleRef.current * e.scale;
-            const clamped = Math.max(0.5, Math.min(2.0, raw));
-            if (Math.abs(clamped - tileScale) < 0.02) return;
-            updateSettings({ homeTileScale: clamped });
-          })}
-      >
-        <View style={{ flex: 1 }}>
-          <FlatList
+          RNGH's Pinch gesture reliably races with the FlatList's internal
+          ScrollView on some Android builds and never activates. Using a
+          PanResponder that manually tracks 2+ touch points bypasses that
+          race entirely — we only claim the responder when the SECOND finger
+          lands, so single-finger scroll on the FlatList underneath is
+          unaffected. */}
+      {(() => {
+        const state = pinchStateRef.current;
+        const pinchPan = PanResponder.create({
+          // Only claim the responder when a second finger is on the screen.
+          onStartShouldSetPanResponder: (e) =>
+            (e.nativeEvent.touches?.length ?? 0) >= 2,
+          onMoveShouldSetPanResponder: (e) =>
+            (e.nativeEvent.touches?.length ?? 0) >= 2,
+          // Don't block scroll from starting.
+          onStartShouldSetPanResponderCapture: () => false,
+          onMoveShouldSetPanResponderCapture: (e) =>
+            (e.nativeEvent.touches?.length ?? 0) >= 2,
+          onPanResponderGrant: (e) => {
+            const t = e.nativeEvent.touches;
+            if (t.length >= 2) {
+              const dx = t[0].pageX - t[1].pageX;
+              const dy = t[0].pageY - t[1].pageY;
+              state.startDistance = Math.hypot(dx, dy);
+              state.startScale = tileScale;
+              state.active = true;
+            }
+          },
+          onPanResponderMove: (e) => {
+            const t = e.nativeEvent.touches;
+            if (!state.active || t.length < 2) return;
+            const dx = t[0].pageX - t[1].pageX;
+            const dy = t[0].pageY - t[1].pageY;
+            const dist = Math.hypot(dx, dy);
+            if (state.startDistance < 1) return;
+            const ratio = dist / state.startDistance;
+            const next = Math.max(0.5, Math.min(2.0, state.startScale * ratio));
+            if (Math.abs(next - tileScale) < 0.03) return;
+            updateSettings({ homeTileScale: next });
+          },
+          onPanResponderRelease: () => { state.active = false; },
+          onPanResponderTerminate: () => { state.active = false; },
+        });
+        return (
+          <View style={{ flex: 1 }} {...pinchPan.panHandlers}>
+            <FlatList
             testID="notes-list"
             data={[]}
             keyExtractor={() => 'static'}
@@ -1643,7 +1673,8 @@ export default function HomeScreen() {
             }
           />
         </View>
-      </GestureDetector>
+        );
+      })()}
 
       {/* FAB (hidden in selection / trash) */}
       {!selectionMode && category !== 'trash' && (
@@ -1692,32 +1723,50 @@ export default function HomeScreen() {
       {/* Left drawer (phone only — overlay modal). On Android with edge-to-edge
           display the Modal doesn't extend under the status / nav bars unless
           `statusBarTranslucent` is enabled. Without it the panel visibly stops
-          short of the bottom on small phones (e.g. S25 Ultra). */}
-      {!isTablet && (
-        <Modal
-          visible={drawerOpen}
-          transparent
-          animationType="fade"
-          statusBarTranslucent
-          onRequestClose={() => setDrawerOpen(false)}
-        >
-          <Pressable style={styles.drawerBackdrop} onPress={() => setDrawerOpen(false)}>
-            <Pressable
-              style={[
-                styles.drawerPanel,
-                {
-                  backgroundColor: colors.surface,
-                  paddingTop: insets.top + spacing.lg,
-                  paddingBottom: insets.bottom + spacing.sm,
-                },
-              ]}
-              onPress={(e) => e.stopPropagation()}
-            >
-              {drawerInner}
+          short of the bottom on small phones (e.g. S25 Ultra).
+          Swipe-to-close: users can flick the drawer LEFT anywhere on its body
+          to dismiss it. Implemented with `PanResponder` (works reliably across
+          RN Web / Android / iOS without fighting the drawer's inner scroll). */}
+      {!isTablet && (() => {
+        const drawerPan = PanResponder.create({
+          // Only claim horizontal drags; vertical drags flow through to inner scroll.
+          onStartShouldSetPanResponder: () => false,
+          onMoveShouldSetPanResponder: (_e, g) =>
+            Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
+          onPanResponderMove: () => { /* no-op; only care about release */ },
+          onPanResponderRelease: (_e, g) => {
+            // Fast left flick OR significant leftward drag → close the drawer.
+            if (g.dx < -60 || g.vx < -0.4) setDrawerOpen(false);
+          },
+          onPanResponderTerminationRequest: () => true,
+        });
+        return (
+          <Modal
+            visible={drawerOpen}
+            transparent
+            animationType="fade"
+            statusBarTranslucent
+            onRequestClose={() => setDrawerOpen(false)}
+          >
+            <Pressable style={styles.drawerBackdrop} onPress={() => setDrawerOpen(false)}>
+              <Pressable
+                {...drawerPan.panHandlers}
+                style={[
+                  styles.drawerPanel,
+                  {
+                    backgroundColor: colors.surface,
+                    paddingTop: insets.top + spacing.lg,
+                    paddingBottom: insets.bottom + spacing.sm,
+                  },
+                ]}
+                onPress={(e) => e.stopPropagation()}
+              >
+                {drawerInner}
+              </Pressable>
             </Pressable>
-          </Pressable>
-        </Modal>
-      )}
+          </Modal>
+        );
+      })()}
 
       {/* Template picker — anchored above the FAB */}
       <Modal visible={showTemplate} transparent animationType="fade" onRequestClose={() => setShowTemplate(false)}>

@@ -257,36 +257,40 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
 
   return (
     <>
-      <GestureDetector gesture={combined}>
-        <AnimatedView
-          // Shrink the effective hit area to the visible ruler band. The container
-          // itself is `displayLength` wide so ticks/labels render off-screen for the
-          // infinite look, but touches outside a 1.6× viewport-diameter middle band
-          // pass through to the drawing surface below (no ruler interaction).
-          hitSlop={{
-            left: -Math.max(0, halfLen - viewport.w * 0.8),
-            right: -Math.max(0, halfLen - viewport.w * 0.8),
+      {/*
+        The ruler is split into two overlapping layers so the pen never
+        accidentally moves it:
+
+        1. `bodyLayer` — the translucent bar + ticks + numbers. `pointerEvents`
+           is 'none' so ALL touches (pen or finger) pass STRAIGHT THROUGH to the
+           drawing canvas underneath. This eliminates the gesture race that
+           made writing feel jittery when the ruler was on.
+
+        2. `grip` — a small round handle at the centre of the ruler. This is
+           the ONLY interactive part: it hosts the pan + rotate gestures. Users
+           drag it with a finger to move the ruler; the pen literally cannot
+           reach it while writing on the paper.
+      */}
+      <AnimatedView
+        pointerEvents="none"
+        style={[
+          {
+            position: 'absolute',
+            left: 0,
             top: 0,
-            bottom: 0,
-          }}
-          style={[
-            {
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              width: displayLength,
-              height: RULER_H,
-              // Whitish-grey translucent tint — reads clearly as a physical
-              // ruler laid over the paper without hiding what's underneath.
-              backgroundColor: 'rgba(210,214,220,0.28)',
-              borderTopWidth: 1,
-              borderBottomWidth: 1,
-              borderColor: 'rgba(80,86,96,0.55)',
-              overflow: 'visible',
-            },
-            animatedStyle,
-          ]}
-        >
+            width: displayLength,
+            height: RULER_H,
+            // Whitish-grey translucent tint — reads clearly as a physical
+            // ruler laid over the paper without hiding what's underneath.
+            backgroundColor: 'rgba(210,214,220,0.28)',
+            borderTopWidth: 1,
+            borderBottomWidth: 1,
+            borderColor: 'rgba(80,86,96,0.55)',
+            overflow: 'visible',
+          },
+          animatedStyle,
+        ]}
+      >
           {/* The translucent body defines the ruler edges — no explicit line drawn. */}
 
           {/* Tick marks — black graduation. Non-interactive. */}
@@ -357,6 +361,38 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
           {state.unit}
         </Text>
       </AnimatedView>
+
+      {/* Central drag handle — the ONLY interactive part of the ruler.
+          Sits at the ruler centre and follows its transform via the same
+          animated style. Fingers land here to pan/rotate; pen touches on the
+          rest of the ruler pass through to the drawing surface below. */}
+      <GestureDetector gesture={combined}>
+        <AnimatedView
+          style={[
+            {
+              position: 'absolute',
+              left: halfLen - 30,
+              top: RULER_H / 2 - 30,
+              width: 60,
+              height: 60,
+              borderRadius: 30,
+              backgroundColor: 'rgba(80,86,96,0.35)',
+              borderWidth: 1.5,
+              borderColor: 'rgba(255,255,255,0.85)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.15,
+              shadowRadius: 3,
+            },
+            animatedStyle,
+          ]}
+        >
+          {/* Two short parallel bars hint that this is a grab handle. */}
+          <View style={{ width: 20, height: 2.5, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 2, marginBottom: 4 }} />
+          <View style={{ width: 20, height: 2.5, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 2 }} />
+        </AnimatedView>
       </GestureDetector>
     {/* Live angle chip — un-rotated so it stays readable while the ruler spins. Updates
         every frame via useAnimatedProps on a TextInput. Non-interactive (pen and gestures
