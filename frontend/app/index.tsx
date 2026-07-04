@@ -781,6 +781,132 @@ export default function HomeScreen() {
     const noteLabels = (note.label_ids || [])
       .map((lid) => labels.find((ll) => ll.id === lid))
       .filter(Boolean) as Label[];
+    // Grid mode: content-only card, with title + date rendered as a caption
+    // UNDER the card so the tile itself looks like a clean preview (no border
+    // around a name/date block). List mode keeps the classic in-card layout.
+    if (isGrid) {
+      return (
+        <View
+          key={note.id}
+          style={{ width: cardWidth, alignItems: 'stretch', marginBottom: spacing.md }}
+        >
+          <Pressable
+            testID={`note-card-${note.id}`}
+            onPress={() => {
+              if (selectionMode) { toggleSelect(note); return; }
+              if (category === 'trash') { enterSelectionWith(note); return; }
+              if (note.locked) router.push(`/lock?noteId=${note.id}`);
+              else if (note.note_type === 'handwriting') router.push(`/draw/${note.id}`);
+              else router.push(`/note/${note.id}`);
+            }}
+            onLongPress={() => enterSelectionWith(note)}
+            delayLongPress={300}
+            style={({ pressed }) => [
+              {
+                width: '100%',
+                height: cardHeight,
+                borderRadius: radius.lg,
+                backgroundColor: isSelected ? colors.brandTertiary : colors.surfaceSecondary,
+                borderLeftColor: folder?.color || 'transparent',
+                borderLeftWidth: folder ? 3 : 0,
+                borderWidth: isSelected ? 2 : 0,
+                borderColor: isSelected ? colors.brand : 'transparent',
+                opacity: pressed ? 0.85 : 1,
+                overflow: 'hidden',
+                padding: spacing.md,
+              },
+            ]}
+          >
+            {selectionMode && (
+              <View style={[styles.selectMark, { backgroundColor: isSelected ? colors.brand : colors.surface, borderColor: colors.brand }]}>
+                {isSelected && <Ionicons name="checkmark" size={14} color={colors.onBrandPrimary} />}
+              </View>
+            )}
+            {!note.locked && note.note_type !== 'handwriting' && (
+              <Text
+                numberOfLines={6}
+                style={[styles.cardPreview, { color: colors.onSurfaceSecondary, marginTop: 0 }]}
+              >
+                {previewText(note) || 'No additional text'}
+              </Text>
+            )}
+            {!note.locked && note.note_type === 'handwriting' && (
+              <View style={{ flex: 1 }}>
+                {note.drawing_data ? (
+                  <HandwritingThumbnail
+                    drawingData={note.drawing_data}
+                    width={cardPxWidth - spacing.md * 2}
+                    height={Math.max(80, (cardPxHeight ?? Math.round(cardPxWidth * 0.9)) - spacing.md * 2)}
+                    radius={6}
+                  />
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Ionicons name="brush" size={14} color={colors.brand} />
+                    <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
+                      Handwritten note
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+            {note.locked && (
+              <Text style={[styles.cardPreview, { color: colors.muted, fontStyle: 'italic' }]}>
+                Tap to unlock
+              </Text>
+            )}
+            {!!note.images.length && (
+              <View style={[styles.cardMeta, { position: 'absolute', top: 8, right: 8 }]}>
+                <Ionicons name="image-outline" size={12} color={colors.muted} />
+                <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.images.length}</Text>
+              </View>
+            )}
+          </Pressable>
+
+          {/* Caption row — title + date + pin/lock icons live UNDER the card,
+              matching iOS Photos-style tiles. Labels flow below the caption. */}
+          <View style={{ paddingHorizontal: 4, paddingTop: spacing.xs }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {note.pinned && <Ionicons name="pin" size={12} color={colors.brand} style={{ marginRight: 4 }} />}
+              {note.locked && <Ionicons name="lock-closed" size={12} color={colors.muted} style={{ marginRight: 4 }} />}
+              <Text
+                numberOfLines={1}
+                style={{
+                  flex: 1,
+                  fontSize: typeScale.base,
+                  fontWeight: '700',
+                  color: colors.onSurface,
+                }}
+              >
+                {note.title || 'Untitled note'}
+              </Text>
+            </View>
+            <Text style={{ fontSize: typeScale.sm, color: colors.muted, marginTop: 2 }}>
+              {formatDate(note.updated_at)}
+            </Text>
+            {noteLabels.length > 0 && (
+              <View style={[styles.labelChipRow, { marginTop: 4 }]}>
+                {noteLabels.slice(0, 3).map((l) => (
+                  <View
+                    key={l.id}
+                    style={[styles.labelChip, { backgroundColor: withAlpha(l.color, 0.18), borderColor: l.color }]}
+                  >
+                    <View style={[styles.labelChipDot, { backgroundColor: l.color }]} />
+                    <Text numberOfLines={1} style={[styles.labelChipText, { color: l.color }]}>
+                      {l.name}
+                    </Text>
+                  </View>
+                ))}
+                {noteLabels.length > 3 && (
+                  <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginLeft: 4 }}>+{noteLabels.length - 3}</Text>
+                )}
+              </View>
+            )}
+          </View>
+        </View>
+      );
+    }
+
+    // ---- List mode (unchanged): compact single-row card with everything inside.
     return (
       <Pressable
         key={note.id}
@@ -800,7 +926,7 @@ export default function HomeScreen() {
             backgroundColor: isSelected ? colors.brandTertiary : colors.surfaceSecondary,
             width: cardWidth,
             height: cardHeight,
-            alignSelf: viewMode === 'list' ? 'stretch' : 'flex-start',
+            alignSelf: 'stretch',
             borderLeftColor: folder?.color || 'transparent',
             borderLeftWidth: folder ? 3 : 0,
             borderWidth: isSelected ? 2 : 0,
@@ -825,32 +951,18 @@ export default function HomeScreen() {
         </Text>
         {!note.locked && note.note_type !== 'handwriting' && (
           <Text
-            numberOfLines={viewMode === 'grid' ? 5 : 2}
+            numberOfLines={2}
             style={[styles.cardPreview, { color: colors.onSurfaceSecondary }]}
           >
             {previewText(note) || 'No additional text'}
           </Text>
         )}
         {!note.locked && note.note_type === 'handwriting' && (
-          <View style={{ marginTop: spacing.xs, flex: 1 }}>
-            {note.drawing_data ? (
-              <HandwritingThumbnail
-                drawingData={note.drawing_data}
-                width={cardPxWidth - spacing.md * 2}
-                // Fit the remaining vertical space inside the fixed-height
-                // card so all tiles line up. Falls back to a sensible min
-                // when no card height is available (list view).
-                height={Math.max(80, (cardPxHeight ?? Math.round(cardPxWidth * 0.9)) - 96)}
-                radius={6}
-              />
-            ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="brush" size={14} color={colors.brand} />
-                <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
-                  Handwritten note
-                </Text>
-              </View>
-            )}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs }}>
+            <Ionicons name="brush" size={14} color={colors.brand} />
+            <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
+              Handwritten note
+            </Text>
           </View>
         )}
         {note.locked && (
