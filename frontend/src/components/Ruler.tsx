@@ -5,6 +5,7 @@ import Animated, {
   useAnimatedStyle,
   useAnimatedProps,
   useSharedValue,
+  SharedValue,
   runOnJS,
 } from 'react-native-reanimated';
 
@@ -46,6 +47,10 @@ interface Props {
   // the ruler to decide/fail. This eliminates the "jagged pen writing" caused by cross-
   // GestureDetector race.
   externalGestureRefs?: React.MutableRefObject<any>[];
+  // Shared value from the parent that is 1 while an S-Pen / stylus is touching the
+  // screen. When set, ALL ruler gestures become no-ops so the pen writes through
+  // even on devices where RNGH's pointerType reporting is unreliable.
+  penDownSV?: SharedValue<number>;
 }
 
 // Approximate points-per-cm on a typical mobile screen. Real DPI varies but this gives a
@@ -59,13 +64,17 @@ const ROTATION_START_THRESHOLD_RAD = 0.035; // ~2° before rotation starts (cuts
 
 const AnimatedView = Animated.createAnimatedComponent(View);
 
-export default function Ruler({ state, onChange, paperScale, viewport, colors, externalGestureRefs }: Props) {
+export default function Ruler({ state, onChange, paperScale, viewport, colors, externalGestureRefs, penDownSV }: Props) {
   void colors;
 
   // Shared values driving the transform. Initial values seeded from React state.
   const x = useSharedValue(state.x);
   const y = useSharedValue(state.y);
   const angle = useSharedValue(state.angle);
+  // Local shared value used if the parent didn't pass one. Kept so worklets can
+  // always read a defined SharedValue<number>.
+  const localPenDown = useSharedValue(0);
+  const penDown = penDownSV ?? localPenDown;
 
   // Sync shared values when React state changes externally (e.g. numeric angle input,
   // recentre from the menu). Clamp x/y so the ruler centre stays inside the viewport.
@@ -122,10 +131,24 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
   // other pointer type (finger, or unknown on older RNGH versions) is allowed to move
   // the ruler. Being permissive here makes sure the ruler actually reacts on all builds.
   const pan = Gesture.Pan()
-    .minDistance(0)
+    .minDistance(4)      // ignore tiny taps / stylus dab-and-lift so the pen doesn't inadvertently start a pan
     .maxPointers(1)
     .onTouchesDown((event, manager) => {
       'worklet';
+      // Belt-and-braces: if the parent already flagged a stylus-down (drawing pan
+      // fires its own onTouchesDown for the same touch and sets penDown=1),
+      // refuse immediately. This backs up RNGH's own pointerType filter which is
+      // unreliable on some Samsung devices where the S-Pen registers as TOUCH.
+      if (penDown.value === 1) { manager.fail(); return; }
+      const touches = event.allTouches || [];
+      for (let i = 0; i < touches.length; i++) {
+        const pt = touches[i]?.pointerType;
+        if (pt === 1) { manager.fail(); return; }
+      }
+    })
+    .onTouchesMove((event, manager) => {
+      'worklet';
+      if (penDown.value === 1) { manager.fail(); return; }
       const touches = event.allTouches || [];
       for (let i = 0; i < touches.length; i++) {
         if (touches[i]?.pointerType === 1) { manager.fail(); return; }
@@ -138,6 +161,9 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
     })
     .onUpdate((e) => {
       'worklet';
+      // Final safety net — if a stylus went down mid-pan (e.g. late detection),
+      // stop updating the ruler position so it stays put and the pen can draw.
+      if (penDown.value === 1) return;
       // Small safety margin so the "0" tick is always visible (not right at the edge).
       const margin = 8;
       const nx = startX.value + e.translationX;
@@ -156,10 +182,15 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
   const rotate = Gesture.Rotation()
     .onTouchesDown((event, manager) => {
       'worklet';
+      if (penDown.value === 1) { manager.fail(); return; }
       const touches = event.allTouches || [];
       for (let i = 0; i < touches.length; i++) {
         if (touches[i]?.pointerType === 1) { manager.fail(); return; }
       }
+    })
+    .onTouchesMove((event, manager) => {
+      'worklet';
+      if (penDown.value === 1) { manager.fail(); return; }
     })
     .onBegin(() => {
       'worklet';
@@ -169,6 +200,7 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
     })
     .onUpdate((e) => {
       'worklet';
+      if (penDown.value === 1) return;
       // Ignore tiny rotations until they clearly cross the threshold — kills jitter.
       if (!crossedThreshold.value) {
         if (Math.abs(e.rotation) < ROTATION_START_THRESHOLD_RAD) return;
@@ -227,6 +259,16 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
     <>
       <GestureDetector gesture={combined}>
         <AnimatedView
+          // Shrink the effective hit area to the visible ruler band. The container
+          // itself is `displayLength` wide so ticks/labels render off-screen for the
+          // infinite look, but touches outside a 1.6× viewport-diameter middle band
+          // pass through to the drawing surface below (no ruler interaction).
+          hitSlop={{
+            left: -Math.max(0, halfLen - viewport.w * 0.8),
+            right: -Math.max(0, halfLen - viewport.w * 0.8),
+            top: 0,
+            bottom: 0,
+          }}
           style={[
             {
               position: 'absolute',
@@ -234,11 +276,15 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
               top: 0,
               width: displayLength,
               height: RULER_H,
-              // The translucent body itself defines the ruler edges.
-              // NOTE: no shadow / elevation — Android renders elevation shadows on the
-              // pre-transform bounding box, which produces obvious color/tint artefacts
-              // (dark rectangle bleeding through) as the ruler is rotated.
-              backgroundColor: 'rgba(255, 255, 255, 0.42)',
+              // Very light translucent tint — reads as a physical glass ruler on
+              // most backgrounds without hiding the paper under it.
+              // NOTE: no shadow / elevation — Android renders elevation shadows on
+              // the pre-transform bounding box, which produces obvious color/tint
+              // artefacts (dark rectangle bleeding through) as the ruler rotates.
+              backgroundColor: 'rgba(255,255,255,0.16)',
+              borderTopWidth: 1,
+              borderBottomWidth: 1,
+              borderColor: 'rgba(0,0,0,0.35)',
               overflow: 'visible',
             },
             animatedStyle,
@@ -360,14 +406,22 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
 }
 
 /**
- * Project a point onto the infinite line defined by the ruler's TOP edge in viewport
- * coordinates. Uses the same length formula as the component so snapping stays consistent.
+ * Project a point onto the infinite line defined by the ruler's NEAREST long edge
+ * (top or bottom) in viewport coordinates. Uses the same length formula as the
+ * component so snapping stays consistent. Choosing the nearest edge means the user
+ * can slide their pen along whichever edge of the ruler feels natural — just like a
+ * real ruler where you can draw along either straight side.
+ *
+ * When `fixedEdge` is provided (+1 → bottom edge, -1 → top edge), the projection is
+ * locked to that side. Callers use this to prevent a stroke from flipping between
+ * edges mid-line if the pen wobbles across the ruler centre.
  */
 export function rulerProject(
   state: RulerState,
   paperScale: number,
   pt: { x: number; y: number },
-  viewport?: { w: number; h: number }
+  viewport?: { w: number; h: number },
+  fixedEdge?: 1 | -1
 ): { x: number; y: number } {
   void paperScale;
   const vw = viewport?.w ?? 1000;
@@ -381,10 +435,14 @@ export function rulerProject(
   const relY = pt.y - state.y;
   const t = relX * dx + relY * dy;
   const clampedT = Math.max(-halfLen, Math.min(halfLen, t));
-  // Offset perpendicular to the axis so strokes sit at the top edge of the ruler.
+  // Perpendicular signed distance from the ruler CENTRE to the point. Positive means
+  // the point is on the "bottom" side (in ruler-local coordinates), negative means the
+  // "top" side. Snap the pen to whichever edge is closer unless a fixed edge is set.
   const perpX = -dy;
   const perpY = dx;
-  const edgeOffset = -RULER_H / 2;
+  const perp = relX * perpX + relY * perpY;
+  const sign = typeof fixedEdge === 'number' ? fixedEdge : (perp >= 0 ? 1 : -1);
+  const edgeOffset = (sign as number) * (RULER_H / 2);
   return {
     x: state.x + clampedT * dx + edgeOffset * perpX,
     y: state.y + clampedT * dy + edgeOffset * perpY,
@@ -392,7 +450,26 @@ export function rulerProject(
 }
 
 /**
- * Distance from `pt` to the ruler's top edge (viewport coords).
+ * Return +1 or -1 depending on which side of the ruler centre `pt` lies on. Used
+ * to pick a fixed edge for snapping BEFORE the first `rulerProject` call so the
+ * whole stroke stays on the same side.
+ */
+export function rulerEdgeSign(
+  state: RulerState,
+  pt: { x: number; y: number }
+): 1 | -1 {
+  const rad = (state.angle * Math.PI) / 180;
+  const dx = Math.cos(rad);
+  const dy = Math.sin(rad);
+  const relX = pt.x - state.x;
+  const relY = pt.y - state.y;
+  const perp = relX * -dy + relY * dx;
+  return perp >= 0 ? 1 : -1;
+}
+
+/**
+ * Distance from `pt` to the ruler's nearest long edge (viewport coords). Used to
+ * decide whether a fresh stroke should snap onto the ruler.
  */
 export function rulerEdgeDistance(
   state: RulerState,

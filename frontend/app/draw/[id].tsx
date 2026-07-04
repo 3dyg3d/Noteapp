@@ -14,7 +14,8 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Ruler, { RulerState, rulerProject, rulerEdgeDistance } from '@/src/components/Ruler';
+import Ruler, { RulerState, rulerProject, rulerEdgeDistance, rulerEdgeSign } from '@/src/components/Ruler';
+import RulerSettingsMenu from '@/src/components/RulerSettingsMenu';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
@@ -22,12 +23,13 @@ import { useSharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
-import { NotesApi, Note } from '@/src/api/client';
+import { NotesApi, LabelsApi, Note, Label } from '@/src/api/client';
 import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import SkiaPaper from '@/src/components/SkiaPaper';
 import PaperPreview from '@/src/components/PaperPreview';
+import { labelColors } from '@/src/theme/tokens';
 
 // ---------- Types ----------
 type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil';
@@ -291,11 +293,18 @@ export default function DrawScreen() {
     x: 300, y: 300, angle: 0, unit: 'cm', scaleWithPaper: true, lengthPx: 340,
   });
   const snapToRulerRef = useRef<boolean>(false);
+  // Which edge the current stroke is locked to (+1 = bottom, -1 = top). Captured
+  // at the first snap so a hand tremor across the ruler centre doesn't flip the line.
+  const snapEdgeRef = useRef<1 | -1>(1);
   const rulerSnapWorld = (screenX: number, screenY: number) => {
     if (!rulerEnabled) return null;
     const d = rulerEdgeDistance(rulerState, scale, { x: screenX, y: screenY }, viewport);
-    if (d > 24) return null;
-    return rulerProject(rulerState, scale, { x: screenX, y: screenY }, viewport);
+    // Snap if the pen begins within ~40px of the nearest ruler edge. The 40px band
+    // covers ~1 cm of finger/pen slop and matches how a real ruler feels: place the
+    // pen roughly at the edge and your line locks to that edge.
+    if (d > 40) return null;
+    snapEdgeRef.current = rulerEdgeSign(rulerState, { x: screenX, y: screenY });
+    return rulerProject(rulerState, scale, { x: screenX, y: screenY }, viewport, snapEdgeRef.current);
   };
 
   // ---------- Laser + Select state ----------
@@ -429,6 +438,12 @@ export default function DrawScreen() {
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
+  // Labels state (loaded once when the screen mounts; refreshed when the picker
+  // opens so any labels created elsewhere show up here too).
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [showLabelPicker, setShowLabelPicker] = useState(false);
+  const [labelDraftName, setLabelDraftName] = useState('');
+
   // Zoom (panning removed) — translation is derived to keep canvas centered while zooming.
   const [scale, setScale] = useState(1);
   const [scrollY, setScrollY] = useState(0); // vertical scroll across multi-page canvas
@@ -505,9 +520,13 @@ export default function DrawScreen() {
     historyRef.current = { undo: [], redo: [] };
     (async () => {
       try {
-        const n = await NotesApi.get(id as string);
+        const [n, ls] = await Promise.all([
+          NotesApi.get(id as string),
+          LabelsApi.list().catch(() => [] as Label[]),
+        ]);
         if (cancelled) return;
         setNote(n);
+        setLabels(ls);
         openTab({ id: n.id, title: n.title || 'Untitled', type: 'handwriting' });
         if (n.drawing_data) {
           try {
@@ -821,6 +840,13 @@ export default function DrawScreen() {
   // (e.g. the Ruler) can consult it synchronously and refuse to pan when a pen is down.
   const penDownSV = useSharedValue(0);
 
+  // Gesture refs — hoisted here (before the gestures that reference them) so their
+  // `.withRef(...)` calls work at construction time. Passed to the Ruler so its
+  // pan/rotate can run SIMULTANEOUSLY with the drawing/scroll gestures.
+  const drawingPanRef = useRef<any>(null);
+  const fingerScrollPanRef = useRef<any>(null);
+  const twoFingerPanRef = useRef<any>(null);
+
   const twoFingerPanY = Gesture.Pan()
     .runOnJS(true)
     .withRef(twoFingerPanRef)
@@ -989,12 +1015,8 @@ export default function DrawScreen() {
   // works. (The ref itself was hoisted above the scroll gestures — see earlier
   // declaration.)
 
-  // Gesture refs — passed to the Ruler so its pan/rotate can run SIMULTANEOUSLY with
-  // the drawing/scroll gestures. This eliminates cross-tree gesture races that made
-  // pen writing on the ruler feel jagged.
-  const drawingPanRef = useRef<any>(null);
-  const fingerScrollPanRef = useRef<any>(null);
-  const twoFingerPanRef = useRef<any>(null);
+  // (drawingPanRef / fingerScrollPanRef / twoFingerPanRef are hoisted above with
+  // penDownSV so their .withRef(...) usages don't hit a TDZ error at construction.)
   const pan = Gesture.Pan()
     .runOnJS(true)
     .withRef(drawingPanRef)
@@ -1089,10 +1111,11 @@ export default function DrawScreen() {
     .onUpdate((e) => {
       if (palmRejectionRef.current && !isStylusRef.current) return;
       // If snapping to ruler, project each point onto the ruler line before adding.
+      // Use the edge captured at stroke start so the line stays on one side.
       let px = e.x;
       let py = e.y;
       if (snapToRulerRef.current) {
-        const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y }, viewport);
+        const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y }, viewport, snapEdgeRef.current);
         px = proj.x;
         py = proj.y;
       }
@@ -1353,6 +1376,58 @@ export default function DrawScreen() {
     await NotesApi.remove(note.id);
     router.back();
   };
+
+  // ---------- Labels (bound to this handwritten note) ----------
+  const noteLabels = useMemo(
+    () =>
+      ((note?.label_ids || [])
+        .map((lid) => labels.find((l) => l.id === lid))
+        .filter(Boolean) as Label[]),
+    [note?.label_ids, labels]
+  );
+
+  const toggleLabelOnNote = useCallback(
+    async (labelId: string) => {
+      if (!note) return;
+      const current = new Set(note.label_ids || []);
+      if (current.has(labelId)) current.delete(labelId);
+      else current.add(labelId);
+      const next = Array.from(current);
+      setNote((prev) => (prev ? { ...prev, label_ids: next } : prev));
+      try {
+        await NotesApi.update(note.id, { label_ids: next });
+      } catch (e) {
+        console.warn('label toggle failed', e);
+      }
+    },
+    [note]
+  );
+
+  const createLabelFromDraw = useCallback(async () => {
+    const name = labelDraftName.trim();
+    if (!name || !note) return;
+    try {
+      const color = labelColors[labels.length % labelColors.length];
+      const created = await LabelsApi.create({ name, color });
+      const nextLabels = [...labels.filter((l) => l.id !== created.id), created];
+      setLabels(nextLabels);
+      setLabelDraftName('');
+      // Auto-apply to the current note.
+      const currentIds = new Set(note.label_ids || []);
+      currentIds.add(created.id);
+      const nextIds = Array.from(currentIds);
+      setNote((prev) => (prev ? { ...prev, label_ids: nextIds } : prev));
+      await NotesApi.update(note.id, { label_ids: nextIds });
+    } catch (e) {
+      console.warn('create label failed', e);
+    }
+  }, [labelDraftName, labels, note]);
+
+  const openLabelPicker = useCallback(async () => {
+    // Refresh labels list so any changes made elsewhere show up here.
+    try { setLabels(await LabelsApi.list()); } catch {}
+    setShowLabelPicker(true);
+  }, []);
 
   const handleToolTap = (t: Tool, e?: any) => {
     haptic.selection();
@@ -1976,6 +2051,7 @@ export default function DrawScreen() {
                 surface: colors.surface,
               }}
               externalGestureRefs={[drawingPanRef, fingerScrollPanRef, twoFingerPanRef]}
+              penDownSV={penDownSV}
             />
           )}
           {/* Vertical scroll thumb + page jump buttons removed on user request — page
@@ -2414,138 +2490,33 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
-      {/* Ruler quick-settings menu (from the ruler icon next to zoom pill) */}
-      <Modal
+      {/* Ruler quick-settings menu — extracted to its own component so the huge
+          draw screen stays readable. Pure view; drawing screen owns all state. */}
+      <RulerSettingsMenu
         visible={showRulerMenu}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowRulerMenu(false)}
-      >
-        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowRulerMenu(false)}>
-          <Pressable
-            onPress={(e) => e.stopPropagation && e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              top: insets.top + 56,
-              right: 12,
-              width: 240,
-              backgroundColor: colors.surface,
-              borderRadius: radius.md,
-              padding: spacing.md,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.22,
-              shadowRadius: 16,
-              elevation: 12,
-            }}
-          >
-            <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.base, marginBottom: spacing.sm }}>
-              Ruler
-            </Text>
-
-            {/* Set angle */}
-            <Pressable
-              onPress={() => {
-                const norm = ((rulerState.angle % 360) + 360) % 360;
-                setRulerAngleDraft(String(Math.round(norm)));
-                setShowRulerMenu(false);
-                setShowRulerAngleInput(true);
-              }}
-              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
-              testID="ruler-menu-angle"
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="compass-outline" size={16} color={colors.onSurface} />
-                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>Set angle</Text>
-              </View>
-              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600' }}>
-                {`${Math.round(((rulerState.angle % 360) + 360) % 360)}°`}
-              </Text>
-            </Pressable>
-
-            {/* Scale graduation with paper */}
-            <Pressable
-              onPress={() => {
-                haptic.selection();
-                setRulerState((prev) => ({ ...prev, scaleWithPaper: !prev.scaleWithPaper }));
-              }}
-              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
-              testID="ruler-menu-scale"
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="resize-outline" size={16} color={colors.onSurface} />
-                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>Scale with paper</Text>
-              </View>
-              <View
-                style={{
-                  paddingHorizontal: 8,
-                  paddingVertical: 2,
-                  borderRadius: 999,
-                  backgroundColor: rulerState.scaleWithPaper ? colors.brand : colors.surfaceSecondary,
-                }}
-              >
-                <Text
-                  style={{
-                    color: rulerState.scaleWithPaper ? colors.onBrandPrimary : colors.onSurface,
-                    fontSize: 11,
-                    fontWeight: '700',
-                  }}
-                >
-                  {rulerState.scaleWithPaper ? 'On' : 'Off'}
-                </Text>
-              </View>
-            </Pressable>
-
-            {/* Units */}
-            <Pressable
-              onPress={() => {
-                haptic.selection();
-                setRulerState((prev) => ({ ...prev, unit: prev.unit === 'cm' ? 'in' : 'cm' }));
-              }}
-              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
-              testID="ruler-menu-unit"
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="swap-horizontal-outline" size={16} color={colors.onSurface} />
-                <Text style={{ color: colors.onSurface, fontSize: typeScale.sm }}>Units</Text>
-              </View>
-              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600' }}>
-                {rulerState.unit === 'cm' ? 'cm' : 'inches'}
-              </Text>
-            </Pressable>
-
-            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: 4 }} />
-
-            {/* Reset position/angle */}
-            <Pressable
-              onPress={() => {
-                haptic.selection();
-                setRulerState((prev) => ({ ...prev, x: viewport.w / 2, y: viewport.h / 2, angle: 0 }));
-                setShowRulerMenu(false);
-              }}
-              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}
-              testID="ruler-menu-reset"
-            >
-              <Ionicons name="refresh" size={16} color={colors.brand} />
-              <Text style={{ color: colors.brand, fontSize: typeScale.sm, fontWeight: '600' }}>Recenter & straighten</Text>
-            </Pressable>
-
-            {/* Hide ruler */}
-            <Pressable
-              onPress={() => {
-                haptic.selection();
-                setRulerEnabled(false);
-                setShowRulerMenu(false);
-              }}
-              style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}
-              testID="ruler-menu-hide"
-            >
-              <Ionicons name="eye-off-outline" size={16} color={colors.error} />
-              <Text style={{ color: colors.error, fontSize: typeScale.sm, fontWeight: '600' }}>Hide ruler</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setShowRulerMenu(false)}
+        rulerState={rulerState}
+        onChangeRuler={setRulerState}
+        onOpenAngleInput={() => {
+          const norm = ((rulerState.angle % 360) + 360) % 360;
+          setRulerAngleDraft(String(Math.round(norm)));
+          setShowRulerMenu(false);
+          setShowRulerAngleInput(true);
+        }}
+        onHide={() => setRulerEnabled(false)}
+        viewport={viewport}
+        topOffset={insets.top + 56}
+        colors={{
+          surface: colors.surface,
+          surfaceSecondary: colors.surfaceSecondary,
+          onSurface: colors.onSurface,
+          onBrandPrimary: colors.onBrandPrimary,
+          brand: colors.brand,
+          muted: colors.muted,
+          divider: colors.divider,
+          error: colors.error,
+        }}
+      />
 
       {/* Ruler angle — numeric input */}
       <Modal
@@ -3212,6 +3183,12 @@ export default function DrawScreen() {
               testID="draw-menu-rename"
             />
             <DrawMenuRow
+              icon="pricetag-outline"
+              label={noteLabels.length ? `Labels (${noteLabels.length})` : 'Add labels'}
+              onPress={() => { setShowPaperMenu(false); openLabelPicker(); }}
+              testID="draw-menu-labels"
+            />
+            <DrawMenuRow
               icon="settings-outline"
               label="Settings"
               onPress={() => { setShowPaperMenu(false); router.push('/settings'); }}
@@ -3591,6 +3568,142 @@ export default function DrawScreen() {
               style={[styles.btn, { backgroundColor: colors.brand, marginTop: spacing.lg }]}
             >
               <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Labels picker — toggle or create labels for this handwritten note. Mirrors
+          the text-note editor so behaviour stays consistent across note types. */}
+      <Modal
+        visible={showLabelPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowLabelPicker(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setShowLabelPicker(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              padding: spacing.lg,
+              paddingBottom: insets.bottom + spacing.lg,
+              borderTopLeftRadius: radius.lg,
+              borderTopRightRadius: radius.lg,
+              backgroundColor: colors.surface,
+              maxHeight: '75%',
+            }}
+          >
+            <View
+              style={{
+                width: 44,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: '#0002',
+                alignSelf: 'center',
+                marginBottom: spacing.md,
+              }}
+            />
+            <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.md }}>
+              Labels
+            </Text>
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+              <TextInput
+                testID="draw-label-new-input"
+                value={labelDraftName}
+                onChangeText={setLabelDraftName}
+                placeholder="New label name"
+                placeholderTextColor={colors.muted}
+                style={{
+                  flex: 1,
+                  height: 44,
+                  borderRadius: radius.md,
+                  paddingHorizontal: spacing.md,
+                  fontSize: typeScale.lg,
+                  borderWidth: 1,
+                  borderColor: colors.divider,
+                  color: colors.onSurface,
+                  backgroundColor: colors.surfaceSecondary,
+                }}
+                returnKeyType="done"
+                onSubmitEditing={createLabelFromDraw}
+                maxLength={40}
+              />
+              <Pressable
+                testID="draw-label-create-btn"
+                onPress={createLabelFromDraw}
+                style={{
+                  paddingHorizontal: spacing.lg,
+                  height: 44,
+                  borderRadius: radius.pill,
+                  backgroundColor: labelDraftName.trim() ? colors.brand : colors.surfaceSecondary,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                disabled={!labelDraftName.trim()}
+              >
+                <Text style={{ color: labelDraftName.trim() ? colors.onBrandPrimary : colors.muted, fontWeight: '700' }}>
+                  Create
+                </Text>
+              </Pressable>
+            </View>
+            {labels.length === 0 ? (
+              <Text style={{ color: colors.muted, textAlign: 'center', marginTop: spacing.lg }}>
+                No labels yet. Type a name above and tap Create.
+              </Text>
+            ) : (
+              <ScrollView>
+                {labels.map((l) => {
+                  const on = (note.label_ids || []).includes(l.id);
+                  return (
+                    <Pressable
+                      key={l.id}
+                      testID={`draw-label-toggle-${l.id}`}
+                      onPress={() => toggleLabelOnNote(l.id)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: spacing.md,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: colors.divider,
+                      }}
+                    >
+                      <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: l.color, marginRight: spacing.md }} />
+                      <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{l.name}</Text>
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          borderWidth: 2,
+                          borderColor: on ? colors.brand : colors.divider,
+                          backgroundColor: on ? colors.brand : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {on && <Ionicons name="checkmark" size={14} color={colors.onBrandPrimary} />}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+            <Pressable
+              onPress={() => setShowLabelPicker(false)}
+              testID="draw-label-picker-done"
+              style={{
+                marginTop: spacing.md,
+                paddingVertical: spacing.md,
+                borderRadius: radius.sm,
+                backgroundColor: colors.brand,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
             </Pressable>
           </Pressable>
         </Pressable>
