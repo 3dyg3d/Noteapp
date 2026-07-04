@@ -1578,9 +1578,6 @@ export default function HomeScreen() {
               },
             ]}
           >
-            <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginBottom: spacing.sm, letterSpacing: 1 }} testID="template-sheet-title">
-              NEW NOTE
-            </Text>
             {TEMPLATES.map((tpl) => (
               <Pressable
                 key={tpl.key}
