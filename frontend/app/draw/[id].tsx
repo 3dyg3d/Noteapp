@@ -437,6 +437,7 @@ export default function DrawScreen() {
   const [expandedColors, setExpandedColors] = useState(false); // in-popover grid palette toggle
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [titleAnchor, setTitleAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // Labels state (loaded once when the screen mounts; refreshed when the picker
   // opens so any labels created elsewhere show up here too).
@@ -3207,7 +3208,22 @@ export default function DrawScreen() {
             <DrawMenuRow
               icon="create-outline"
               label="Rename"
-              onPress={() => { setShowPaperMenu(false); setTitleDraft(note.title); setShowTitleEdit(true); }}
+              onPress={(e) => {
+                const t = e?.currentTarget;
+                const commit = (anchor: { x: number; y: number; w: number; h: number } | null) => {
+                  setTitleAnchor(anchor);
+                  setShowPaperMenu(false);
+                  setTitleDraft(note.title);
+                  setShowTitleEdit(true);
+                };
+                if (t && typeof t.measureInWindow === 'function') {
+                  t.measureInWindow((x: number, y: number, w: number, h: number) => {
+                    commit({ x, y, w, h });
+                  });
+                } else {
+                  commit(null);
+                }
+              }}
               testID="draw-menu-rename"
             />
             <DrawMenuRow
@@ -3571,37 +3587,78 @@ export default function DrawScreen() {
         <View />
       </Modal>
 
-      {/* Title edit modal */}
-      <Modal visible={showTitleEdit} transparent animationType="fade" onRequestClose={() => setShowTitleEdit(false)}>
+      {/* Rename popover — compact single-line input anchored to the "Rename"
+          row in the ⋮ menu, matching the text-editor UX. */}
+      <Modal
+        visible={showTitleEdit}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTitleEdit(false)}
+      >
         <Pressable style={styles.backdrop} onPress={() => setShowTitleEdit(false)}>
           <Pressable
-            style={[styles.titleSheet, { backgroundColor: colors.surface, top: insets.top + 48 }]}
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: titleAnchor
+                ? Math.max(insets.top + spacing.sm, titleAnchor.y)
+                : insets.top + 56,
+              // The ⋮ menu is right-aligned; keep the popover right-aligned too
+              // so it lines up perfectly with the "Rename" row's on-screen slot.
+              right: 8,
+              width: 210,
+              maxWidth: '92%' as any,
+              backgroundColor: colors.surface,
+              paddingHorizontal: spacing.md,
+              paddingVertical: spacing.sm,
+              borderRadius: radius.md,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.22,
+              shadowRadius: 16,
+              elevation: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+            }}
           >
-            <Text style={{ color: colors.muted, marginBottom: spacing.xs }}>Note title</Text>
+            <Ionicons name="create-outline" size={18} color={colors.muted} style={{ flexShrink: 0 }} />
             <TextInput
               autoFocus
               value={titleDraft}
               onChangeText={setTitleDraft}
-              placeholder="Untitled"
+              placeholder="Note title"
               placeholderTextColor={colors.muted}
               style={{
-                fontSize: typeScale.xl,
+                flex: 1,
+                minWidth: 0,
+                fontSize: typeScale.base,
                 color: colors.onSurface,
-                fontWeight: '700',
-                padding: spacing.sm,
+                paddingVertical: 6,
+                paddingHorizontal: 2,
                 borderBottomWidth: 1,
                 borderBottomColor: colors.brand,
               }}
               testID="title-input"
               returnKeyType="done"
               onSubmitEditing={updateTitle}
+              maxLength={80}
             />
             <Pressable
               onPress={updateTitle}
               testID="title-save"
-              style={[styles.btn, { backgroundColor: colors.brand, marginTop: spacing.lg }]}
+              hitSlop={6}
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: 15,
+                backgroundColor: colors.brand,
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
             >
-              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
+              <Ionicons name="checkmark" size={17} color={colors.onBrandPrimary} />
             </Pressable>
           </Pressable>
         </Pressable>
@@ -3853,7 +3910,7 @@ function DrawMenuRow({
 }: {
   icon: any;
   label: string;
-  onPress: () => void;
+  onPress: (e?: any) => void;
   valueText?: string;
   valueSwatch?: string;
   destructive?: boolean;
@@ -3864,7 +3921,7 @@ function DrawMenuRow({
   return (
     <Pressable
       testID={testID}
-      onPress={onPress}
+      onPress={(e) => onPress(e)}
       style={({ pressed }) => ({
         flexDirection: 'row',
         alignItems: 'center',
