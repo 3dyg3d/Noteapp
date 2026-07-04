@@ -19,7 +19,6 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { useTheme } from '@/src/theme/ThemeContext';
@@ -1244,11 +1243,21 @@ export default function HomeScreen() {
       )}
 
       <View style={[styles.container, { backgroundColor: colors.surface }]}>
-      {/* Sticky header */}
-      <BlurView
-        intensity={isDark ? 40 : 60}
-        tint={isDark ? 'dark' : 'light'}
-        style={[styles.header, { paddingTop: insets.top + spacing.sm }]}
+      {/* Sticky header — kept opaque so scrolling content doesn't bleed
+          through underneath. Using a `View` with the surface color (instead of
+          the previous BlurView) gives a clean, solid bar on all platforms and
+          matches the rest of the app chrome. A hairline divider at the bottom
+          hints that content scrolls beneath it. */}
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: insets.top + spacing.sm,
+            backgroundColor: colors.surface,
+            borderBottomWidth: StyleSheet.hairlineWidth,
+            borderBottomColor: colors.divider,
+          },
+        ]}
       >
         {!selectionMode ? (
           <View style={styles.headerTopRow}>
@@ -1435,7 +1444,7 @@ export default function HomeScreen() {
             </Text>
           </Pressable>
         )}
-      </BlurView>
+      </View>
 
       {/* Pinch to zoom home tiles.
           Two-finger pinch on the grid rescales `homeTileScale` live. A bare
