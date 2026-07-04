@@ -27,6 +27,7 @@ import { spacing, radius, typeScale, folderColors, labelColors } from '@/src/the
 import { NotesApi, FoldersApi, LabelsApi, Note, Folder, Label, ChecklistItem, NoteStatus } from '@/src/api/client';
 import { haptic, useAppSettings } from '@/src/state/useAppSettings';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
+import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
 
 type ViewMode = 'grid' | 'list';
 // A category may be one of the fixed views, a folder id, or a label id
@@ -823,11 +824,24 @@ export default function HomeScreen() {
           </Text>
         )}
         {!note.locked && note.note_type === 'handwriting' && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs }}>
-            <Ionicons name="brush" size={14} color={colors.brand} />
-            <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
-              Handwritten note
-            </Text>
+          <View style={{ marginTop: spacing.xs }}>
+            {note.drawing_data ? (
+              <HandwritingThumbnail
+                drawingData={note.drawing_data}
+                width={cardPxWidth - spacing.md * 2}
+                // Aspect ratio chosen to feel like a portrait page peek without
+                // dominating the whole card. Adjusts with tile scale via cardPxWidth.
+                height={Math.round((cardPxWidth - spacing.md * 2) * 0.9)}
+                radius={6}
+              />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="brush" size={14} color={colors.brand} />
+                <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
+                  Handwritten note
+                </Text>
+              </View>
+            )}
           </View>
         )}
         {note.locked && (
@@ -1397,17 +1411,29 @@ export default function HomeScreen() {
       {/* Pinch to zoom home tiles.
           Two-finger pinch on the grid rescales `homeTileScale` live so the user
           can dial their preferred density with one gesture. One-finger scroll
-          on the FlatList is untouched (Pinch only activates with 2 pointers). */}
+          on the FlatList still works because we run the pinch simultaneously
+          with the FlatList's own native scroll gesture (otherwise RNGH's
+          default composition lets the FlatList's ScrollView swallow every
+          touch before Pinch can activate). */}
       <GestureDetector
-        gesture={Gesture.Pinch()
-          .onStart(() => {
-            pinchStartScaleRef.current = tileScale;
-          })
-          .onUpdate((e) => {
-            const raw = pinchStartScaleRef.current / Math.max(0.01, e.scale);
-            const clamped = Math.max(0.5, Math.min(2.0, raw));
-            updateSettings({ homeTileScale: clamped });
-          })}
+        gesture={Gesture.Simultaneous(
+          Gesture.Pinch()
+            .onStart(() => {
+              pinchStartScaleRef.current = tileScale;
+            })
+            .onUpdate((e) => {
+              // Reanimated-less: use direct state update. Reversed because
+              // spreading fingers (scale > 1) means BIGGER tiles which is a
+              // LARGER homeTileScale value.
+              const raw = pinchStartScaleRef.current * e.scale;
+              const clamped = Math.max(0.5, Math.min(2.0, raw));
+              // Bail out if the change is negligible so we don't thrash
+              // AsyncStorage during a slow pinch.
+              if (Math.abs(clamped - tileScale) < 0.02) return;
+              updateSettings({ homeTileScale: clamped });
+            }),
+          Gesture.Native(),
+        )}
       >
         <View style={{ flex: 1 }}>
           <FlatList
