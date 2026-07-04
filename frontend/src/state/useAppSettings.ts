@@ -21,6 +21,10 @@ export interface AppSettings {
   // strokes near the bottom of the last page. When false a floating "+" button at the
   // bottom of the canvas adds a page manually.
   autoAddPage: boolean;
+  // Scale factor for the home-screen note & folder tiles. 1.0 = default column
+  // count derived from viewport width; >1 shows FEWER, larger tiles; <1 shows
+  // MORE, smaller tiles. Persisted so the user's preferred density sticks.
+  homeTileScale: number;
 }
 
 const KEY = 'galaxynotes:app-settings';
@@ -34,6 +38,7 @@ const DEFAULTS: AppSettings = {
   favoriteHwColors: ['#FBFAF6', '#F4ECDA', '#FFF4C4'], // White, Cream, Yellow
   statusBarHidden: false,
   autoAddPage: true,
+  homeTileScale: 1.0,
 };
 
 let cache: AppSettings | null = null;

@@ -23,7 +23,7 @@ import { useSharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
-import { NotesApi, LabelsApi, Note, Label } from '@/src/api/client';
+import { NotesApi, LabelsApi, FoldersApi, Note, Label, Folder } from '@/src/api/client';
 import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
@@ -443,6 +443,10 @@ export default function DrawScreen() {
   const [labels, setLabels] = useState<Label[]>([]);
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [labelDraftName, setLabelDraftName] = useState('');
+  // Folder picker — mirrors the text-editor's "Move to folder" so users can
+  // relocate a handwritten note without leaving the canvas.
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
 
   // Zoom (panning removed) — translation is derived to keep canvas centered while zooming.
   const [scale, setScale] = useState(1);
@@ -520,13 +524,15 @@ export default function DrawScreen() {
     historyRef.current = { undo: [], redo: [] };
     (async () => {
       try {
-        const [n, ls] = await Promise.all([
+        const [n, ls, fs] = await Promise.all([
           NotesApi.get(id as string),
           LabelsApi.list().catch(() => [] as Label[]),
+          FoldersApi.list().catch(() => [] as Folder[]),
         ]);
         if (cancelled) return;
         setNote(n);
         setLabels(ls);
+        setFolders(fs);
         openTab({ id: n.id, title: n.title || 'Untitled', type: 'handwriting' });
         if (n.drawing_data) {
           try {
@@ -1428,6 +1434,28 @@ export default function DrawScreen() {
     try { setLabels(await LabelsApi.list()); } catch {}
     setShowLabelPicker(true);
   }, []);
+
+  const openFolderPicker = useCallback(async () => {
+    // Refresh so folders created elsewhere are visible in the picker.
+    try { setFolders(await FoldersApi.list()); } catch {}
+    setShowFolderPicker(true);
+  }, []);
+
+  const moveNoteToFolder = useCallback(async (folderId: string | null) => {
+    if (!note) return;
+    setNote((prev) => (prev ? { ...prev, folder_id: folderId } : prev));
+    try {
+      await NotesApi.update(note.id, { folder_id: folderId });
+    } catch (e) {
+      console.warn('move-to-folder failed', e);
+    }
+    setShowFolderPicker(false);
+  }, [note]);
+
+  const currentFolder = useMemo(
+    () => (note?.folder_id ? folders.find((f) => f.id === note.folder_id) : undefined),
+    [note?.folder_id, folders]
+  );
 
   const handleToolTap = (t: Tool, e?: any) => {
     haptic.selection();
@@ -3183,6 +3211,12 @@ export default function DrawScreen() {
               testID="draw-menu-rename"
             />
             <DrawMenuRow
+              icon="folder-outline"
+              label={currentFolder ? `Folder: ${currentFolder.name}` : 'Move to folder'}
+              onPress={() => { setShowPaperMenu(false); openFolderPicker(); }}
+              testID="draw-menu-folder"
+            />
+            <DrawMenuRow
               icon="pricetag-outline"
               label={noteLabels.length ? `Labels (${noteLabels.length})` : 'Add labels'}
               onPress={() => { setShowPaperMenu(false); openLabelPicker(); }}
@@ -3568,6 +3602,101 @@ export default function DrawScreen() {
               style={[styles.btn, { backgroundColor: colors.brand, marginTop: spacing.lg }]}
             >
               <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Folder picker — move this handwritten note into any folder. Mirrors
+          the text-editor's Move-to-folder sheet so the behaviour is consistent
+          regardless of note type. */}
+      <Modal
+        visible={showFolderPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowFolderPicker(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setShowFolderPicker(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              padding: spacing.lg,
+              paddingBottom: insets.bottom + spacing.lg,
+              borderTopLeftRadius: radius.lg,
+              borderTopRightRadius: radius.lg,
+              backgroundColor: colors.surface,
+              maxHeight: '70%',
+            }}
+          >
+            <View
+              style={{
+                width: 44,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: '#0002',
+                alignSelf: 'center',
+                marginBottom: spacing.md,
+              }}
+            />
+            <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.md }}>
+              Move to folder
+            </Text>
+            <ScrollView>
+              <Pressable
+                testID="draw-folder-none"
+                onPress={() => moveNoteToFolder(null)}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingVertical: spacing.md,
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                  borderBottomColor: colors.divider,
+                }}
+              >
+                <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: colors.muted, marginRight: spacing.md }} />
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>No folder</Text>
+                {!note.folder_id && <Ionicons name="checkmark" size={18} color={colors.brand} />}
+              </Pressable>
+              {folders.map((f) => (
+                <Pressable
+                  key={f.id}
+                  testID={`draw-folder-pick-${f.id}`}
+                  onPress={() => moveNoteToFolder(f.id)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: spacing.md,
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderBottomColor: colors.divider,
+                  }}
+                >
+                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: f.color, marginRight: spacing.md }} />
+                  <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{f.name}</Text>
+                  {note.folder_id === f.id && <Ionicons name="checkmark" size={18} color={colors.brand} />}
+                </Pressable>
+              ))}
+              {folders.length === 0 && (
+                <Text style={{ color: colors.muted, textAlign: 'center', marginTop: spacing.lg }}>
+                  No folders yet. Create one from the home screen.
+                </Text>
+              )}
+            </ScrollView>
+            <Pressable
+              onPress={() => setShowFolderPicker(false)}
+              testID="draw-folder-picker-done"
+              style={{
+                marginTop: spacing.md,
+                paddingVertical: spacing.md,
+                borderRadius: radius.sm,
+                backgroundColor: colors.brand,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
             </Pressable>
           </Pressable>
         </Pressable>

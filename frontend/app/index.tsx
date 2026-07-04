@@ -20,6 +20,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors, labelColors } from '@/src/theme/tokens';
@@ -167,13 +168,26 @@ export default function HomeScreen() {
   const { width: winW } = useWindowDimensions();
 
   // Responsive column count: phones=2, tablets scale up
-  const numColumns = useMemo(() => {
+  // Base column count purely from viewport width — each breakpoint targets a
+  // comfortable card size for typical readable text.
+  const baseColumns = useMemo(() => {
     if (winW >= 1400) return 6;
     if (winW >= 1100) return 5;
     if (winW >= 850) return 4;
     if (winW >= 620) return 3;
     return 2;
   }, [winW]);
+  // The user can zoom the home grid via pinch or the size cycle in the header.
+  // `homeTileScale` is a persisted multiplier where <1 = smaller tiles (more per
+  // row) and >1 = larger tiles (fewer per row). We convert it into a column count
+  // relative to the base, then clamp to something legible on every viewport.
+  const { settings, update: updateSettings } = useAppSettings();
+  const tileScale = settings.homeTileScale ?? 1.0;
+  const numColumns = useMemo(() => {
+    const raw = Math.round(baseColumns / tileScale);
+    const maxCols = winW >= 620 ? 8 : 4;
+    return Math.max(1, Math.min(maxCols, raw));
+  }, [baseColumns, tileScale, winW]);
   const cardPxWidth = useMemo(() => {
     const horizPad = spacing.lg * 2;
     const totalGap = spacing.md * (numColumns - 1);
@@ -203,11 +217,15 @@ export default function HomeScreen() {
   const [folderModal, setFolderModal] = useState<{
     parentId: string | null;
     folder?: Folder; // edit existing
+    anchor?: { x: number; y: number; w: number; h: number } | null;
   } | null>(null);
 
   // Label editor modal (create or edit an existing tag). `label` is only set
   // when editing.
-  const [labelModal, setLabelModal] = useState<{ label?: Label } | null>(null);
+  const [labelModal, setLabelModal] = useState<{
+    label?: Label;
+    anchor?: { x: number; y: number; w: number; h: number } | null;
+  } | null>(null);
   // Bulk-assign labels picker for selected notes.
   const [showLabelPicker, setShowLabelPicker] = useState(false);
 
@@ -341,8 +359,9 @@ export default function HomeScreen() {
   const [showHwColorPicker, setShowHwColorPicker] = useState(false);
   const [showHwFolderPicker, setShowHwFolderPicker] = useState(false);
 
-  // Persistent favourite colors (3 slots). Read/written via useAppSettings.
-  const { settings, update: updateSettings } = useAppSettings();
+  // Persistent favourite colors (3 slots). Read/written via useAppSettings. The
+  // hook itself is called near the top of the component (see homeTileScale
+  // section) so this comment simply re-uses that same `settings` object.
   const favoriteHwColors = useMemo(() => {
     const arr = (settings.favoriteHwColors || []).slice(0, 3);
     while (arr.length < 3) arr.push('#FBFAF6');
@@ -648,6 +667,56 @@ export default function HomeScreen() {
     load();
   };
 
+  // ---- Anchor helpers for folder / label create-edit popovers ----
+  // Measure the pressed "+" button (or long-pressed row) in window coordinates so
+  // the popover can render right next to it — just like the tool popovers in the
+  // handwriting toolbar. Falls back to a centred sheet if measurement fails.
+  const measureAnchor = (
+    e: any
+  ): Promise<{ x: number; y: number; w: number; h: number } | null> => {
+    return new Promise((resolve) => {
+      const t = e?.currentTarget;
+      if (t && typeof t.measureInWindow === 'function') {
+        t.measureInWindow((x: number, y: number, w: number, h: number) => {
+          if (typeof x === 'number' && typeof y === 'number' && w > 0 && h > 0) {
+            resolve({ x, y, w, h });
+          } else {
+            resolve(null);
+          }
+        });
+      } else {
+        // Web/tap-fallback: use the tap coordinates and a rough size.
+        const px = e?.nativeEvent?.pageX;
+        const py = e?.nativeEvent?.pageY;
+        if (typeof px === 'number' && typeof py === 'number') {
+          resolve({ x: px - 22, y: py - 14, w: 44, h: 28 });
+        } else {
+          resolve(null);
+        }
+      }
+    });
+  };
+
+  const openFolderCreate = async (parentId: string | null, e: any) => {
+    const anchor = await measureAnchor(e);
+    setFolderModal({ parentId, anchor });
+  };
+
+  const openFolderEdit = async (folder: Folder, e: any) => {
+    const anchor = await measureAnchor(e);
+    setFolderModal({ parentId: folder.parent_id, folder, anchor });
+  };
+
+  const openLabelCreate = async (e: any) => {
+    const anchor = await measureAnchor(e);
+    setLabelModal({ anchor });
+  };
+
+  const openLabelEdit = async (label: Label, e: any) => {
+    const anchor = await measureAnchor(e);
+    setLabelModal({ label, anchor });
+  };
+
   // Label modal save/delete handlers.
   const saveLabelModal = async (name: string, color: string) => {
     if (!labelModal) return;
@@ -796,6 +865,130 @@ export default function HomeScreen() {
 
   const isEmpty = !loading && notes.length === 0;
 
+  // Captured at the start of a pinch gesture so the update can compute the new
+  // scale relative to where the gesture began (rather than compounding).
+  const pinchStartScaleRef = useRef<number>(1);
+
+  // File-manager view (folder tiles + folder notes list). Extracted from the
+  // FlatList's ListHeaderComponent so the return JSX stays readable and the
+  // isFileManagerView branch can be reused if we ever add a second grid target.
+  const renderFileManager = () => (
+    <View>
+      {/* Breadcrumb / current location when inside a folder */}
+      {insideFolder && (
+        <View style={styles.breadcrumbRow}>
+          <Pressable
+            testID="breadcrumb-root"
+            onPress={() => { haptic.selection(); setCategory('folders'); }}
+            style={({ pressed }) => [styles.breadcrumbChip, { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary }]}
+          >
+            <Ionicons name="folder-open-outline" size={14} color={colors.brand} />
+            <Text style={[styles.breadcrumbText, { color: colors.brand }]}>Folders</Text>
+          </Pressable>
+          <Ionicons name="chevron-forward" size={14} color={colors.muted} style={{ marginHorizontal: 4 }} />
+          <Text numberOfLines={1} style={[styles.breadcrumbText, { color: colors.onSurface, fontWeight: '700' }]}>
+            {currentFolder?.name}
+          </Text>
+        </View>
+      )}
+
+      {/* Folder tiles grid */}
+      <View style={styles.grid}>
+        <Pressable
+          testID="folder-tile-add"
+          onPress={(e) =>
+            openFolderCreate(insideFolder ? (category as string) : null, e)
+          }
+          style={({ pressed }) => [
+            styles.folderTile,
+            {
+              width: cardPxWidth,
+              backgroundColor: colors.brandTertiary,
+              opacity: pressed ? 0.8 : 1,
+            },
+          ]}
+        >
+          <Ionicons name="add-circle-outline" size={40} color={colors.brand} />
+          <Text style={{ color: colors.brand, fontWeight: '700', marginTop: spacing.sm }}>
+            New folder
+          </Text>
+        </Pressable>
+        {folderViewChildren.map((f) => (
+          <Pressable
+            key={f.id}
+            testID={`folder-tile-${f.id}`}
+            onPress={() => { haptic.selection(); setCategory(f.id); }}
+            onLongPress={(e) => openFolderEdit(f, e)}
+            delayLongPress={350}
+            style={({ pressed }) => [
+              styles.folderTile,
+              {
+                width: cardPxWidth,
+                backgroundColor: colors.surfaceSecondary,
+                borderTopWidth: 6,
+                borderTopColor: f.color,
+                opacity: pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <Ionicons name="folder" size={36} color={f.color} />
+            <Text
+              numberOfLines={1}
+              style={{
+                marginTop: spacing.sm,
+                fontWeight: '700',
+                color: colors.onSurface,
+                fontSize: typeScale.base,
+                maxWidth: '100%',
+              }}
+            >
+              {f.name}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {/* Notes section (unfiled at root, in-folder notes when inside) */}
+      {category === 'folders' && folderViewNotes.length > 0 && (
+        <>
+          <SectionLabel label="Notes" color={colors.muted} />
+          <View style={styles.grid}>{folderViewNotes.map(renderNoteCard)}</View>
+        </>
+      )}
+      {insideFolder && otherNotes.length > 0 && (
+        <>
+          {folderViewChildren.length > 0 && (
+            <SectionLabel label="Notes" color={colors.muted} />
+          )}
+          <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
+        </>
+      )}
+
+      {/* Empty hint for file manager views */}
+      {folderViewChildren.length === 0 &&
+        (category === 'folders'
+          ? folderViewNotes.length === 0
+          : otherNotes.length === 0) && (
+          <View
+            style={[
+              styles.empty,
+              { backgroundColor: colors.surfaceSecondary, marginTop: spacing.lg },
+            ]}
+          >
+            <Ionicons name="folder-open-outline" size={48} color={colors.brand} />
+            <Text style={[styles.emptyTitle, { color: colors.onSurface }]}>
+              {category === 'folders' ? 'No folders yet' : 'This folder is empty'}
+            </Text>
+            <Text style={[styles.emptySub, { color: colors.muted }]}>
+              {category === 'folders'
+                ? 'Tap "New folder" to create one, or use + to add an unfiled note.'
+                : 'Tap + to add a note, or create a sub-folder.'}
+            </Text>
+          </View>
+        )}
+    </View>
+  );
+
   // Shared drawer body (used by both the inline sidebar and the phone modal)
   const drawerInner = (
     <>
@@ -844,7 +1037,7 @@ export default function HomeScreen() {
         <Text style={[styles.drawerSection, { color: colors.muted }]}>FOLDERS</Text>
         <Pressable
           testID="drawer-new-folder"
-          onPress={() => setFolderModal({ parentId: null })}
+          onPress={(e) => openFolderCreate(null, e)}
           style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
         >
           <Ionicons name="add" size={16} color={colors.brand} />
@@ -879,7 +1072,7 @@ export default function HomeScreen() {
               <Pressable
                 testID={`drawer-folder-${f.id}`}
                 onPress={() => { setCategory(f.id); closeDrawerIfPhone(); }}
-                onLongPress={() => setFolderModal({ parentId: f.parent_id, folder: f })}
+                onLongPress={(e) => openFolderEdit(f, e)}
                 delayLongPress={350}
                 style={({ pressed }) => [
                   styles.drawerRow,
@@ -908,7 +1101,7 @@ export default function HomeScreen() {
               </Pressable>
               <Pressable
                 testID={`drawer-subfolder-${f.id}`}
-                onPress={() => setFolderModal({ parentId: f.id })}
+                onPress={(e) => openFolderCreate(f.id, e)}
                 style={styles.iconBtnSmall}
               >
                 <Ionicons name="add" size={18} color={colors.muted} />
@@ -916,81 +1109,85 @@ export default function HomeScreen() {
             </View>
           );
         })}
-      </ScrollView>
 
-      <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: spacing.sm, paddingHorizontal: spacing.md }}>
-        Tip: long-press a folder to edit or delete.
-      </Text>
-
-      {/* ---- Labels section (tags) ---- */}
-      <View style={styles.drawerSectionRow}>
-        <Text style={[styles.drawerSection, { color: colors.muted }]}>LABELS</Text>
-        <Pressable
-          testID="drawer-new-label"
-          onPress={() => setLabelModal({})}
-          style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
-        >
-          <Ionicons name="add" size={16} color={colors.brand} />
-          <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
-            New
+        {folders.length > 0 && (
+          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, marginBottom: spacing.sm, paddingHorizontal: spacing.md }}>
+            Tip: long-press a folder to edit or delete.
           </Text>
-        </Pressable>
-      </View>
-      {labels.length === 0 ? (
-        <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
-          No labels yet. Tap &quot;New&quot; to create one.
-        </Text>
-      ) : (
-        labels.map((l) => {
-          const isActive = category === `label:${l.id}`;
-          return (
-            <Pressable
-              key={l.id}
-              testID={`drawer-label-${l.id}`}
-              onPress={() => { setCategory(`label:${l.id}`); closeDrawerIfPhone(); }}
-              onLongPress={() => setLabelModal({ label: l })}
-              delayLongPress={350}
-              style={({ pressed }) => [
-                styles.drawerRow,
-                {
-                  backgroundColor: isActive
-                    ? colors.brandTertiary
-                    : pressed
-                    ? colors.surfaceSecondary
-                    : 'transparent',
-                },
-              ]}
-            >
-              <View
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 6,
-                  marginLeft: 4,
-                  marginRight: spacing.md,
-                  backgroundColor: l.color,
-                }}
-              />
-              <Text
-                numberOfLines={1}
-                style={{
-                  flex: 1,
-                  fontSize: typeScale.lg,
-                  fontWeight: isActive ? '700' : '500',
-                  color: isActive ? colors.brand : colors.onSurface,
-                }}
+        )}
+
+        {/* ---- Labels section (tags) — sits directly under the folder tree so
+            both categorisation lists stay together within the same scrollable
+            column, instead of being pushed to the bottom of the drawer. ---- */}
+        <View style={styles.drawerSectionRow}>
+          <Text style={[styles.drawerSection, { color: colors.muted }]}>LABELS</Text>
+          <Pressable
+            testID="drawer-new-label"
+            onPress={(e) => openLabelCreate(e)}
+            style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
+          >
+            <Ionicons name="add" size={16} color={colors.brand} />
+            <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
+              New
+            </Text>
+          </Pressable>
+        </View>
+        {labels.length === 0 ? (
+          <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+            No labels yet. Tap &quot;New&quot; to create one.
+          </Text>
+        ) : (
+          labels.map((l) => {
+            const isActive = category === `label:${l.id}`;
+            return (
+              <Pressable
+                key={l.id}
+                testID={`drawer-label-${l.id}`}
+                onPress={() => { setCategory(`label:${l.id}`); closeDrawerIfPhone(); }}
+                onLongPress={(e) => openLabelEdit(l, e)}
+                delayLongPress={350}
+                style={({ pressed }) => [
+                  styles.drawerRow,
+                  {
+                    backgroundColor: isActive
+                      ? colors.brandTertiary
+                      : pressed
+                      ? colors.surfaceSecondary
+                      : 'transparent',
+                  },
+                ]}
               >
-                {l.name}
-              </Text>
-            </Pressable>
-          );
-        })
-      )}
-      {labels.length > 0 && (
-        <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, paddingHorizontal: spacing.md }}>
-          Tip: long-press a label to edit or delete.
-        </Text>
-      )}
+                <View
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 6,
+                    marginLeft: 4,
+                    marginRight: spacing.md,
+                    backgroundColor: l.color,
+                  }}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={{
+                    flex: 1,
+                    fontSize: typeScale.lg,
+                    fontWeight: isActive ? '700' : '500',
+                    color: isActive ? colors.brand : colors.onSurface,
+                  }}
+                >
+                  {l.name}
+                </Text>
+              </Pressable>
+            );
+          })
+        )}
+        {labels.length > 0 && (
+          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, paddingHorizontal: spacing.md }}>
+            Tip: long-press a label to edit or delete.
+          </Text>
+        )}
+      </ScrollView>
 
       <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm }} />
       <DrawerRow
@@ -1062,6 +1259,27 @@ export default function HomeScreen() {
                 size={20}
                 color={colors.onSurface}
               />
+            </Pressable>
+            {/* Tile-size cycle — long-press or repeated tap cycles S / M / L / XL.
+                Also affects the folder-view grid. The value is persisted via
+                useAppSettings so users only tweak it once. */}
+            <Pressable
+              testID="tile-size-btn"
+              onPress={() => {
+                haptic.selection();
+                const steps = [0.75, 1.0, 1.25, 1.6];
+                const idx = steps.findIndex((s) => Math.abs(s - tileScale) < 0.05);
+                const next = steps[(idx + 1) % steps.length] ?? 1.0;
+                updateSettings({ homeTileScale: next });
+              }}
+              onLongPress={() => {
+                haptic.selection();
+                updateSettings({ homeTileScale: 1.0 });
+              }}
+              delayLongPress={400}
+              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+            >
+              <Ionicons name="expand-outline" size={20} color={colors.onSurface} />
             </Pressable>
             <Pressable
               testID="settings-btn"
@@ -1176,188 +1394,90 @@ export default function HomeScreen() {
         )}
       </BlurView>
 
-      {/* List */}
-      <FlatList
-        testID="notes-list"
-        data={[]}
-        keyExtractor={() => 'static'}
-        renderItem={null as any}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); load(); }}
-            tintColor={colors.brand}
-          />
-        }
-        contentContainerStyle={{
-          paddingTop: selectionMode ? 200 : (category === 'trash' && notes.length > 0 ? 230 : 180),
-          paddingBottom: insets.bottom + (selectionMode ? 160 : 140),
-          paddingHorizontal: spacing.lg,
-        }}
-        ListHeaderComponent={
-          <View>
-            {loading && (
-              <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
-                <ActivityIndicator color={colors.brand} />
-              </View>
-            )}
-            {isEmpty && !selectionMode && !isFileManagerView && (
-              <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
-                <Ionicons
-                  name={category === 'trash' ? 'trash-outline' : 'document-text-outline'}
-                  size={56}
-                  color={colors.brand}
-                />
-                <Text style={[styles.emptyTitle, { color: colors.onSurface }]}>
-                  {category === 'trash' ? 'Trash is empty' : 'No notes here'}
-                </Text>
-                <Text style={[styles.emptySub, { color: colors.muted }]}>
-                  {category === 'trash'
-                    ? 'Deleted notes will show up here'
-                    : 'Tap + to create a new note'}
-                </Text>
-                {category !== 'trash' && (
-                  <Pressable
-                    testID="empty-create-btn"
-                    onPress={onFabPress}
-                    style={[styles.emptyBtn, { backgroundColor: colors.brand }]}
-                  >
-                    <Text style={{ color: colors.onBrandPrimary, fontWeight: '600' }}>Create Note</Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
-            {isFileManagerView && (
+      {/* Pinch to zoom home tiles.
+          Two-finger pinch on the grid rescales `homeTileScale` live so the user
+          can dial their preferred density with one gesture. One-finger scroll
+          on the FlatList is untouched (Pinch only activates with 2 pointers). */}
+      <GestureDetector
+        gesture={Gesture.Pinch()
+          .onStart(() => {
+            pinchStartScaleRef.current = tileScale;
+          })
+          .onUpdate((e) => {
+            const raw = pinchStartScaleRef.current / Math.max(0.01, e.scale);
+            const clamped = Math.max(0.5, Math.min(2.0, raw));
+            updateSettings({ homeTileScale: clamped });
+          })}
+      >
+        <View style={{ flex: 1 }}>
+          <FlatList
+            testID="notes-list"
+            data={[]}
+            keyExtractor={() => 'static'}
+            renderItem={null as any}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => { setRefreshing(true); load(); }}
+                tintColor={colors.brand}
+              />
+            }
+            contentContainerStyle={{
+              paddingTop: selectionMode ? 200 : (category === 'trash' && notes.length > 0 ? 230 : 180),
+              paddingBottom: insets.bottom + (selectionMode ? 160 : 140),
+              paddingHorizontal: spacing.lg,
+            }}
+            ListHeaderComponent={
               <View>
-                {/* Breadcrumb / current location when inside a folder */}
-                {insideFolder && (
-                  <View style={styles.breadcrumbRow}>
-                    <Pressable
-                      testID="breadcrumb-root"
-                      onPress={() => { haptic.selection(); setCategory('folders'); }}
-                      style={({ pressed }) => [styles.breadcrumbChip, { backgroundColor: pressed ? colors.surfaceTertiary : colors.surfaceSecondary }]}
-                    >
-                      <Ionicons name="folder-open-outline" size={14} color={colors.brand} />
-                      <Text style={[styles.breadcrumbText, { color: colors.brand }]}>Folders</Text>
-                    </Pressable>
-                    <Ionicons name="chevron-forward" size={14} color={colors.muted} style={{ marginHorizontal: 4 }} />
-                    <Text numberOfLines={1} style={[styles.breadcrumbText, { color: colors.onSurface, fontWeight: '700' }]}>
-                      {currentFolder?.name}
-                    </Text>
+                {loading && (
+                  <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
+                    <ActivityIndicator color={colors.brand} />
                   </View>
                 )}
-
-                {/* Folder tiles grid */}
-                <View style={styles.grid}>
-                  <Pressable
-                    testID="folder-tile-add"
-                    onPress={() =>
-                      setFolderModal({ parentId: insideFolder ? (category as string) : null })
-                    }
-                    style={({ pressed }) => [
-                      styles.folderTile,
-                      {
-                        width: cardPxWidth,
-                        backgroundColor: colors.brandTertiary,
-                        opacity: pressed ? 0.8 : 1,
-                      },
-                    ]}
-                  >
-                    <Ionicons name="add-circle-outline" size={40} color={colors.brand} />
-                    <Text style={{ color: colors.brand, fontWeight: '700', marginTop: spacing.sm }}>
-                      New folder
+                {isEmpty && !selectionMode && !isFileManagerView && (
+                  <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
+                    <Ionicons
+                      name={category === 'trash' ? 'trash-outline' : 'document-text-outline'}
+                      size={56}
+                      color={colors.brand}
+                    />
+                    <Text style={[styles.emptyTitle, { color: colors.onSurface }]}>
+                      {category === 'trash' ? 'Trash is empty' : 'No notes here'}
                     </Text>
-                  </Pressable>
-                  {folderViewChildren.map((f) => (
-                    <Pressable
-                      key={f.id}
-                      testID={`folder-tile-${f.id}`}
-                      onPress={() => { haptic.selection(); setCategory(f.id); }}
-                      onLongPress={() => setFolderModal({ parentId: f.parent_id, folder: f })}
-                      delayLongPress={350}
-                      style={({ pressed }) => [
-                        styles.folderTile,
-                        {
-                          width: cardPxWidth,
-                          backgroundColor: colors.surfaceSecondary,
-                          borderTopWidth: 6,
-                          borderTopColor: f.color,
-                          opacity: pressed ? 0.85 : 1,
-                        },
-                      ]}
-                    >
-                      <Ionicons name="folder" size={36} color={f.color} />
-                      <Text
-                        numberOfLines={1}
-                        style={{
-                          marginTop: spacing.sm,
-                          fontWeight: '700',
-                          color: colors.onSurface,
-                          fontSize: typeScale.base,
-                          maxWidth: '100%',
-                        }}
+                    <Text style={[styles.emptySub, { color: colors.muted }]}>
+                      {category === 'trash'
+                        ? 'Deleted notes will show up here'
+                        : 'Tap + to create a new note'}
+                    </Text>
+                    {category !== 'trash' && (
+                      <Pressable
+                        testID="empty-create-btn"
+                        onPress={onFabPress}
+                        style={[styles.emptyBtn, { backgroundColor: colors.brand }]}
                       >
-                        {f.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                {/* Notes section (unfiled at root, in-folder notes when inside) */}
-                {category === 'folders' && folderViewNotes.length > 0 && (
+                        <Text style={{ color: colors.onBrandPrimary, fontWeight: '600' }}>Create Note</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                )}
+                {isFileManagerView && renderFileManager()}
+                {!isFileManagerView && !!pinnedNotes.length && (
                   <>
-                    <SectionLabel label="Notes" color={colors.muted} />
-                    <View style={styles.grid}>{folderViewNotes.map(renderNoteCard)}</View>
+                    <SectionLabel label="Pinned" color={colors.muted} />
+                    <View style={styles.grid}>{pinnedNotes.map(renderNoteCard)}</View>
                   </>
                 )}
-                {insideFolder && otherNotes.length > 0 && (
+                {!isFileManagerView && !!otherNotes.length && (
                   <>
-                    {folderViewChildren.length > 0 && (
-                      <SectionLabel label="Notes" color={colors.muted} />
-                    )}
+                    {!!pinnedNotes.length && <SectionLabel label="Others" color={colors.muted} />}
                     <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
                   </>
                 )}
-
-                {/* Empty hint for file manager views */}
-                {folderViewChildren.length === 0 &&
-                  (category === 'folders'
-                    ? folderViewNotes.length === 0
-                    : otherNotes.length === 0) && (
-                    <View
-                      style={[
-                        styles.empty,
-                        { backgroundColor: colors.surfaceSecondary, marginTop: spacing.lg },
-                      ]}
-                    >
-                      <Ionicons name="folder-open-outline" size={48} color={colors.brand} />
-                      <Text style={[styles.emptyTitle, { color: colors.onSurface }]}>
-                        {category === 'folders' ? 'No folders yet' : 'This folder is empty'}
-                      </Text>
-                      <Text style={[styles.emptySub, { color: colors.muted }]}>
-                        {category === 'folders'
-                          ? 'Tap "New folder" to create one, or use + to add an unfiled note.'
-                          : 'Tap + to add a note, or create a sub-folder.'}
-                      </Text>
-                    </View>
-                  )}
               </View>
-            )}
-            {!isFileManagerView && !!pinnedNotes.length && (
-              <>
-                <SectionLabel label="Pinned" color={colors.muted} />
-                <View style={styles.grid}>{pinnedNotes.map(renderNoteCard)}</View>
-              </>
-            )}
-            {!isFileManagerView && !!otherNotes.length && (
-              <>
-                {!!pinnedNotes.length && <SectionLabel label="Others" color={colors.muted} />}
-                <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
-              </>
-            )}
-          </View>
-        }
-      />
+            }
+          />
+        </View>
+      </GestureDetector>
 
       {/* FAB (hidden in selection / trash) */}
       {!selectionMode && category !== 'trash' && (
@@ -2214,6 +2334,7 @@ export default function HomeScreen() {
         visible={!!folderModal}
         folder={folderModal?.folder}
         parentName={folderModal?.parentId ? folderById(folderModal.parentId)?.name : undefined}
+        anchor={folderModal?.anchor}
         onCancel={() => setFolderModal(null)}
         onSave={saveFolderModal}
         onDelete={folderModal?.folder ? deleteFolderFromModal : undefined}
@@ -2228,6 +2349,7 @@ export default function HomeScreen() {
       <LabelModal
         visible={!!labelModal}
         label={labelModal?.label}
+        anchor={labelModal?.anchor}
         onCancel={() => setLabelModal(null)}
         onSave={saveLabelModal}
         onDelete={labelModal?.label ? deleteLabelFromModal : undefined}
@@ -2318,10 +2440,47 @@ export default function HomeScreen() {
   );
 }
 
+/**
+ * Convert an anchor rectangle (in window coordinates) into `{ left, top }`
+ * absolute-positioning values for an anchored popover of the given size.
+ *
+ * Rules:
+ *  - Prefer opening BELOW the anchor with its LEFT edge aligned to the anchor's
+ *    left ("justified" — same UX as tool popovers in the handwriting toolbar).
+ *  - If the popover would spill off the right edge, shift it left so it fits.
+ *  - If the popover is too tall to fit below, flip and open ABOVE the anchor.
+ *  - The result is clamped to the window with an 8 px margin so the popover
+ *    never touches the screen edges.
+ */
+function anchoredPosition(
+  anchor: { x: number; y: number; w: number; h: number },
+  popW: number,
+  popH: number,
+  winW: number,
+  winH: number,
+  margin = 8,
+  gap = 6
+): { left: number; top: number } {
+  let left = anchor.x;
+  const maxLeft = winW - popW - margin;
+  if (left > maxLeft) left = maxLeft;
+  if (left < margin) left = margin;
+
+  let top = anchor.y + anchor.h + gap; // below anchor
+  if (top + popH + margin > winH) {
+    // Flip above the anchor if there isn't enough room below.
+    const flippedTop = anchor.y - popH - gap;
+    if (flippedTop >= margin) top = flippedTop;
+    else top = Math.max(margin, winH - popH - margin);
+  }
+  return { left, top };
+}
+
 function FolderModal({
   visible,
   folder,
   parentName,
+  anchor,
   onCancel,
   onSave,
   onDelete,
@@ -2330,6 +2489,7 @@ function FolderModal({
   visible: boolean;
   folder?: Folder;
   parentName?: string;
+  anchor?: { x: number; y: number; w: number; h: number } | null;
   onCancel: () => void;
   onSave: (name: string, color: string) => void;
   onDelete?: () => void;
@@ -2337,7 +2497,7 @@ function FolderModal({
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { width: winW } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
   const wide = winW >= 720;
   const [name, setName] = useState('');
   const [color, setColor] = useState(folderColors[0]);
@@ -2349,12 +2509,37 @@ function FolderModal({
     }
   }, [visible, folder]);
 
+  // If an anchor is supplied, prefer an anchored popover (matches the tool-
+  // popover UX from the handwriting toolbar). Otherwise fall back to the
+  // tablet-centred popup or the phone bottom-sheet.
+  const POP_W = 320;
+  const POP_H_APPROX = 360;
+  const anchoredPos = anchor
+    ? anchoredPosition(anchor, POP_W, POP_H_APPROX, winW, winH)
+    : null;
+
   return (
-    <Modal visible={visible} transparent animationType={wide ? 'fade' : 'slide'} onRequestClose={onCancel}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType={anchoredPos ? 'fade' : (wide ? 'fade' : 'slide')}
+      onRequestClose={onCancel}
+    >
       <Pressable style={styles.backdrop} onPress={onCancel}>
         <Pressable
+          onPress={(e) => e.stopPropagation && e.stopPropagation()}
           style={
-            wide
+            anchoredPos
+              ? [
+                  styles.folderPopup,
+                  {
+                    backgroundColor: colors.surface,
+                    top: anchoredPos.top,
+                    left: anchoredPos.left,
+                    width: POP_W,
+                  },
+                ]
+              : wide
               ? [
                   styles.folderPopup,
                   {
@@ -2366,7 +2551,7 @@ function FolderModal({
               : [styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]
           }
         >
-          {!wide && <View style={styles.sheetHandle} />}
+          {!anchoredPos && !wide && <View style={styles.sheetHandle} />}
           <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.xs }}>
             {folder ? 'Edit folder' : 'New folder'}
           </Text>
@@ -2440,19 +2625,21 @@ function FolderModal({
 function LabelModal({
   visible,
   label,
+  anchor,
   onCancel,
   onSave,
   onDelete,
 }: {
   visible: boolean;
   label?: Label;
+  anchor?: { x: number; y: number; w: number; h: number } | null;
   onCancel: () => void;
   onSave: (name: string, color: string) => void;
   onDelete?: () => void;
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { width: winW } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
   const wide = winW >= 720;
   const [name, setName] = useState('');
   const [color, setColor] = useState(labelColors[0]);
@@ -2464,12 +2651,34 @@ function LabelModal({
     }
   }, [visible, label]);
 
+  const POP_W = 320;
+  const POP_H_APPROX = 300;
+  const anchoredPos = anchor
+    ? anchoredPosition(anchor, POP_W, POP_H_APPROX, winW, winH)
+    : null;
+
   return (
-    <Modal visible={visible} transparent animationType={wide ? 'fade' : 'slide'} onRequestClose={onCancel}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType={anchoredPos ? 'fade' : (wide ? 'fade' : 'slide')}
+      onRequestClose={onCancel}
+    >
       <Pressable style={styles.backdrop} onPress={onCancel}>
         <Pressable
+          onPress={(e) => e.stopPropagation && e.stopPropagation()}
           style={
-            wide
+            anchoredPos
+              ? [
+                  styles.folderPopup,
+                  {
+                    backgroundColor: colors.surface,
+                    top: anchoredPos.top,
+                    left: anchoredPos.left,
+                    width: POP_W,
+                  },
+                ]
+              : wide
               ? [
                   styles.folderPopup,
                   {
@@ -2481,7 +2690,7 @@ function LabelModal({
               : [styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]
           }
         >
-          {!wide && <View style={styles.sheetHandle} />}
+          {!anchoredPos && !wide && <View style={styles.sheetHandle} />}
           <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.md }}>
             {label ? 'Edit label' : 'New label'}
           </Text>

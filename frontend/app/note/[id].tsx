@@ -47,6 +47,8 @@ export default function NoteEditor() {
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [labelDraftName, setLabelDraftName] = useState('');
+  const [showRename, setShowRename] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
 
@@ -553,6 +555,16 @@ export default function NoteEditor() {
             style={[styles.menu, { backgroundColor: colors.surfaceSecondary, top: insets.top + 56 }]}
           >
             <MenuItem
+              icon="create-outline"
+              label="Rename"
+              onPress={() => {
+                setShowMore(false);
+                setRenameDraft(note.title || '');
+                setShowRename(true);
+              }}
+              testID="menu-rename"
+            />
+            <MenuItem
               icon="folder-outline"
               label={currentFolder ? `Folder: ${currentFolder.name}` : 'Move to folder'}
               onPress={() => {
@@ -651,14 +663,103 @@ export default function NoteEditor() {
         </Pressable>
       </Modal>
 
+      {/* Rename modal — quick title edit surfaced from the ⋮ menu so users don't
+          have to reach for the title field. Committing renames via the same
+          persistImmediately path as folder / label changes. */}
+      <Modal
+        visible={showRename}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRename(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setShowRename(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={{
+              width: 320,
+              alignSelf: 'center',
+              marginTop: insets.top + 100,
+              backgroundColor: colors.surface,
+              padding: spacing.lg,
+              borderRadius: radius.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.18,
+              shadowRadius: 16,
+              elevation: 12,
+            }}
+          >
+            <Text style={{ color: colors.muted, marginBottom: spacing.xs }}>Note title</Text>
+            <TextInput
+              testID="rename-input"
+              autoFocus
+              value={renameDraft}
+              onChangeText={setRenameDraft}
+              placeholder="Untitled"
+              placeholderTextColor={colors.muted}
+              style={{
+                fontSize: typeScale.xl,
+                color: colors.onSurface,
+                fontWeight: '700',
+                padding: spacing.sm,
+                borderBottomWidth: 1,
+                borderBottomColor: colors.brand,
+              }}
+              returnKeyType="done"
+              onSubmitEditing={() => {
+                const t = renameDraft.trim();
+                persistImmediately({ title: t });
+                try { renameTab(id as string, t || 'Untitled'); } catch {}
+                setShowRename(false);
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg }}>
+              <Pressable
+                onPress={() => setShowRename(false)}
+                testID="rename-cancel"
+                style={{
+                  flex: 1,
+                  height: 44,
+                  borderRadius: radius.pill,
+                  borderWidth: 1,
+                  borderColor: colors.divider,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ color: colors.onSurface, fontWeight: '700' }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  const t = renameDraft.trim();
+                  persistImmediately({ title: t });
+                  try { renameTab(id as string, t || 'Untitled'); } catch {}
+                  setShowRename(false);
+                }}
+                testID="rename-save"
+                style={{
+                  flex: 1,
+                  height: 44,
+                  borderRadius: radius.pill,
+                  backgroundColor: colors.brand,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Save</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Labels picker — toggle labels & create new ones inline */}
       <Modal
         visible={showLabelPicker}
         transparent
         animationType="slide"
         onRequestClose={() => setShowLabelPicker(false)}
-      >
-        <Pressable style={styles.backdrop} onPress={() => setShowLabelPicker(false)}>
+      >        <Pressable style={styles.backdrop} onPress={() => setShowLabelPicker(false)}>
           <Pressable
             onPress={(e) => e.stopPropagation && e.stopPropagation()}
             style={[
