@@ -816,6 +816,10 @@ export default function DrawScreen() {
   // Set to true in the drawing pan's onBegin whenever a stylus starts drawing.
   // Default to `true` so on devices that don't report pointerType, the pen still works.
   const isStylusRef = useRef<boolean>(true);
+  // Shared value mirror of "is a stylus currently touching the screen". Set on the UI
+  // thread from the drawing pan's onTouchesDown worklet so worklets in child components
+  // (e.g. the Ruler) can consult it synchronously and refuse to pan when a pen is down.
+  const penDownSV = useSharedValue(0);
 
   const twoFingerPanY = Gesture.Pan()
     .runOnJS(true)
@@ -1002,8 +1006,11 @@ export default function DrawScreen() {
       //   0 = TOUCH, 1 = STYLUS, 2 = MOUSE, 3 = KEY, 4 = OTHER
       // We reject touch (finger) input synchronously when palm rejection is on so that
       // the gesture never activates and no stroke is created.
-      if (palmRejectionSV.value !== 1) return;
       const pt = (event as any).pointerType;
+      // Mirror the "pen is currently down" flag so child worklets (e.g. the Ruler's
+      // pan gesture) can synchronously refuse when the pen is touching the screen.
+      if (pt === 1) penDownSV.value = 1;
+      if (palmRejectionSV.value !== 1) return;
       if (pt === 0) {
         // Finger — reject before the gesture can begin.
         manager.fail();

@@ -87,6 +87,21 @@ export const folderColors = [
   '#C7C7CC', // gray
 ];
 
+// Palette used for user-created labels/tags. Slightly more vivid than folder
+// swatches so labels read clearly as chips on note cards.
+export const labelColors = [
+  '#E06C75', // coral red
+  '#E5A050', // amber
+  '#E6C34D', // saffron
+  '#7FB86E', // meadow
+  '#4EA6A6', // teal
+  '#5A8CD4', // sky blue
+  '#8B7AA8', // dusty purple
+  '#B36AA5', // magenta
+  '#6E7A8A', // slate
+  '#7B8C73', // sage
+];
+
 // ---------- Accent palettes ----------
 // Each accent overrides the "brand" family of colors so the app can be re-skinned
 // without changing anything else. Add a new accent by supplying both a light and

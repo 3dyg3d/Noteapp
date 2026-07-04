@@ -19,11 +19,12 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
-import { NotesApi, FoldersApi, AiApi, Note, Folder, ChecklistItem } from '@/src/api/client';
+import { NotesApi, FoldersApi, LabelsApi, AiApi, Note, Folder, Label, ChecklistItem } from '@/src/api/client';
 import { haptic } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import DrawingPad from '@/src/components/DrawingPad';
+import { labelColors } from '@/src/theme/tokens';
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -38,11 +39,14 @@ export default function NoteEditor() {
 
   const [note, setNote] = useState<Note | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [labels, setLabels] = useState<Label[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showDrawing, setShowDrawing] = useState(queryMode === 'drawing');
   const [showMore, setShowMore] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [showLabelPicker, setShowLabelPicker] = useState(false);
+  const [labelDraftName, setLabelDraftName] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
 
@@ -55,10 +59,15 @@ export default function NoteEditor() {
     setNote(null); // clear previous note so old content doesn't briefly show when switching tabs
     (async () => {
       try {
-        const [n, f] = await Promise.all([NotesApi.get(id as string), FoldersApi.list()]);
+        const [n, f, l] = await Promise.all([
+          NotesApi.get(id as string),
+          FoldersApi.list(),
+          LabelsApi.list(),
+        ]);
         if (cancelled) return;
         setNote(n);
         setFolders(f);
+        setLabels(l);
         openTab({ id: n.id, title: n.title || 'Untitled', type: 'text' });
       } catch (e) {
         console.warn(e);
@@ -193,6 +202,46 @@ export default function NoteEditor() {
     [note?.folder_id, folders]
   );
 
+  const noteLabels = useMemo(
+    () =>
+      ((note?.label_ids || [])
+        .map((lid) => labels.find((l) => l.id === lid))
+        .filter(Boolean) as Label[]),
+    [note?.label_ids, labels]
+  );
+
+  const toggleLabelOnNote = useCallback(
+    (labelId: string) => {
+      if (!note) return;
+      const current = new Set(note.label_ids || []);
+      if (current.has(labelId)) current.delete(labelId);
+      else current.add(labelId);
+      persistImmediately({ label_ids: Array.from(current) });
+    },
+    [note, persistImmediately]
+  );
+
+  const createLabelFromEditor = useCallback(async () => {
+    const name = labelDraftName.trim();
+    if (!name) return;
+    try {
+      // Pick a color deterministically from the palette based on existing count.
+      const color = labelColors[labels.length % labelColors.length];
+      const created = await LabelsApi.create({ name, color });
+      const next = [...labels.filter((l) => l.id !== created.id), created];
+      setLabels(next);
+      setLabelDraftName('');
+      // Auto-apply to the current note.
+      if (note) {
+        const currentIds = new Set(note.label_ids || []);
+        currentIds.add(created.id);
+        persistImmediately({ label_ids: Array.from(currentIds) });
+      }
+    } catch (e) {
+      console.warn('create label failed', e);
+    }
+  }, [labelDraftName, labels, note, persistImmediately]);
+
   if (loading || !note) {
     // Plain surface — no spinner — to avoid a flash when switching between open tabs.
     return <View style={{ flex: 1, backgroundColor: colors.surface }} />;
@@ -258,6 +307,33 @@ export default function NoteEditor() {
           style={[styles.title, { color: colors.onSurface }]}
           multiline
         />
+
+        {/* Labels chips row (tap the + chip to open the manager) */}
+        <View style={styles.noteLabelRow} testID="note-labels-row">
+          {noteLabels.map((l) => (
+            <Pressable
+              key={l.id}
+              testID={`note-label-${l.id}`}
+              onPress={() => setShowLabelPicker(true)}
+              style={[styles.noteLabelChip, { backgroundColor: l.color + '2E', borderColor: l.color }]}
+            >
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: l.color, marginRight: 6 }} />
+              <Text style={{ color: l.color, fontWeight: '700', fontSize: typeScale.sm }} numberOfLines={1}>
+                {l.name}
+              </Text>
+            </Pressable>
+          ))}
+          <Pressable
+            testID="note-labels-add"
+            onPress={() => setShowLabelPicker(true)}
+            style={[styles.noteLabelChip, { borderColor: colors.divider, borderStyle: 'dashed' }]}
+          >
+            <Ionicons name="pricetag-outline" size={12} color={colors.muted} />
+            <Text style={{ color: colors.muted, fontWeight: '700', fontSize: typeScale.sm, marginLeft: 4 }}>
+              {noteLabels.length ? 'Manage labels' : 'Add label'}
+            </Text>
+          </Pressable>
+        </View>
 
         <TextInput
           testID="note-content-input"
@@ -486,6 +562,15 @@ export default function NoteEditor() {
               testID="menu-folder"
             />
             <MenuItem
+              icon="pricetag-outline"
+              label={noteLabels.length ? `Labels (${noteLabels.length})` : 'Add labels'}
+              onPress={() => {
+                setShowMore(false);
+                setShowLabelPicker(true);
+              }}
+              testID="menu-labels"
+            />
+            <MenuItem
               icon={note.locked ? 'lock-open-outline' : 'lock-closed-outline'}
               label={note.locked ? 'Unlock note' : 'Lock note'}
               onPress={() => {
@@ -562,6 +647,112 @@ export default function NoteEditor() {
                 No folders yet. Create one from the Folders screen.
               </Text>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Labels picker — toggle labels & create new ones inline */}
+      <Modal
+        visible={showLabelPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowLabelPicker(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setShowLabelPicker(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={[
+              styles.sheet,
+              { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg, maxHeight: '75%' },
+            ]}
+          >
+            <Text style={[styles.sheetTitle, { color: colors.onSurface }]}>Labels</Text>
+            <View style={styles.labelCreateRow}>
+              <TextInput
+                testID="label-new-input"
+                value={labelDraftName}
+                onChangeText={setLabelDraftName}
+                placeholder="New label name"
+                placeholderTextColor={colors.muted}
+                style={[
+                  styles.labelInput,
+                  {
+                    color: colors.onSurface,
+                    backgroundColor: colors.surfaceSecondary,
+                    borderColor: colors.divider,
+                  },
+                ]}
+                returnKeyType="done"
+                onSubmitEditing={createLabelFromEditor}
+                maxLength={40}
+              />
+              <Pressable
+                testID="label-create-btn"
+                onPress={createLabelFromEditor}
+                style={{
+                  paddingHorizontal: spacing.lg,
+                  height: 44,
+                  borderRadius: radius.pill,
+                  backgroundColor: labelDraftName.trim() ? colors.brand : colors.surfaceSecondary,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                disabled={!labelDraftName.trim()}
+              >
+                <Text style={{ color: labelDraftName.trim() ? colors.onBrandPrimary : colors.muted, fontWeight: '700' }}>
+                  Create
+                </Text>
+              </Pressable>
+            </View>
+            {labels.length === 0 ? (
+              <Text style={{ color: colors.muted, textAlign: 'center', marginTop: spacing.lg }}>
+                No labels yet. Type a name above and tap Create.
+              </Text>
+            ) : (
+              <ScrollView>
+                {labels.map((l) => {
+                  const on = (note.label_ids || []).includes(l.id);
+                  return (
+                    <Pressable
+                      key={l.id}
+                      testID={`label-toggle-${l.id}`}
+                      onPress={() => toggleLabelOnNote(l.id)}
+                      style={[styles.folderRow, { borderBottomColor: colors.divider }]}
+                    >
+                      <View style={[styles.folderDot, { backgroundColor: l.color }]} />
+                      <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{l.name}</Text>
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          borderWidth: 2,
+                          borderColor: on ? colors.brand : colors.divider,
+                          backgroundColor: on ? colors.brand : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {on && <Ionicons name="checkmark" size={14} color={colors.onBrandPrimary} />}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+            <Pressable
+              onPress={() => setShowLabelPicker(false)}
+              style={{
+                marginTop: spacing.md,
+                paddingVertical: spacing.md,
+                borderRadius: radius.sm,
+                backgroundColor: colors.brand,
+                alignItems: 'center',
+              }}
+              testID="label-picker-done"
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
@@ -776,4 +967,35 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   folderDot: { width: 14, height: 14, borderRadius: 7, marginRight: spacing.md },
+  noteLabelRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: spacing.xs,
+  },
+  noteLabelChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    maxWidth: 200,
+  },
+  labelCreateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  labelInput: {
+    flex: 1,
+    height: 44,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    fontSize: typeScale.lg,
+    borderWidth: 1,
+  },
 });

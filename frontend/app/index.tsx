@@ -10,6 +10,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Modal,
+  Platform,
   useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -18,12 +19,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale, folderColors } from '@/src/theme/tokens';
-import { NotesApi, FoldersApi, Note, Folder, ChecklistItem, NoteStatus } from '@/src/api/client';
+import { spacing, radius, typeScale, folderColors, labelColors } from '@/src/theme/tokens';
+import { NotesApi, FoldersApi, LabelsApi, Note, Folder, Label, ChecklistItem, NoteStatus } from '@/src/api/client';
 import { haptic, useAppSettings } from '@/src/state/useAppSettings';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 
 type ViewMode = 'grid' | 'list';
+// A category may be one of the fixed views, a folder id, or a label id
+// prefixed with `label:` so we can distinguish them from folder ids.
 type CategoryKey = 'all' | 'pinned' | 'recent' | 'trash' | 'folders' | string;
 type SortBy = 'updated' | 'created' | 'title';
 
@@ -98,6 +101,20 @@ function rid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/**
+ * Convert a `#RRGGBB` hex color into an rgba() string with the given alpha.
+ * Falls back gracefully to the raw color if parsing fails.
+ */
+function withAlpha(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 0xff;
+  const g = (int >> 8) & 0xff;
+  const b = int & 0xff;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 function formatDate(iso: string) {
   try {
     const d = new Date(iso);
@@ -162,6 +179,7 @@ export default function HomeScreen() {
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [labels, setLabels] = useState<Label[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
@@ -184,6 +202,12 @@ export default function HomeScreen() {
     folder?: Folder; // edit existing
   } | null>(null);
 
+  // Label editor modal (create or edit an existing tag). `label` is only set
+  // when editing.
+  const [labelModal, setLabelModal] = useState<{ label?: Label } | null>(null);
+  // Bulk-assign labels picker for selected notes.
+  const [showLabelPicker, setShowLabelPicker] = useState(false);
+
   // Drawer expand state
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -195,31 +219,43 @@ export default function HomeScreen() {
   const [infoTarget, setInfoTarget] = useState<{ kind: 'note'; note: Note } | { kind: 'folder'; folder: Folder } | null>(null);
 
   const status: NoteStatus = category === 'trash' ? 'trash' : 'active';
+  // Label filter: category prefixed with `label:` filters notes by that label
+  // on the server.
+  const labelFilter = useMemo(() => {
+    if (typeof category === 'string' && category.startsWith('label:')) {
+      return category.slice('label:'.length);
+    }
+    return null;
+  }, [category]);
   const folderFilter = useMemo(() => {
     if (category === 'all' || category === 'pinned' || category === 'recent' || category === 'trash' || category === 'folders') return null;
+    if (labelFilter) return null;
     return category;
-  }, [category]);
+  }, [category, labelFilter]);
 
   const load = useCallback(async () => {
     try {
-      const [n, f] = await Promise.all([
+      const [n, f, l] = await Promise.all([
         NotesApi.list({
           q: search.trim() || undefined,
           folderId: folderFilter,
+          labelId: labelFilter,
           status,
           pinned: category === 'pinned' ? true : undefined,
         }),
         FoldersApi.list(),
+        LabelsApi.list(),
       ]);
       setNotes(n);
       setFolders(f);
+      setLabels(l);
     } catch (e) {
       console.warn('load failed', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [search, folderFilter, status, category]);
+  }, [search, folderFilter, labelFilter, status, category]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => {
@@ -466,8 +502,12 @@ export default function HomeScreen() {
     if (category === 'recent') return 'Recents';
     if (category === 'trash') return 'Trash';
     if (category === 'folders') return 'Folders';
+    if (labelFilter) {
+      const l = labels.find((ll) => ll.id === labelFilter);
+      return l ? `# ${l.name}` : 'Label';
+    }
     return folderById(category)?.name || 'Notes';
-  }, [category, folders]);
+  }, [category, folders, labels, labelFilter]);
 
   // --- Folder tree drawer rendering ---
   const tree = useMemo(() => buildFolderTree(folders), [folders]);
@@ -525,11 +565,63 @@ export default function HomeScreen() {
     load();
   };
 
+  // Label modal save/delete handlers.
+  const saveLabelModal = async (name: string, color: string) => {
+    if (!labelModal) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      if (labelModal.label) {
+        await LabelsApi.update(labelModal.label.id, { name: trimmed, color });
+      } else {
+        await LabelsApi.create({ name: trimmed, color });
+      }
+    } catch (e) {
+      console.warn('label save failed', e);
+    }
+    setLabelModal(null);
+    load();
+  };
+
+  const deleteLabelFromModal = async () => {
+    if (!labelModal?.label) return;
+    try {
+      await LabelsApi.remove(labelModal.label.id);
+    } catch (e) {
+      console.warn('label delete failed', e);
+    }
+    // If we were viewing that label, reset the category.
+    if (labelFilter === labelModal.label.id) setCategory('all');
+    setLabelModal(null);
+    load();
+  };
+
+  // Toggle a label across all currently-selected notes.
+  // If any selected note is missing the label, add it to everyone;
+  // otherwise remove it from everyone.
+  const bulkToggleLabel = async (labelId: string) => {
+    const targets = notes.filter((n) => selectedIds.has(n.id));
+    if (targets.length === 0) return;
+    const anyMissing = targets.some((n) => !(n.label_ids || []).includes(labelId));
+    await Promise.all(
+      targets.map((n) => {
+        const current = new Set(n.label_ids || []);
+        if (anyMissing) current.add(labelId);
+        else current.delete(labelId);
+        return NotesApi.update(n.id, { label_ids: Array.from(current) });
+      })
+    );
+    load();
+  };
+
   // --- Card renderer ---
   const renderNoteCard = (note: Note) => {
     const folder = folderById(note.folder_id);
     const cardWidth = viewMode === 'grid' ? cardPxWidth : undefined;
     const isSelected = selectedIds.has(note.id);
+    const noteLabels = (note.label_ids || [])
+      .map((lid) => labels.find((ll) => ll.id === lid))
+      .filter(Boolean) as Label[];
     return (
       <Pressable
         key={note.id}
@@ -595,6 +687,24 @@ export default function HomeScreen() {
           <View style={styles.cardMeta}>
             <Ionicons name="image-outline" size={12} color={colors.muted} />
             <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.images.length}</Text>
+          </View>
+        )}
+        {noteLabels.length > 0 && (
+          <View style={styles.labelChipRow}>
+            {noteLabels.slice(0, 3).map((l) => (
+              <View
+                key={l.id}
+                style={[styles.labelChip, { backgroundColor: withAlpha(l.color, 0.18), borderColor: l.color }]}
+              >
+                <View style={[styles.labelChipDot, { backgroundColor: l.color }]} />
+                <Text numberOfLines={1} style={[styles.labelChipText, { color: l.color }]}>
+                  {l.name}
+                </Text>
+              </View>
+            ))}
+            {noteLabels.length > 3 && (
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginLeft: 4 }}>+{noteLabels.length - 3}</Text>
+            )}
           </View>
         )}
       </Pressable>
@@ -729,6 +839,76 @@ export default function HomeScreen() {
         Tip: long-press a folder to edit or delete.
       </Text>
 
+      {/* ---- Labels section (tags) ---- */}
+      <View style={styles.drawerSectionRow}>
+        <Text style={[styles.drawerSection, { color: colors.muted }]}>LABELS</Text>
+        <Pressable
+          testID="drawer-new-label"
+          onPress={() => setLabelModal({})}
+          style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
+        >
+          <Ionicons name="add" size={16} color={colors.brand} />
+          <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
+            New
+          </Text>
+        </Pressable>
+      </View>
+      {labels.length === 0 ? (
+        <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+          No labels yet. Tap &quot;New&quot; to create one.
+        </Text>
+      ) : (
+        labels.map((l) => {
+          const isActive = category === `label:${l.id}`;
+          return (
+            <Pressable
+              key={l.id}
+              testID={`drawer-label-${l.id}`}
+              onPress={() => { setCategory(`label:${l.id}`); closeDrawerIfPhone(); }}
+              onLongPress={() => setLabelModal({ label: l })}
+              delayLongPress={350}
+              style={({ pressed }) => [
+                styles.drawerRow,
+                {
+                  backgroundColor: isActive
+                    ? colors.brandTertiary
+                    : pressed
+                    ? colors.surfaceSecondary
+                    : 'transparent',
+                },
+              ]}
+            >
+              <View
+                style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: 6,
+                  marginLeft: 4,
+                  marginRight: spacing.md,
+                  backgroundColor: l.color,
+                }}
+              />
+              <Text
+                numberOfLines={1}
+                style={{
+                  flex: 1,
+                  fontSize: typeScale.lg,
+                  fontWeight: isActive ? '700' : '500',
+                  color: isActive ? colors.brand : colors.onSurface,
+                }}
+              >
+                {l.name}
+              </Text>
+            </Pressable>
+          );
+        })
+      )}
+      {labels.length > 0 && (
+        <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, paddingHorizontal: spacing.md }}>
+          Tip: long-press a label to edit or delete.
+        </Text>
+      )}
+
       <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm }} />
       <DrawerRow
         icon="settings-outline"
@@ -842,6 +1022,12 @@ export default function HomeScreen() {
                 <>
                   <TopBulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
                   <TopBulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
+                  <TopBulkBtn
+                    icon="pricetag-outline"
+                    label="Label"
+                    onPress={() => setShowLabelPicker(true)}
+                    testID="bulk-label"
+                  />
                   <TopBulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
                   {selectedIds.size === 1 && (
                     <TopBulkBtn
@@ -1173,7 +1359,7 @@ export default function HomeScreen() {
       >
         <Pressable style={styles.backdrop} onPress={() => setInfoTarget(null)}>
           <Pressable
-            style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]}
+            style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg, maxHeight: '85%' }]}
             onPress={(e) => e.stopPropagation && e.stopPropagation()}
           >
             <View style={styles.sheetHandle} />
@@ -1218,6 +1404,33 @@ export default function HomeScreen() {
                     <InfoRow label="Created" value={fmtDate(n.created_at)} colors={colors} />
                     <InfoRow label="Modified" value={fmtDate(n.updated_at)} colors={colors} />
                     <InfoRow label="Folder" value={folderName} colors={colors} />
+                    {(() => {
+                      const noteLabels = (n.label_ids || [])
+                        .map((lid) => labels.find((ll) => ll.id === lid))
+                        .filter(Boolean) as Label[];
+                      return noteLabels.length > 0 ? (
+                        <View
+                          style={{
+                            paddingVertical: 10,
+                            borderBottomWidth: 1,
+                            borderBottomColor: colors.divider,
+                          }}
+                        >
+                          <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '600', marginBottom: 6 }}>Labels</Text>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                            {noteLabels.map((l) => (
+                              <View
+                                key={l.id}
+                                style={[styles.labelChip, { backgroundColor: withAlpha(l.color, 0.18), borderColor: l.color }]}
+                              >
+                                <View style={[styles.labelChipDot, { backgroundColor: l.color }]} />
+                                <Text style={[styles.labelChipText, { color: l.color }]}>{l.name}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      ) : null;
+                    })()}
                     <InfoRow label="Size" value={sizeLabel} colors={colors} />
                     {n.note_type === 'handwriting' ? (
                       <>
@@ -1903,6 +2116,96 @@ export default function HomeScreen() {
           setInfoTarget({ kind: 'folder', folder: f });
         } : undefined}
       />
+
+      {/* Label create / edit modal */}
+      <LabelModal
+        visible={!!labelModal}
+        label={labelModal?.label}
+        onCancel={() => setLabelModal(null)}
+        onSave={saveLabelModal}
+        onDelete={labelModal?.label ? deleteLabelFromModal : undefined}
+      />
+
+      {/* Bulk-assign labels to selected notes */}
+      <Modal visible={showLabelPicker} transparent animationType="slide" onRequestClose={() => setShowLabelPicker(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowLabelPicker(false)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
+            style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg, maxHeight: '70%' }]}
+          >
+            <View style={styles.sheetHandle} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Text style={[styles.sheetTitle, { color: colors.onSurface, marginBottom: 0, flex: 1 }]}>
+                Apply labels
+              </Text>
+              <Pressable
+                testID="label-picker-new"
+                onPress={() => { setShowLabelPicker(false); setLabelModal({}); }}
+                style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
+              >
+                <Ionicons name="add" size={16} color={colors.brand} />
+                <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>New</Text>
+              </Pressable>
+            </View>
+            {labels.length === 0 ? (
+              <Text style={{ color: colors.muted, textAlign: 'center', marginTop: spacing.lg }}>
+                No labels yet. Tap &quot;New&quot; to create one.
+              </Text>
+            ) : (
+              <ScrollView>
+                {labels.map((l) => {
+                  // A label is considered "on" only if every selected note has it.
+                  const targets = notes.filter((n) => selectedIds.has(n.id));
+                  const allHave = targets.length > 0 && targets.every((n) => (n.label_ids || []).includes(l.id));
+                  const someHave = !allHave && targets.some((n) => (n.label_ids || []).includes(l.id));
+                  return (
+                    <Pressable
+                      key={l.id}
+                      testID={`label-picker-${l.id}`}
+                      onPress={() => bulkToggleLabel(l.id)}
+                      style={[styles.folderRow, { borderBottomColor: colors.divider }]}
+                    >
+                      <View style={[styles.folderDot, { backgroundColor: l.color }]} />
+                      <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{l.name}</Text>
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          borderWidth: 2,
+                          borderColor: allHave ? colors.brand : colors.divider,
+                          backgroundColor: allHave ? colors.brand : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {allHave && <Ionicons name="checkmark" size={14} color={colors.onBrandPrimary} />}
+                        {someHave && (
+                          <View
+                            style={{
+                              width: 10,
+                              height: 2,
+                              backgroundColor: colors.brand,
+                              borderRadius: 1,
+                            }}
+                          />
+                        )}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+            <Pressable
+              onPress={() => setShowLabelPicker(false)}
+              style={{ marginTop: spacing.sm, paddingVertical: spacing.md, borderRadius: radius.sm, backgroundColor: colors.brand, alignItems: 'center' }}
+              testID="label-picker-done"
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Done</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
       </View>
     </View>
   );
@@ -2018,6 +2321,115 @@ function FolderModal({
             >
               <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>
                 {folder ? 'Save' : 'Create'}
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function LabelModal({
+  visible,
+  label,
+  onCancel,
+  onSave,
+  onDelete,
+}: {
+  visible: boolean;
+  label?: Label;
+  onCancel: () => void;
+  onSave: (name: string, color: string) => void;
+  onDelete?: () => void;
+}) {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
+  const wide = winW >= 720;
+  const [name, setName] = useState('');
+  const [color, setColor] = useState(labelColors[0]);
+
+  useEffect(() => {
+    if (visible) {
+      setName(label?.name || '');
+      setColor(label?.color || labelColors[0]);
+    }
+  }, [visible, label]);
+
+  return (
+    <Modal visible={visible} transparent animationType={wide ? 'fade' : 'slide'} onRequestClose={onCancel}>
+      <Pressable style={styles.backdrop} onPress={onCancel}>
+        <Pressable
+          style={
+            wide
+              ? [
+                  styles.folderPopup,
+                  {
+                    backgroundColor: colors.surface,
+                    top: insets.top + spacing.xxl + 60,
+                    left: spacing.lg,
+                  },
+                ]
+              : [styles.sheet, { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg }]
+          }
+        >
+          {!wide && <View style={styles.sheetHandle} />}
+          <Text style={{ fontSize: typeScale.xl, fontWeight: '700', color: colors.onSurface, marginBottom: spacing.md }}>
+            {label ? 'Edit label' : 'New label'}
+          </Text>
+          <TextInput
+            testID="label-name-input"
+            value={name}
+            onChangeText={setName}
+            placeholder="Label name"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { color: colors.onSurface, backgroundColor: colors.surfaceSecondary }]}
+            autoFocus
+            maxLength={40}
+          />
+          <Text style={{ color: colors.muted, marginTop: spacing.lg, marginBottom: spacing.sm }}>Color</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            {labelColors.map((c) => (
+              <Pressable
+                key={c}
+                testID={`label-color-${c}`}
+                onPress={() => setColor(c)}
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  backgroundColor: c,
+                  borderWidth: 3,
+                  borderColor: color === c ? colors.onSurface : 'transparent',
+                }}
+              />
+            ))}
+          </View>
+          <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl }}>
+            {label && onDelete && (
+              <Pressable
+                testID="label-delete"
+                onPress={onDelete}
+                style={[styles.btn, { borderColor: colors.error, borderWidth: 1 }]}
+              >
+                <Text style={{ color: colors.error, fontWeight: '700' }}>Delete</Text>
+              </Pressable>
+            )}
+            <Pressable
+              testID="label-cancel"
+              onPress={onCancel}
+              style={[styles.btn, { borderColor: colors.divider, borderWidth: 1 }]}
+            >
+              <Text style={{ color: colors.onSurface, fontWeight: '700' }}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              testID="label-save"
+              onPress={() => onSave(name, color)}
+              style={[styles.btn, { flex: 1, backgroundColor: colors.brand }]}
+            >
+              <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>
+                {label ? 'Save' : 'Create'}
               </Text>
             </Pressable>
           </View>
@@ -2245,6 +2657,33 @@ const styles = StyleSheet.create({
   cardPreview: { fontSize: typeScale.base, lineHeight: 18 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, gap: 4 },
   cardMetaText: { fontSize: typeScale.sm },
+  labelChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: spacing.sm,
+    gap: 4,
+    alignItems: 'center',
+  },
+  labelChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    maxWidth: '100%',
+  },
+  labelChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 4,
+  },
+  labelChipText: {
+    fontSize: typeScale.sm,
+    fontWeight: '700',
+    maxWidth: 100,
+  },
   selectMark: {
     position: 'absolute',
     top: 8,
