@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,9 @@ import {
   ActivityIndicator,
   Modal,
   Platform,
+  BackHandler,
+  ToastAndroid,
+  Animated as RNAnimated,
   useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -495,6 +498,86 @@ export default function HomeScreen() {
     await NotesApi.emptyTrash();
     load();
   };
+
+  // ---- Back-button / swipe-back handling ----
+  // Prevents accidental app exit from the home screen. Instead we unwind context
+  // layer-by-layer: modals → selection → drawer → sub-view → folder-nav → exit
+  // confirmation ("Press back again to exit"). Only registered while home is focused.
+  const lastBackAtRef = useRef<number>(0);
+  const [exitHintVisible, setExitHintVisible] = useState(false);
+  const exitHintFade = useRef(new RNAnimated.Value(0)).current;
+  const exitHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showExitHint = useCallback(() => {
+    // Native Android toast where available for a familiar look.
+    if (Platform.OS === 'android') {
+      try { ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT); } catch {}
+    }
+    // Also show our custom in-app pill so users on iOS / web also see it.
+    setExitHintVisible(true);
+    RNAnimated.timing(exitHintFade, {
+      toValue: 1,
+      duration: 160,
+      useNativeDriver: true,
+    }).start();
+    if (exitHintTimerRef.current) clearTimeout(exitHintTimerRef.current);
+    exitHintTimerRef.current = setTimeout(() => {
+      RNAnimated.timing(exitHintFade, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start(() => setExitHintVisible(false));
+    }, 1800);
+  }, [exitHintFade]);
+
+  useEffect(() => () => {
+    if (exitHintTimerRef.current) clearTimeout(exitHintTimerRef.current);
+  }, []);
+
+  // Central layered back handler. Returns true if the press was consumed.
+  const consumeBackPress = useCallback(() => {
+    // 1. Any open sheet / modal — dismiss it first.
+    if (folderModal) { setFolderModal(null); return true; }
+    if (labelModal) { setLabelModal(null); return true; }
+    if (showLabelPicker) { setShowLabelPicker(false); return true; }
+    if (showMovePicker) { setShowMovePicker(false); return true; }
+    if (showTemplate) { setShowTemplate(false); return true; }
+    if (showHwPrep) { setShowHwPrep(false); return true; }
+    if (showHwColorPicker) { setShowHwColorPicker(false); return true; }
+    if (showHwFolderPicker) { setShowHwFolderPicker(false); return true; }
+    if (showSortMenu) { setShowSortMenu(false); return true; }
+    if (infoTarget) { setInfoTarget(null); return true; }
+    // 2. Selection mode → clear it.
+    if (selectionMode) { clearSelection(); return true; }
+    // 3. Phone drawer is open → close it.
+    if (!isTablet && drawerOpen) { setDrawerOpen(false); return true; }
+    // 4. Inside a folder → navigate one folder up.
+    if (insideFolder) { goBack(); return true; }
+    // 5. Any filtered view (label / trash / pinned / recents / folders) → back to All.
+    if (category !== 'all') { setCategory('all'); return true; }
+    // 6. Confirm exit — first press shows the hint, second within 2s exits.
+    const now = Date.now();
+    if (now - lastBackAtRef.current < 2000) {
+      lastBackAtRef.current = 0;
+      return false; // release to the OS so the app can exit
+    }
+    lastBackAtRef.current = now;
+    showExitHint();
+    return true;
+  }, [
+    folderModal, labelModal, showLabelPicker, showMovePicker, showTemplate,
+    showHwPrep, showHwColorPicker, showHwFolderPicker, showSortMenu, infoTarget,
+    selectionMode, isTablet, drawerOpen, insideFolder, category, showExitHint,
+  ]);
+
+  // Only listen while home is focused so pushed screens (note editor, draw)
+  // aren't affected. Android hardware/gesture back both fire this event.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', consumeBackPress);
+      return () => sub.remove();
+    }, [consumeBackPress])
+  );
 
   const categoryLabel = useMemo(() => {
     if (category === 'all') return 'All notes';
@@ -1292,6 +1375,30 @@ export default function HomeScreen() {
         >
           <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
         </Pressable>
+      )}
+
+      {/* Exit-hint toast pill — floats near the bottom on all platforms.
+          Auto-hides after ~1.8s. Only visible after the first back press. */}
+      {exitHintVisible && (
+        <RNAnimated.View
+          pointerEvents="none"
+          style={[
+            styles.exitHint,
+            {
+              bottom: insets.bottom + spacing.lg + 92,
+              backgroundColor: isDark ? 'rgba(255,255,255,0.92)' : 'rgba(20,22,28,0.92)',
+              opacity: exitHintFade,
+              transform: [{
+                translateY: exitHintFade.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }),
+              }],
+            },
+          ]}
+        >
+          <Ionicons name="log-out-outline" size={14} color={isDark ? '#111' : '#fff'} />
+          <Text style={{ color: isDark ? '#111' : '#fff', marginLeft: 6, fontWeight: '700', fontSize: typeScale.sm }}>
+            Press back again to exit
+          </Text>
+        </RNAnimated.View>
       )}
 
       {/* Bulk action bar (moved to top header — see selection mode) */}
@@ -2718,6 +2825,28 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 6,
+  },
+  exitHint: {
+    position: 'absolute',
+    alignSelf: 'center',
+    left: 0,
+    right: 0,
+    marginHorizontal: 'auto' as any,
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignContent: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.pill,
+    // Constrained width so the pill sizes to its content while staying centered.
+    maxWidth: 260,
+    minWidth: 200,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 10,
   },
   bulkBar: {
     position: 'absolute',

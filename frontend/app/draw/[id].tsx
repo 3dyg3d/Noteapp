@@ -1144,8 +1144,7 @@ export default function DrawScreen() {
       if (family === 'laser') {
         if (variantByFamily.laser === 'spot') setLaserSpot(null);
         return;
-      }
-      // Selection: finalize hit test against items.
+      }      // Selection: finalize hit test against items.
       if (family === 'select') {
         const inside = (x: number, y: number) => {
           if (variantByFamily.select === 'rect') {
@@ -1198,6 +1197,13 @@ export default function DrawScreen() {
         liveShapeRef.current = null;
         setLiveTick((n) => n + 1);
       }
+    })
+    .onFinalize(() => {
+      'worklet';
+      // Always release the "pen is down" flag when the gesture ends OR is cancelled
+      // (e.g. system interrupt, another gesture claiming the touch). Without this,
+      // once the pen touched once, the Ruler would stay blocked forever.
+      penDownSV.value = 0;
     });
 
   const finalGesture = Gesture.Simultaneous(pan, composedGesture, fingerScrollPan, tapsGesture);
