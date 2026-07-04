@@ -276,15 +276,12 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
               top: 0,
               width: displayLength,
               height: RULER_H,
-              // Very light translucent tint — reads as a physical glass ruler on
-              // most backgrounds without hiding the paper under it.
-              // NOTE: no shadow / elevation — Android renders elevation shadows on
-              // the pre-transform bounding box, which produces obvious color/tint
-              // artefacts (dark rectangle bleeding through) as the ruler rotates.
-              backgroundColor: 'rgba(255,255,255,0.16)',
+              // Whitish-grey translucent tint — reads clearly as a physical
+              // ruler laid over the paper without hiding what's underneath.
+              backgroundColor: 'rgba(210,214,220,0.28)',
               borderTopWidth: 1,
               borderBottomWidth: 1,
-              borderColor: 'rgba(0,0,0,0.35)',
+              borderColor: 'rgba(80,86,96,0.55)',
               overflow: 'visible',
             },
             animatedStyle,
@@ -479,4 +476,32 @@ export function rulerEdgeDistance(
 ): number {
   const projected = rulerProject(state, paperScale, pt, viewport);
   return Math.hypot(pt.x - projected.x, pt.y - projected.y);
+}
+
+/**
+ * Test whether a point (in viewport coordinates) sits INSIDE the ruler's
+ * rotated rectangle. Used so pen strokes that cross into the ruler's body get
+ * snapped to the nearest edge — the ruler acts as a physical barrier that
+ * blocks the pen from writing on the paper underneath, exactly like a real
+ * ruler laid on paper.
+ *
+ * Adds a small perpendicular tolerance (default 6 px) so the snap "grabs" the
+ * pen just before it visually enters the ruler, avoiding a jaggy transition
+ * from freehand to snapped.
+ */
+export function rulerContains(
+  state: RulerState,
+  pt: { x: number; y: number },
+  viewport?: { w: number; h: number },
+  perpTolerance = 6
+): boolean {
+  void viewport;
+  const rad = (state.angle * Math.PI) / 180;
+  const dx = Math.cos(rad);
+  const dy = Math.sin(rad);
+  const relX = pt.x - state.x;
+  const relY = pt.y - state.y;
+  // Perpendicular distance from the ruler axis.
+  const perp = relX * -dy + relY * dx;
+  return Math.abs(perp) <= RULER_H / 2 + perpTolerance;
 }

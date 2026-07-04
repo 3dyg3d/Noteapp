@@ -14,7 +14,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Ruler, { RulerState, rulerProject, rulerEdgeDistance, rulerEdgeSign } from '@/src/components/Ruler';
+import Ruler, { RulerState, rulerProject, rulerEdgeDistance, rulerEdgeSign, rulerContains } from '@/src/components/Ruler';
 import RulerSettingsMenu from '@/src/components/RulerSettingsMenu';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
@@ -1117,14 +1117,25 @@ export default function DrawScreen() {
     })
     .onUpdate((e) => {
       if (palmRejectionRef.current && !isStylusRef.current) return;
-      // If snapping to ruler, project each point onto the ruler line before adding.
-      // Use the edge captured at stroke start so the line stays on one side.
+      // Ruler snap logic — the ruler acts as a physical barrier laid on the
+      // paper. Two cases lock the current stroke to a ruler edge:
+      //  (a) The stroke STARTED near an edge (snapToRulerRef already true).
+      //  (b) The pen mid-stroke crosses INTO the ruler's rectangle — we
+      //      snap from that point on, choosing whichever edge is nearer.
+      // Once locked we stick to a single edge (snapEdgeRef) so a hand tremor
+      // across the ruler centre can't flip the line to the other side.
       let px = e.x;
       let py = e.y;
-      if (snapToRulerRef.current) {
-        const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y }, viewport, snapEdgeRef.current);
-        px = proj.x;
-        py = proj.y;
+      if (rulerEnabled) {
+        if (!snapToRulerRef.current && rulerContains(rulerState, { x: e.x, y: e.y }, viewport)) {
+          snapToRulerRef.current = true;
+          snapEdgeRef.current = rulerEdgeSign(rulerState, { x: e.x, y: e.y });
+        }
+        if (snapToRulerRef.current) {
+          const proj = rulerProject(rulerState, scale, { x: e.x, y: e.y }, viewport, snapEdgeRef.current);
+          px = proj.x;
+          py = proj.y;
+        }
       }
       const w = toWorld(px, py);
       // Laser update
