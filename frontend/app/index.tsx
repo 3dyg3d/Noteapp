@@ -194,6 +194,11 @@ export default function HomeScreen() {
     const totalGap = spacing.md * (numColumns - 1);
     return (winW - horizPad - totalGap) / numColumns;
   }, [winW, numColumns]);
+  // Uniform card height so every note tile in the grid lines up evenly, regardless
+  // of preview length / labels / thumbnail. A portrait-ish 1.35 aspect ratio feels
+  // like a real page peek without stretching. List mode ignores this — its rows
+  // still auto-size.
+  const cardPxHeight = useMemo(() => Math.round(cardPxWidth * 1.35), [cardPxWidth]);
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -770,7 +775,9 @@ export default function HomeScreen() {
   // --- Card renderer ---
   const renderNoteCard = (note: Note) => {
     const folder = folderById(note.folder_id);
-    const cardWidth = viewMode === 'grid' ? cardPxWidth : undefined;
+    const isGrid = viewMode === 'grid';
+    const cardWidth = isGrid ? cardPxWidth : undefined;
+    const cardHeight = isGrid ? cardPxHeight : undefined;
     const isSelected = selectedIds.has(note.id);
     const noteLabels = (note.label_ids || [])
       .map((lid) => labels.find((ll) => ll.id === lid))
@@ -793,12 +800,14 @@ export default function HomeScreen() {
           {
             backgroundColor: isSelected ? colors.brandTertiary : colors.surfaceSecondary,
             width: cardWidth,
+            height: cardHeight,
             alignSelf: viewMode === 'list' ? 'stretch' : 'flex-start',
             borderLeftColor: folder?.color || 'transparent',
             borderLeftWidth: folder ? 3 : 0,
             borderWidth: isSelected ? 2 : 0,
             borderColor: isSelected ? colors.brand : 'transparent',
             opacity: pressed ? 0.85 : 1,
+            overflow: 'hidden',
           },
         ]}
       >
@@ -824,14 +833,15 @@ export default function HomeScreen() {
           </Text>
         )}
         {!note.locked && note.note_type === 'handwriting' && (
-          <View style={{ marginTop: spacing.xs }}>
+          <View style={{ marginTop: spacing.xs, flex: 1 }}>
             {note.drawing_data ? (
               <HandwritingThumbnail
                 drawingData={note.drawing_data}
                 width={cardPxWidth - spacing.md * 2}
-                // Aspect ratio chosen to feel like a portrait page peek without
-                // dominating the whole card. Adjusts with tile scale via cardPxWidth.
-                height={Math.round((cardPxWidth - spacing.md * 2) * 0.9)}
+                // Fit the remaining vertical space inside the fixed-height
+                // card so all tiles line up. Falls back to a sensible min
+                // when no card height is available (list view).
+                height={Math.max(80, (cardPxHeight ?? Math.round(cardPxWidth * 0.9)) - 96)}
                 radius={6}
               />
             ) : (
@@ -1328,10 +1338,29 @@ export default function HomeScreen() {
                 />
               </Pressable>
             </View>
-            {/* Inline bulk actions row at the top */}
-            <View
+            {/* Inline bulk actions row at the top. On small phones the row
+                easily overflows because of the number of actions — horizontal
+                ScrollView lets users swipe through them instead of visibly
+                overlapping. Each button has a min-width so labels never
+                clip mid-word. */}
+            <ScrollView
               testID="bulk-action-bar"
-              style={[styles.topActionRow, { backgroundColor: colors.surfaceSecondary }]}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              // Layout props (flexDirection, alignItems) belong to the CONTENT
+              // container in RN ScrollView; putting them on `style` throws
+              // "ScrollView child layout must be applied through the
+              // contentContainerStyle prop".
+              contentContainerStyle={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingHorizontal: 2,
+              }}
+              style={{
+                backgroundColor: colors.surfaceSecondary,
+                borderRadius: radius.md,
+                marginBottom: spacing.sm,
+              }}
             >
               {category !== 'trash' ? (
                 <>
@@ -1370,7 +1399,7 @@ export default function HomeScreen() {
                   />
                 </>
               )}
-            </View>
+            </ScrollView>
           </>
         )}
 
@@ -1409,31 +1438,21 @@ export default function HomeScreen() {
       </BlurView>
 
       {/* Pinch to zoom home tiles.
-          Two-finger pinch on the grid rescales `homeTileScale` live so the user
-          can dial their preferred density with one gesture. One-finger scroll
-          on the FlatList still works because we run the pinch simultaneously
-          with the FlatList's own native scroll gesture (otherwise RNGH's
-          default composition lets the FlatList's ScrollView swallow every
-          touch before Pinch can activate). */}
+          Two-finger pinch on the grid rescales `homeTileScale` live. A bare
+          Gesture.Pinch() intentionally requires 2+ pointers, so a single-
+          finger scroll on the FlatList underneath still works normally — RNGH
+          only claims the touch when the second finger lands. */}
       <GestureDetector
-        gesture={Gesture.Simultaneous(
-          Gesture.Pinch()
-            .onStart(() => {
-              pinchStartScaleRef.current = tileScale;
-            })
-            .onUpdate((e) => {
-              // Reanimated-less: use direct state update. Reversed because
-              // spreading fingers (scale > 1) means BIGGER tiles which is a
-              // LARGER homeTileScale value.
-              const raw = pinchStartScaleRef.current * e.scale;
-              const clamped = Math.max(0.5, Math.min(2.0, raw));
-              // Bail out if the change is negligible so we don't thrash
-              // AsyncStorage during a slow pinch.
-              if (Math.abs(clamped - tileScale) < 0.02) return;
-              updateSettings({ homeTileScale: clamped });
-            }),
-          Gesture.Native(),
-        )}
+        gesture={Gesture.Pinch()
+          .onStart(() => {
+            pinchStartScaleRef.current = tileScale;
+          })
+          .onUpdate((e) => {
+            const raw = pinchStartScaleRef.current * e.scale;
+            const clamped = Math.max(0.5, Math.min(2.0, raw));
+            if (Math.abs(clamped - tileScale) < 0.02) return;
+            updateSettings({ homeTileScale: clamped });
+          })}
       >
         <View style={{ flex: 1 }}>
           <FlatList
@@ -1549,16 +1568,31 @@ export default function HomeScreen() {
 
       {/* Bulk action bar (moved to top header — see selection mode) */}
 
-      {/* Left drawer (phone only — overlay modal) */}
+      {/* Left drawer (phone only — overlay modal). On Android with edge-to-edge
+          display the Modal doesn't extend under the status / nav bars unless
+          `statusBarTranslucent` is enabled. Without it the panel visibly stops
+          short of the bottom on small phones (e.g. S25 Ultra). */}
       {!isTablet && (
-        <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
+        <Modal
+          visible={drawerOpen}
+          transparent
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() => setDrawerOpen(false)}
+        >
           <Pressable style={styles.drawerBackdrop} onPress={() => setDrawerOpen(false)}>
             <Pressable
-              style={[styles.drawerPanel, { backgroundColor: colors.surface, paddingTop: insets.top + spacing.lg }]}
+              style={[
+                styles.drawerPanel,
+                {
+                  backgroundColor: colors.surface,
+                  paddingTop: insets.top + spacing.lg,
+                  paddingBottom: insets.bottom + spacing.sm,
+                },
+              ]}
               onPress={(e) => e.stopPropagation()}
             >
               {drawerInner}
-              <View style={{ height: insets.bottom + spacing.sm }} />
             </Pressable>
           </Pressable>
         </Modal>
@@ -2842,17 +2876,20 @@ function TopBulkBtn({
       testID={testID}
       onPress={onPress}
       style={({ pressed }) => ({
-        flex: 1,
+        // Fixed min-width so labels never mid-word wrap. Sits inside a
+        // horizontal ScrollView which lets extras stay reachable on small
+        // phones instead of visibly overlapping.
+        minWidth: 76,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: spacing.sm,
-        paddingHorizontal: spacing.xs,
+        paddingHorizontal: spacing.sm,
         opacity: pressed ? 0.6 : 1,
       })}
     >
       <Ionicons name={icon} size={18} color={c} />
-      <Text style={{ marginLeft: 6, fontSize: typeScale.sm, color: c, fontWeight: '700' }}>{label}</Text>
+      <Text numberOfLines={1} style={{ marginLeft: 6, fontSize: typeScale.sm, color: c, fontWeight: '700' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -3102,9 +3139,12 @@ const styles = StyleSheet.create({
   drawerPanel: {
     width: '82%',
     maxWidth: 340,
-    height: '100%',
+    // In a row-flex backdrop the default cross-axis behaviour is `stretch`, so
+    // `alignSelf: stretch` guarantees the panel fills the parent's height even
+    // on Android edge-to-edge phones where `height: '100%'` sometimes falls
+    // short of the nav bar.
+    alignSelf: 'stretch',
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
     borderTopRightRadius: radius.lg,
     borderBottomRightRadius: radius.lg,
   },
