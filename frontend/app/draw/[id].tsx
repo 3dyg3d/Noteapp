@@ -29,6 +29,7 @@ import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import SkiaPaper from '@/src/components/SkiaPaper';
 import PaperPreview from '@/src/components/PaperPreview';
+import SaveIndicator from '@/src/components/SaveIndicator';
 import { labelColors } from '@/src/theme/tokens';
 
 // ---------- Types ----------
@@ -1826,11 +1827,7 @@ export default function DrawScreen() {
           }
           rightSlot={
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-              {saving && (
-                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginRight: 4 }}>
-                  Saving…
-                </Text>
-              )}
+              <SaveIndicator saving={saving} compact />
               <Pressable
                 onPress={(e) => {
                   const px = e?.nativeEvent?.pageX;

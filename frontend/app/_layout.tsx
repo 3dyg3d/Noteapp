@@ -9,6 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useIconFonts } from '@/src/hooks/use-icon-fonts';
 import { ThemeProvider, useTheme } from '@/src/theme/ThemeContext';
 import { useAppSettings } from '@/src/state/useAppSettings';
+import { ToastProvider } from '@/src/components/Toast';
 
 LogBox.ignoreAllLogs(true);
 
@@ -63,7 +64,9 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider>
           <BottomSheetModalProvider>
-            <ThemedStack />
+            <ToastProvider>
+              <ThemedStack />
+            </ToastProvider>
           </BottomSheetModalProvider>
         </ThemeProvider>
       </SafeAreaProvider>

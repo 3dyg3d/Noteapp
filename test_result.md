@@ -113,6 +113,35 @@ user_problem_statement: |
   Prior bug context (kept for history) is below.
 
 frontend:
+  - task: "Undo snackbars + Save indicator (feedback polish)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/Toast.tsx, /app/frontend/src/components/SaveIndicator.tsx, /app/frontend/app/_layout.tsx, /app/frontend/app/index.tsx, /app/frontend/app/note/[id].tsx, /app/frontend/app/draw/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Added global `<ToastProvider>` (Reanimated slide-in snackbar with
+            tones + UNDO action) wired into `_layout.tsx`. Home-screen bulk
+            actions now surface reversible toasts:
+              • bulkDelete (trash) → "Moved N to Trash" + UNDO restores.
+              • bulkDelete (permanent) → "Deleted N forever" (destructive).
+              • bulkRestore → "Restored N" + UNDO re-trashes.
+              • bulkMoveTo → "Moved N to <folder>" + UNDO per-note revert.
+              • bulkDuplicate → success toast.
+              • emptyTrash → destructive toast, no undo.
+            Added `SaveIndicator` component (animated "Saving…" dots → green
+            "Saved ✓" for 1.4s → fade) wired into both `note/[id].tsx` and
+            `draw/[id].tsx` header rightSlot, replacing the plain "Saving…"
+            text. Verified in web preview:
+              - Long-press note → bulk-delete → snackbar shows with UNDO;
+                tapping UNDO restores the note visibly.
+              - Typing in a text note header shows "Saved ✓" pill then fades.
+            No JS runtime errors introduced.
+
   - task: "Pen-only mode toggle in handwriting toolbar"
     implemented: true
     working: "NA"

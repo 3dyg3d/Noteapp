@@ -27,6 +27,7 @@ import { NotesApi, FoldersApi, LabelsApi, Note, Folder, Label, ChecklistItem, No
 import { haptic, useAppSettings } from '@/src/state/useAppSettings';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
+import { useToast } from '@/src/components/Toast';
 
 type ViewMode = 'grid' | 'list';
 // A category may be one of the fixed views, a folder id, or a label id
@@ -209,6 +210,11 @@ export default function HomeScreen() {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [sortBy, setSortBy] = useState<SortBy>('updated');
   const [showSortMenu, setShowSortMenu] = useState(false);
+
+  // Global snackbar / toast handle — used for reversible destructive actions
+  // (trash / restore / move-to-folder / permanent delete). Wired here at the
+  // top so any bulk / row action can call `toast.show({ ... })` below.
+  const toast = useToast();
 
   // Modals
   const isTablet = winW >= 720;
@@ -483,6 +489,7 @@ export default function HomeScreen() {
   };
   const bulkDuplicate = async () => {
     const targets = notes.filter((n) => selectedIds.has(n.id));
+    if (targets.length === 0) return;
     await Promise.all(
       targets.map((n) =>
         NotesApi.create({
@@ -499,28 +506,113 @@ export default function HomeScreen() {
     );
     clearSelection();
     load();
+    haptic.success();
+    toast.show({
+      message: `Duplicated ${targets.length} note${targets.length > 1 ? 's' : ''}`,
+      tone: 'success',
+      duration: 2500,
+    });
   };
   const bulkDelete = async () => {
     const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
     const permanent = category === 'trash';
+    // Snapshot the affected notes so we can revert on Undo. Trashing is
+    // reversible via NotesApi.restore; permanent delete is not.
+    const affected = notes.filter((n) => ids.includes(n.id));
     await Promise.all(ids.map((id) => NotesApi.remove(id, permanent)));
     clearSelection();
     load();
+    haptic.medium();
+    if (permanent) {
+      toast.show({
+        message: `Deleted ${ids.length} note${ids.length > 1 ? 's' : ''} forever`,
+        tone: 'destructive',
+        duration: 3000,
+      });
+    } else {
+      toast.show({
+        message: `Moved ${ids.length} to Trash`,
+        tone: 'destructive',
+        actionLabel: 'Undo',
+        onAction: async () => {
+          try {
+            await Promise.all(affected.map((n) => NotesApi.restore(n.id)));
+            haptic.success();
+            load();
+          } catch (e) {
+            console.warn('undo trash failed', e);
+          }
+        },
+      });
+    }
   };
   const bulkRestore = async () => {
     const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
     await Promise.all(ids.map((id) => NotesApi.restore(id)));
     clearSelection();
     load();
+    haptic.success();
+    toast.show({
+      message: `Restored ${ids.length} note${ids.length > 1 ? 's' : ''}`,
+      tone: 'success',
+      actionLabel: 'Undo',
+      onAction: async () => {
+        // Undo restore = send them back to trash (soft delete).
+        try {
+          await Promise.all(ids.map((id) => NotesApi.remove(id, false)));
+          haptic.selection();
+          load();
+        } catch (e) {
+          console.warn('undo restore failed', e);
+        }
+      },
+    });
   };
   const bulkMoveTo = async (folderId: string | null) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      setShowMovePicker(false);
+      return;
+    }
+    // Capture previous folder for each note so Undo can restore per-note.
+    const prev = notes
+      .filter((n) => ids.includes(n.id))
+      .map((n) => ({ id: n.id, folder_id: n.folder_id }));
     await bulkUpdate({ folder_id: folderId });
     setShowMovePicker(false);
+    haptic.selection();
+    const destName = folderId
+      ? folders.find((f) => f.id === folderId)?.name || 'folder'
+      : 'All notes';
+    toast.show({
+      message: `Moved ${ids.length} to ${destName}`,
+      tone: 'info',
+      actionLabel: 'Undo',
+      onAction: async () => {
+        try {
+          await Promise.all(
+            prev.map((p) => NotesApi.update(p.id, { folder_id: p.folder_id }))
+          );
+          haptic.selection();
+          load();
+        } catch (e) {
+          console.warn('undo move failed', e);
+        }
+      },
+    });
   };
 
   const emptyTrash = async () => {
     await NotesApi.emptyTrash();
     load();
+    haptic.medium();
+    toast.show({
+      message: 'Trash emptied',
+      tone: 'destructive',
+      duration: 2500,
+    });
   };
 
   // ---- Back-button / swipe-back handling ----

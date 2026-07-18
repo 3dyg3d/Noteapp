@@ -25,6 +25,7 @@ import { haptic } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import DrawingPad from '@/src/components/DrawingPad';
+import SaveIndicator from '@/src/components/SaveIndicator';
 import { labelColors } from '@/src/theme/tokens';
 
 function uid() {
@@ -276,11 +277,7 @@ export default function NoteEditor() {
           }
           rightSlot={
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-              {saving && (
-                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginRight: 4 }}>
-                  Saving…
-                </Text>
-              )}
+              <SaveIndicator saving={saving} compact />
               <Pressable testID="pin-btn" onPress={togglePin} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
                 <Ionicons
                   name={note.pinned ? 'pin' : 'pin-outline'}
