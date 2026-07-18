@@ -1729,9 +1729,18 @@ export default function HomeScreen() {
           RN Web / Android / iOS without fighting the drawer's inner scroll). */}
       {!isTablet && (() => {
         const drawerPan = PanResponder.create({
-          // Only claim horizontal drags; vertical drags flow through to inner scroll.
-          onStartShouldSetPanResponder: () => false,
+          // Fallback-claim taps on the panel's empty area so the backdrop's
+          // onPress doesn't fire (which would close the drawer on any tap
+          // inside). This is only called when NO descendant Pressable claims
+          // the responder first, so DrawerRow taps still work.
+          onStartShouldSetPanResponder: () => true,
+          onStartShouldSetPanResponderCapture: () => false,
+          // Steal the responder from any child Pressable as soon as the user
+          // starts dragging horizontally — this is how the swipe-left-to-close
+          // gesture wins over a DrawerRow that already claimed onStart.
           onMoveShouldSetPanResponder: (_e, g) =>
+            Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
+          onMoveShouldSetPanResponderCapture: (_e, g) =>
             Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
           onPanResponderMove: () => { /* no-op; only care about release */ },
           onPanResponderRelease: (_e, g) => {
@@ -1749,7 +1758,13 @@ export default function HomeScreen() {
             onRequestClose={() => setDrawerOpen(false)}
           >
             <Pressable style={styles.drawerBackdrop} onPress={() => setDrawerOpen(false)}>
-              <Pressable
+              {/* IMPORTANT: The drawer panel MUST be a plain View, not a Pressable.
+                  Pressable overrides `onStartShouldSetResponder` and swallows the
+                  responder on every touch — that prevented the spread PanResponder
+                  handlers from ever seeing a move event, so swipe-to-close silently
+                  broke. With a plain View, the PanResponder above is honoured and
+                  child Pressables (DrawerRow, etc.) still claim taps naturally. */}
+              <View
                 {...drawerPan.panHandlers}
                 style={[
                   styles.drawerPanel,
@@ -1759,10 +1774,9 @@ export default function HomeScreen() {
                     paddingBottom: insets.bottom + spacing.sm,
                   },
                 ]}
-                onPress={(e) => e.stopPropagation()}
               >
                 {drawerInner}
-              </Pressable>
+              </View>
             </Pressable>
           </Modal>
         );

@@ -103,13 +103,14 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Bug report from user on the handwriting canvas screen:
-  1. "I'm still able to write with my finger" — even after the previous palm-rejection wiring,
-     the user wants an explicit Pen-Only toggle in the draw screen so finger touches do NOT
-     create strokes.
-  2. "The zoom out is going to the left, it should be centered always" — pinch-zoom on the
-     canvas was translating content toward the top-left of the screen instead of keeping the
-     page centered.
+  Latest bug report to verify:
+  1. "Ruler is moved by pen and writing is jagged when ruler is on" — user complains that the
+     stylus/pen still drags the on-screen ruler around, and strokes drawn along the ruler edge
+     appear jagged instead of perfectly straight.
+  2. Home screen: pinch-to-zoom on the notes grid and horizontal swipe-to-close on the left
+     drawer were previously broken; PanResponder-based rewrite must still work end-to-end.
+
+  Prior bug context (kept for history) is below.
 
 frontend:
   - task: "Pen-only mode toggle in handwriting toolbar"
@@ -229,10 +230,74 @@ metadata:
   test_sequence: 4
   run_ui: true
 
+frontend:
+  - task: "Ruler drag-handle prevents pen from dragging the ruler"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/Ruler.tsx"
+    stuck_count: 5
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Restructured `Ruler.tsx` into two overlapping layers:
+          (a) Body layer (translucent bar + ticks + numbers + unit label) — has
+              `pointerEvents="none"` so ALL pen/finger touches on the ruler body pass through
+              to the Skia canvas below. This eliminates the gesture race that made pen strokes
+              jittery when writing along the ruler.
+          (b) Central circular drag handle (60x60 view with the two horizontal bars visual)
+              hosts the pan + rotate gestures. Users MUST touch this handle to move/rotate
+              the ruler; touching the ruler body itself does nothing to the ruler.
+          Additional: `rulerContains` helper in the same file lets `draw/[id].tsx` snap strokes
+          instantly when the pen enters the ruler zone, so writing along either edge is
+          perfectly straight without jitter.
+          NEEDS TESTING: Verify (1) pen touches on the ruler body no longer drag the ruler,
+          (2) only the central handle drags/rotates, (3) strokes along the ruler edge are
+          straight and smooth. Native S-Pen behavior must be flagged as `requires_native_build`
+          if not testable on web/expo-go.
+
+  - task: "Home screen pinch-to-zoom + drawer swipe-to-close via PanResponder"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 2
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced RNGH GestureDetector wrappers with `PanResponder` on the home grid and left
+          drawer to avoid FlatList vs GestureDetector native scroll conflicts. Pinch scale is
+          captured via `pinchStartScaleRef`/`pinchStateRef`; drawer close is a horizontal swipe
+          responder. Verify FlatList still scrolls normally, pinch resizes card tiles, and
+          swiping left on the open drawer closes it.
+      - working: "NA"
+        agent: "testing"
+        comment: |
+          Static verification of pinch code path PASS. Drawer swipe-close FAILED in web preview.
+          RCA: outer `<Pressable>` backdrop's onPress fires; inner `<Pressable>` wraps the
+          spread panHandlers — Pressable overrides `onStartShouldSetResponder` and swallows
+          responder claim, so PanResponder move events never fire on the inner element.
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Fix applied: swapped the inner drawer panel `Pressable` → plain `View` and added
+          `onStartShouldSetPanResponder: () => true` (fallback claim so backdrop's onPress
+          doesn't fire on inner-panel taps) plus `onMoveShouldSetPanResponderCapture` for
+          horizontal drags (steals responder from any child Pressable during a swipe).
+          Removed the now-redundant `onPress={(e) => e.stopPropagation()}`.
+          Web preview automation still can't reliably synthesize RN-Web PanResponder touches
+          (mouse-drag selects text instead), so definitive verification is `requires_native_build`.
+          Structurally the fix matches the canonical RN drawer-swipe pattern and should work on
+          real iOS/Android touch.
+
 test_plan:
   current_focus:
-    - "Pen-only mode toggle in handwriting toolbar"
-    - "Zoom stays centered on the canvas"
+    - "Ruler drag-handle prevents pen from dragging the ruler"
+    - "Home screen pinch-to-zoom + drawer swipe-to-close via PanResponder"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -240,15 +305,14 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Two related bug fixes on `/app/frontend/app/draw/[id].tsx`:
-      (1) New `tool-pen-mode` ToolBtn at the start of the bottom toolbar that toggles
-          `settings.palmRejection`. When active, finger touches must NOT draw on the Skia canvas
-          (only the S Pen/stylus should). Existing palm-rejection logic in the Pan gesture
-          (`if (settings.palmRejection && pointerType === 'touch') return;`) handles the ignore.
-      (2) Zoom centering: tx/ty are now derived from `scale` and `pageDims` so the canvas
-          stays centered at any zoom level (no more drift to the left).
-      Please test by opening a handwriting note (web preview shows the "Stylus / S Pen canvas"
-      fallback, but you can still verify the button toggles `Pen only` ↔ `Touch on`, the
-      `tool-pen-mode` testID is present, and the Skia native code paths are wired). Native
-      verification of the finger-rejection and zoom centering must be flagged as
-      `requires_native_build` if it cannot be performed on the web preview.
+      Please verify two priority fixes:
+      (1) `/app/frontend/src/components/Ruler.tsx` — ruler body is now `pointerEvents="none"`
+          and only the small central drag-handle View is interactive. Pen strokes on the ruler
+          body must fall through to the canvas and MUST NOT translate the ruler. The ruler
+          should only move when the central handle is touched.
+      (2) `/app/frontend/app/index.tsx` — pinch-to-zoom on the home grid cards and horizontal
+          swipe-to-close on the left drawer must both work while FlatList scroll still works.
+          Implementation is via `PanResponder` (not RNGH) to avoid native scroll conflicts.
+      If native S-Pen behavior cannot be exercised via the web preview, flag it as
+      `requires_native_build` and verify code paths (testIDs, computed transforms, listeners)
+      instead.
