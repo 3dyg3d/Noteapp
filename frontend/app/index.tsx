@@ -23,7 +23,17 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, folderColors, labelColors } from '@/src/theme/tokens';
-import { NotesApi, FoldersApi, LabelsApi, Note, Folder, Label, ChecklistItem, NoteStatus } from '@/src/api/client';
+import {
+  NotesApi,
+  FoldersApi,
+  LabelsApi,
+  Note,
+  NoteSummary,
+  Folder,
+  Label,
+  ChecklistItem,
+  NoteStatus,
+} from '@/src/api/client';
 import { haptic, useAppSettings } from '@/src/state/useAppSettings';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
@@ -132,7 +142,7 @@ function formatDate(iso: string) {
   }
 }
 
-function previewText(note: Note): string {
+function previewText(note: NoteSummary): string {
   const parts: string[] = [];
   if (note.content) parts.push(note.content);
   if (note.checklist.length) parts.push(note.checklist.map((c) => `• ${c.text}`).join('  '));
@@ -200,7 +210,8 @@ export default function HomeScreen() {
   // still auto-size.
   const cardPxHeight = useMemo(() => Math.round(cardPxWidth * 1.35), [cardPxWidth]);
 
-  const [notes, setNotes] = useState<Note[]>([]);
+  // Summaries, not full notes: the list endpoint omits every blob field.
+  const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [loading, setLoading] = useState(true);
@@ -248,7 +259,7 @@ export default function HomeScreen() {
   const selectionMode = selectedIds.size > 0;
 
   // Info modal — surface metadata for a single note or a folder.
-  const [infoTarget, setInfoTarget] = useState<{ kind: 'note'; note: Note } | { kind: 'folder'; folder: Folder } | null>(null);
+  const [infoTarget, setInfoTarget] = useState<{ kind: 'note'; note: NoteSummary } | { kind: 'folder'; folder: Folder } | null>(null);
 
   const status: NoteStatus = category === 'trash' ? 'trash' : 'active';
   // Label filter: category prefixed with `label:` filters notes by that label
@@ -460,11 +471,11 @@ export default function HomeScreen() {
   };
 
   // --- Selection ---
-  const enterSelectionWith = (note: Note) => {
+  const enterSelectionWith = (note: NoteSummary) => {
     haptic.medium();
     setSelectedIds(new Set([note.id]));
   };
-  const toggleSelect = (note: Note) => {
+  const toggleSelect = (note: NoteSummary) => {
     haptic.selection();
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -490,19 +501,28 @@ export default function HomeScreen() {
   const bulkDuplicate = async () => {
     const targets = notes.filter((n) => selectedIds.has(n.id));
     if (targets.length === 0) return;
+    // The list holds summaries, which deliberately exclude images, drawings and
+    // drawing_data. Duplicating from a summary would silently produce a copy
+    // with the attachments stripped, so fetch each full note first.
     await Promise.all(
-      targets.map((n) =>
-        NotesApi.create({
-          title: n.title ? `${n.title} (copy)` : '',
-          content: n.content,
-          checklist: n.checklist,
-          images: n.images,
-          drawings: n.drawings,
-          folder_id: n.folder_id,
+      targets.map(async (n) => {
+        const full = await NotesApi.get(n.id);
+        return NotesApi.create({
+          title: full.title ? `${full.title} (copy)` : '',
+          content: full.content,
+          checklist: full.checklist,
+          images: full.images,
+          drawings: full.drawings,
+          drawing_data: full.drawing_data,
+          preview: full.preview,
+          note_type: full.note_type,
+          folder_id: full.folder_id,
+          label_ids: full.label_ids,
+          color: full.color,
           pinned: false,
           locked: false,
-        })
-      )
+        });
+      })
     );
     clearSelection();
     load();
@@ -864,7 +884,7 @@ export default function HomeScreen() {
   };
 
   // --- Card renderer ---
-  const renderNoteCard = (note: Note) => {
+  const renderNoteCard = (note: NoteSummary) => {
     const folder = folderById(note.folder_id);
     const isGrid = viewMode === 'grid';
     const cardWidth = isGrid ? cardPxWidth : undefined;
@@ -924,9 +944,9 @@ export default function HomeScreen() {
             )}
             {!note.locked && note.note_type === 'handwriting' && (
               <View style={{ flex: 1 }}>
-                {note.drawing_data ? (
+                {note.preview || note.has_drawing ? (
                   <HandwritingThumbnail
-                    drawingData={note.drawing_data}
+                    preview={note.preview}
                     width={cardPxWidth - spacing.md * 2}
                     height={Math.max(80, (cardPxHeight ?? Math.round(cardPxWidth * 0.9)) - spacing.md * 2)}
                     radius={6}
@@ -946,10 +966,10 @@ export default function HomeScreen() {
                 Tap to unlock
               </Text>
             )}
-            {!!note.images.length && (
+            {!!note.image_count && (
               <View style={[styles.cardMeta, { position: 'absolute', top: 8, right: 8 }]}>
                 <Ionicons name="image-outline" size={12} color={colors.muted} />
-                <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.images.length}</Text>
+                <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.image_count}</Text>
               </View>
             )}
           </Pressable>
@@ -1062,10 +1082,10 @@ export default function HomeScreen() {
             Tap to unlock
           </Text>
         )}
-        {!!note.images.length && (
+        {!!note.image_count && (
           <View style={styles.cardMeta}>
             <Ionicons name="image-outline" size={12} color={colors.muted} />
-            <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.images.length}</Text>
+            <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.image_count}</Text>
           </View>
         )}
         {noteLabels.length > 0 && (
@@ -1221,7 +1241,7 @@ export default function HomeScreen() {
   // Shared drawer body (used by both the inline sidebar and the phone modal)
   const drawerInner = (
     <>
-      <Text style={[styles.drawerBrand, { color: colors.brand }]}>GalaxyNotes</Text>
+      <Text style={[styles.drawerBrand, { color: colors.brand }]}>Geodesic Notes</Text>
       <Text style={[styles.drawerSub, { color: colors.muted }]}>Your second brain</Text>
 
       <View style={{ height: spacing.lg }} />
@@ -1925,13 +1945,15 @@ export default function HomeScreen() {
             <View style={styles.sheetHandle} />
             {infoTarget?.kind === 'note' && (() => {
               const n = infoTarget.note;
-              // Compute a rough size (bytes of the serialised payload — proxy for on-disk size).
+              // Rough on-disk size. Only the text parts are available here: the
+              // list holds summaries, so blob sizes are not known without
+              // fetching the full note, which is not worth doing to render an
+              // info sheet. The label below says "text" so the number is not
+              // mistaken for the total.
               const payload = JSON.stringify({
                 title: n.title,
                 content: n.content,
                 checklist: n.checklist,
-                drawing_data: n.drawing_data,
-                images: n.images?.length ?? 0,
               });
               // In React Native, Blob may not be available in Hermes — fall back to a
               // UTF-8 byte estimate. This isn't exact but is close enough for a proxy.
@@ -1943,17 +1965,10 @@ export default function HomeScreen() {
               const sizeLabel = sizeBytes < 1024 ? `${sizeBytes} B` : sizeBytes < 1024 * 1024 ? `${(sizeBytes / 1024).toFixed(1)} KB` : `${(sizeBytes / 1024 / 1024).toFixed(2)} MB`;
               const chars = (n.content || '').length + (n.checklist || []).reduce((sum, ci) => sum + (ci.text || '').length, 0);
               const words = (n.content || '').split(/\s+/).filter(Boolean).length;
-              const imgCount = n.images?.length ?? 0;
-              // Count handwritten pages if present.
-              let pageCount = 0;
-              let strokeCount = 0;
-              if (n.drawing_data) {
-                try {
-                  const doc = JSON.parse(n.drawing_data);
-                  pageCount = doc.pageCount ?? 1;
-                  strokeCount = Array.isArray(doc.items) ? doc.items.length : 0;
-                } catch {}
-              }
+              const imgCount = n.image_count ?? 0;
+              // Stroke and page counts live in the full document, which the list
+              // does not carry. Show what the summary knows.
+              const pageCount = n.has_drawing ? 1 : 0;
               const folderName = n.folder_id ? (folders.find((f) => f.id === n.folder_id)?.name ?? 'Unknown folder') : 'None';
               return (
                 <>
@@ -1991,11 +2006,10 @@ export default function HomeScreen() {
                         </View>
                       ) : null;
                     })()}
-                    <InfoRow label="Size" value={sizeLabel} colors={colors} />
+                    <InfoRow label="Text size" value={sizeLabel} colors={colors} />
                     {n.note_type === 'handwriting' ? (
                       <>
-                        <InfoRow label="Pages" value={String(pageCount)} colors={colors} />
-                        <InfoRow label="Strokes / shapes" value={String(strokeCount)} colors={colors} />
+                        <InfoRow label="Pages" value={pageCount ? String(pageCount) : '—'} colors={colors} />
                       </>
                     ) : (
                       <>

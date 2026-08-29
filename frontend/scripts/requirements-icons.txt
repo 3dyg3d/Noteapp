@@ -1,0 +1,6 @@
+# Only needed to regenerate assets/images from the master artwork:
+#   python scripts/build-icons.py
+# Not required to build or run the app.
+Pillow>=10.0.0
+numpy>=1.26.0
+scipy>=1.11.0

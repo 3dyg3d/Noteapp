@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from 'react';
 import { View, Text, TextInput } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, PointerType } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle,
   useAnimatedProps,
@@ -140,19 +140,20 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
       // refuse immediately. This backs up RNGH's own pointerType filter which is
       // unreliable on some Samsung devices where the S-Pen registers as TOUCH.
       if (penDown.value === 1) { manager.fail(); return; }
-      const touches = event.allTouches || [];
-      for (let i = 0; i < touches.length; i++) {
-        const pt = touches[i]?.pointerType;
-        if (pt === 1) { manager.fail(); return; }
-      }
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
     })
     .onTouchesMove((event, manager) => {
       'worklet';
       if (penDown.value === 1) { manager.fail(); return; }
-      const touches = event.allTouches || [];
-      for (let i = 0; i < touches.length; i++) {
-        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
-      }
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
     })
     .onStart(() => {
       'worklet';
@@ -183,10 +184,11 @@ export default function Ruler({ state, onChange, paperScale, viewport, colors, e
     .onTouchesDown((event, manager) => {
       'worklet';
       if (penDown.value === 1) { manager.fail(); return; }
-      const touches = event.allTouches || [];
-      for (let i = 0; i < touches.length; i++) {
-        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
-      }
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
     })
     .onTouchesMove((event, manager) => {
       'worklet';

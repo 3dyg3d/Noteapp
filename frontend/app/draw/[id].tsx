@@ -18,7 +18,12 @@ import Ruler, { RulerState, rulerProject, rulerEdgeDistance, rulerEdgeSign, rule
 import RulerSettingsMenu from '@/src/components/RulerSettingsMenu';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import InkStroke from '@/src/ink/InkStroke';
+import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
+import { InkPoint, InkTool, inkNow, simplify } from '@/src/ink/stroke';
+import { buildPreview } from '@/src/ink/preview';
+import { StorageKeys } from '@/src/state/storageKeys';
+import { GestureDetector, Gesture, PointerType } from 'react-native-gesture-handler';
 import { useSharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '@/src/theme/ThemeContext';
@@ -43,7 +48,13 @@ interface StrokeData {
   tool: PenTool;
   color: string;
   width: number;
-  points: { x: number; y: number; t?: number }[];
+  /**
+   * `p` is normalised stylus pressure where the digitiser reported it. Absent
+   * for finger and mouse input, in which case width falls back to a velocity
+   * model. Documents written before pressure capture simply have no `p`, and
+   * render exactly as they did.
+   */
+  points: InkPoint[];
 }
 interface ShapeData {
   kind: 'shape';
@@ -177,6 +188,28 @@ function familyVariantToTool(f: ToolFamily, v: string): Tool {
 }
 
 // ---------- Helpers ----------
+// Ink geometry lives in src/ink. See src/ink/stroke.ts for why strokes are
+// filled outlines rather than stroked polylines.
+
+/** World-space distance below which a new sample carries no new information. */
+const MIN_SAMPLE_DISTANCE = 0.25;
+
+/**
+ * Normalised stylus pressure, when the digitiser reports it.
+ *
+ * react-native-gesture-handler exposes `stylusData` on pan gestures (2.16+, and
+ * this project is on 2.28). The app already detected *that* a stylus was in use
+ * for palm rejection but never read the pressure, which is why every tool drew
+ * at a constant width and the handwriting read as marker rather than pen.
+ */
+function stylusPressure(e: unknown): number | undefined {
+  const stylus = (e as { stylusData?: { pressure?: number } })?.stylusData;
+  const raw = stylus?.pressure;
+  if (typeof raw !== 'number' || Number.isNaN(raw)) return undefined;
+  // Android reports 0..1 but can exceed 1 on some digitisers.
+  return Math.max(0, Math.min(1, raw));
+}
+
 function buildPathFromPoints(points: { x: number; y: number }[]): SkPath {
   const p = Skia.Path.Make();
   if (points.length === 0) return p;
@@ -347,7 +380,7 @@ export default function DrawScreen() {
   const [pickerFor, setPickerFor] = useState<{ slot: number | null } | null>(null);
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null); // anchor for the grid picker Modal
   useEffect(() => {
-    AsyncStorage.getItem('galaxynotes:quick-colors').then((raw) => {
+    AsyncStorage.getItem(StorageKeys.quickColors).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -360,7 +393,7 @@ export default function DrawScreen() {
         } catch {}
       }
     });
-    AsyncStorage.getItem('galaxynotes:recent-colors').then((raw) => {
+    AsyncStorage.getItem(StorageKeys.recentColors).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -368,7 +401,7 @@ export default function DrawScreen() {
         } catch {}
       }
     });
-    AsyncStorage.getItem('galaxynotes:favorite-colors').then((raw) => {
+    AsyncStorage.getItem(StorageKeys.favoriteColors).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -381,7 +414,7 @@ export default function DrawScreen() {
     setQuickColors((prev) => {
       const next = prev.slice();
       next[slot] = hex;
-      AsyncStorage.setItem('galaxynotes:quick-colors', JSON.stringify(next)).catch(() => {});
+      AsyncStorage.setItem(StorageKeys.quickColors, JSON.stringify(next)).catch(() => {});
       return next;
     });
   }, []);
@@ -389,7 +422,7 @@ export default function DrawScreen() {
     setRecentColors((prev) => {
       const filtered = prev.filter((c) => c.toLowerCase() !== hex.toLowerCase());
       const next = [hex, ...filtered].slice(0, 8);
-      AsyncStorage.setItem('galaxynotes:recent-colors', JSON.stringify(next)).catch(() => {});
+      AsyncStorage.setItem(StorageKeys.recentColors, JSON.stringify(next)).catch(() => {});
       return next;
     });
   }, []);
@@ -399,7 +432,7 @@ export default function DrawScreen() {
       const next = has
         ? prev.filter((c) => c.toLowerCase() !== hex.toLowerCase())
         : [hex, ...prev].slice(0, 12);
-      AsyncStorage.setItem('galaxynotes:favorite-colors', JSON.stringify(next)).catch(() => {});
+      AsyncStorage.setItem(StorageKeys.favoriteColors, JSON.stringify(next)).catch(() => {});
       return next;
     });
   }, []);
@@ -407,7 +440,7 @@ export default function DrawScreen() {
   const [widths, setWidths] = useState<Record<Tool, number>>(DEFAULT_WIDTHS);
   // Persist per-tool widths across sessions.
   useEffect(() => {
-    AsyncStorage.getItem('galaxynotes:tool-widths').then((raw) => {
+    AsyncStorage.getItem(StorageKeys.toolWidths).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -421,7 +454,7 @@ export default function DrawScreen() {
   const setToolWidth = useCallback((t: Tool, v: number) => {
     setWidths((prev) => {
       const next = { ...prev, [t]: v };
-      AsyncStorage.setItem('galaxynotes:tool-widths', JSON.stringify(next)).catch(() => {});
+      AsyncStorage.setItem(StorageKeys.toolWidths, JSON.stringify(next)).catch(() => {});
       return next;
     });
   }, []);
@@ -510,7 +543,9 @@ export default function DrawScreen() {
   }, [settings.palmRejection, palmRejectionSV]);
 
   // Active drawing state (refs to avoid re-renders per touch)
-  const livePtsRef = useRef<{ x: number; y: number; t: number }[]>([]);
+  const livePtsRef = useRef<InkPoint[]>([]);
+  // Imperative handle to the wet-ink layer; see src/ink/LiveStrokeLayer.tsx.
+  const liveStrokeRef = useRef<LiveStrokeHandle | null>(null);
   const liveShapeRef = useRef<{ start: Pt; end: Pt } | null>(null);
   const [liveTick, setLiveTick] = useState(0);
 
@@ -591,7 +626,10 @@ export default function DrawScreen() {
             setPaper(doc.paper || 'blank');
             if (doc.paperSize) {
               // Legacy notes may have paperSize === 'fit' — coerce to A4.
-              const s: any = doc.paperSize === 'fit' ? 'a4' : doc.paperSize;
+              // Legacy docs really do hold 'fit' on disk even though the current
+              // PaperSize union has no such member, so compare as a raw string.
+              const raw = doc.paperSize as string;
+              const s = (raw === 'fit' ? 'a4' : raw) as PaperSize;
               setPaperSize(s);
             }
             if (doc.customSize) setCustomSize(doc.customSize);
@@ -619,6 +657,9 @@ export default function DrawScreen() {
         try {
           setSaving(true);
           const body: Partial<Note> = {
+            // A small, bounded render for the notes list, so the list endpoint
+            // never has to ship the full document. See src/ink/preview.ts.
+            preview: buildPreview(nextItems as any[], pageDims.w, basePageH, nextPaper),
             drawing_data: JSON.stringify({
               paper: nextPaper,
               paperSize: nextSize,
@@ -686,15 +727,20 @@ export default function DrawScreen() {
   const isPenTool = (t: Tool): t is PenTool =>
     t === 'pen' || t === 'fountain' || t === 'marker' || t === 'highlighter' || t === 'pencil';
 
-  const finalizeStroke = (pts: { x: number; y: number; t: number }[]) => {
+  const finalizeStroke = (pts: InkPoint[]) => {
     if (pts.length < 2 || !isPenTool(tool)) return;
     const w = widths[tool];
+    // Simplify once, on commit. This is where redundant samples are removed,
+    // measured against real shape and pressure error rather than a fixed
+    // distance threshold, so corners and width modulation survive while the
+    // stored document shrinks by roughly an order of magnitude.
+    const points = simplify(pts);
     const stroke: StrokeData = {
       kind: 'stroke',
       tool,
       color,
       width: w,
-      points: pts.map((p) => ({ x: p.x, y: p.y, t: p.t })),
+      points,
     };
     setItems((prev) => {
       pushHistory(prev);
@@ -727,13 +773,13 @@ export default function DrawScreen() {
   // the portion under the eraser (leaves the rest of the stroke behind).
   const [eraserMode, setEraserMode] = useState<'stroke' | 'partial'>('stroke');
   useEffect(() => {
-    AsyncStorage.getItem('galaxynotes:eraser-mode').then((v) => {
+    AsyncStorage.getItem(StorageKeys.eraserMode).then((v) => {
       if (v === 'stroke' || v === 'partial') setEraserMode(v);
     });
   }, []);
   const setEraserModePersist = useCallback((m: 'stroke' | 'partial') => {
     setEraserMode(m);
-    AsyncStorage.setItem('galaxynotes:eraser-mode', m).catch(() => {});
+    AsyncStorage.setItem(StorageKeys.eraserMode, m).catch(() => {});
   }, []);
 
   const eraseAt = (x: number, y: number) => {
@@ -758,8 +804,8 @@ export default function DrawScreen() {
             // Partial erase: keep only the points that are OUTSIDE the eraser disc, and
             // split the stroke into sub-strokes wherever the pointer cut through it.
             const r = radius + it.width / 2;
-            const segments: { x: number; y: number; t: number }[][] = [];
-            let cur: { x: number; y: number; t: number }[] = [];
+            const segments: InkPoint[][] = [];
+            let cur: InkPoint[] = [];
             for (const p of it.points) {
               const inside = Math.hypot(p.x - x, p.y - y) <= r;
               if (inside) {
@@ -864,17 +910,19 @@ export default function DrawScreen() {
     .onTouchesDown((event, manager) => {
       'worklet';
       // Never scroll while a stylus is touching — the pen is drawing.
-      const touches = event.allTouches || [];
-      for (let i = 0; i < touches.length; i++) {
-        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
-      }
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
     })
     .onTouchesMove((event, manager) => {
       'worklet';
-      const touches = event.allTouches || [];
-      for (let i = 0; i < touches.length; i++) {
-        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
-      }
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
     })
     .onStart(() => {
       scrollYStartRef.current = scrollY;
@@ -940,22 +988,21 @@ export default function DrawScreen() {
       }
       // Fail if ANY stylus is present in the touch batch — the pen is drawing (possibly
       // with a resting palm/finger on the screen too). We must never scroll during drawing.
-      const touches = event.allTouches || [];
-      let hasFinger = false;
-      for (let i = 0; i < touches.length; i++) {
-        const pt = touches[i]?.pointerType;
-        if (pt === 1) { manager.fail(); return; }
-        if (pt === 0) hasFinger = true;
-      }
-      if (!hasFinger) manager.fail();
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
+      if (event.pointerType !== PointerType.TOUCH) { manager.fail(); return; }
     })
     .onTouchesMove((event, manager) => {
       'worklet';
       // Recheck as new touches arrive mid-scroll (e.g. pen goes down after a finger).
-      const touches = event.allTouches || [];
-      for (let i = 0; i < touches.length; i++) {
-        if (touches[i]?.pointerType === 1) { manager.fail(); return; }
-      }
+      // `pointerType` is a property of the touch EVENT, not of the individual
+      // entries in `allTouches`. The previous code read `touches[i].pointerType`,
+      // which is always `undefined`, so this comparison was permanently false
+      // and the guard never fired.
+      if (event.pointerType === PointerType.STYLUS) { manager.fail(); return; }
     })
     .onStart(() => {
       scrollYStartRef.current = scrollY;
@@ -1056,6 +1103,7 @@ export default function DrawScreen() {
       if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
+        clearLive();
         return;
       }
       // Ruler snap: if the pen begins near the ruler edge, project this stroke onto it.
@@ -1066,7 +1114,7 @@ export default function DrawScreen() {
           snapToRulerRef.current = true;
           const w = toWorld(proj.x, proj.y);
           if (isPenTool(tool)) {
-            livePtsRef.current = [{ x: w.x, y: w.y, t: Date.now() }];
+            livePtsRef.current = [{ x: w.x, y: w.y, t: inkNow(), p: stylusPressure(e) }];
             setLiveTick((n) => n + 1);
             return;
           }
@@ -1103,10 +1151,11 @@ export default function DrawScreen() {
       if (w.x < 0 || w.x > pageDims.w || w.y < 0 || w.y > totalPageH || inGap) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
+        clearLive();
         return;
       }
       if (isPenTool(tool)) {
-        livePtsRef.current = [{ x: w.x, y: w.y, t: Date.now() }];
+        livePtsRef.current = [{ x: w.x, y: w.y, t: inkNow(), p: stylusPressure(e) }];
         setLiveTick((n) => n + 1);
       } else if (isShapeTool(tool)) {
         const p: Pt = { x: w.x, y: w.y, t: Date.now() };
@@ -1165,11 +1214,23 @@ export default function DrawScreen() {
         const last = livePtsRef.current[livePtsRef.current.length - 1];
         if (!last) return;
         const d = Math.hypot(w.x - last.x, w.y - last.y);
-        if (d < 1.2 / scale) return;
-        livePtsRef.current.push({ x: w.x, y: w.y, t: Date.now() });
-        setLiveTick((n) => n + 1);
+        // A much finer gate than the old `1.2 / scale`. That threshold threw
+        // away most of the samples in small handwriting and captured different
+        // amounts of detail depending on the zoom level the person happened to
+        // be at. Redundant points are removed properly at commit time by the
+        // simplification pass, which measures actual shape error.
+        if (d < MIN_SAMPLE_DISTANCE) return;
+        livePtsRef.current.push({
+          x: w.x,
+          y: w.y,
+          // Sub-millisecond clock: Date.now() cannot resolve 120 Hz sampling,
+          // so the old velocity model was reading quantisation noise.
+          t: inkNow(),
+          p: stylusPressure(e),
+        });
+        pushLive();
       } else if (isShapeTool(tool) && liveShapeRef.current) {
-        liveShapeRef.current.end = { x: w.x, y: w.y, t: Date.now() };
+        liveShapeRef.current.end = { x: w.x, y: w.y, t: inkNow() };
         setLiveTick((n) => n + 1);
       } else if (tool === 'eraser') {
         eraseAt(w.x, w.y);
@@ -1179,6 +1240,7 @@ export default function DrawScreen() {
       if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
+        clearLive();
         setLiveTick((n) => n + 1);
         return;
       }
@@ -1251,54 +1313,20 @@ export default function DrawScreen() {
   const finalGesture = Gesture.Simultaneous(pan, composedGesture, fingerScrollPan, tapsGesture);
 
   // ----- Render strokes -----
-  const renderStroke = (s: StrokeData, key: string) => {
-    if (s.tool === 'fountain') {
-      // Variable width segments from velocity
-      const pts = s.points;
-      const els: React.ReactNode[] = [];
-      for (let i = 1; i < pts.length; i++) {
-        const a = pts[i - 1];
-        const b = pts[i];
-        const dt = Math.max(1, (b.t || 0) - (a.t || 0));
-        const dist = Math.hypot(b.x - a.x, b.y - a.y);
-        const speed = dist / dt;
-        const t = Math.min(1, Math.max(0, (speed - 0.2) / 1.4));
-        const w = s.width * (1.6 - t * 1.05);
-        const p = Skia.Path.Make();
-        p.moveTo(a.x, a.y);
-        p.lineTo(b.x, b.y);
-        els.push(
-          <Path
-            key={`${key}-${i}`}
-            path={p}
-            color={s.color}
-            style="stroke"
-            strokeWidth={w}
-            strokeCap="round"
-            strokeJoin="round"
-          />
-        );
-      }
-      return <React.Fragment key={key}>{els}</React.Fragment>;
-    }
-
-    const path = buildPathFromPoints(s.points);
-    const opacity =
-      s.tool === 'highlighter' ? 0.35 : s.tool === 'pencil' ? 0.75 : 1;
-    const colorWithAlpha = applyAlpha(s.color, opacity);
-    const width = s.tool === 'highlighter' ? s.width : s.width;
-    return (
-      <Path
-        key={key}
-        path={path}
-        color={colorWithAlpha}
-        style="stroke"
-        strokeWidth={width}
-        strokeCap={s.tool === 'highlighter' ? 'butt' : 'round'}
-        strokeJoin="round"
-      />
-    );
-  };
+  // Committed strokes render through <InkStroke />, which caches its SkPath
+  // against the stroke object and is memoized on that identity. Rebuilding a
+  // path per render, per stroke, per frame was the main reason ink lagged
+  // further behind the pen the more you had already written.
+  const renderStroke = (s: StrokeData, key: string) => (
+    <InkStroke
+      key={key}
+      stroke={s}
+      points={s.points as InkPoint[]}
+      tool={s.tool as InkTool}
+      color={s.color}
+      width={s.width}
+    />
+  );
 
   const renderShape = (s: ShapeData, key: string) => {
     const path = buildShapePath(s);
@@ -1315,31 +1343,43 @@ export default function DrawScreen() {
     );
   };
 
-  // Live preview
-  const livePreview = (() => {
-    if (isPenTool(tool) && livePtsRef.current.length >= 2) {
-      const stroke: StrokeData = {
-        kind: 'stroke',
-        tool,
-        color,
-        width: widths[tool],
-        points: livePtsRef.current.map((p) => ({ x: p.x, y: p.y, t: p.t })),
-      };
-      return renderStroke(stroke, 'live');
+  // Live preview.
+  //
+  // Pen strokes are pushed straight into <LiveStrokeLayer /> through a ref, so a
+  // pen sample repaints one path instead of re-rendering this screen. Shapes
+  // still go through state: they update once per drag, not once per sample, so
+  // the extra render is not on the hot path.
+  const pushLive = useCallback(() => {
+    if (!isPenTool(tool)) {
+      liveStrokeRef.current?.set(null);
+      return;
     }
-    if (isShapeTool(tool) && liveShapeRef.current) {
-      const shape: ShapeData = {
-        kind: 'shape',
-        tool,
-        color,
-        width: widths[tool],
-        start: liveShapeRef.current.start,
-        end: liveShapeRef.current.end,
-      };
-      return renderShape(shape, 'live-shape');
-    }
-    return null;
-  })();
+    const pts = livePtsRef.current;
+    liveStrokeRef.current?.set(
+      pts.length >= 2
+        ? { points: pts as InkPoint[], tool: tool as InkTool, color, width: widths[tool] }
+        : null
+    );
+  }, [tool, color, widths]);
+
+  const clearLive = useCallback(() => {
+    liveStrokeRef.current?.set(null);
+  }, []);
+
+  const livePreview =
+    isShapeTool(tool) && liveShapeRef.current
+      ? renderShape(
+          {
+            kind: 'shape',
+            tool,
+            color,
+            width: widths[tool],
+            start: liveShapeRef.current.start,
+            end: liveShapeRef.current.end,
+          },
+          'live-shape'
+        )
+      : null;
 
   // Paper background colors.
   // We honor whatever the user picked verbatim — if `paperColorId` is a hex value
@@ -1648,7 +1688,7 @@ export default function DrawScreen() {
   const [presetNameDraft, setPresetNameDraft] = useState('');
 
   useEffect(() => {
-    AsyncStorage.getItem('galaxynotes:zoom-presets').then((raw) => {
+    AsyncStorage.getItem(StorageKeys.zoomPresets).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -1660,7 +1700,7 @@ export default function DrawScreen() {
 
   const persistZoomPresets = useCallback((next: { name: string; scale: number }[]) => {
     setZoomPresets(next);
-    AsyncStorage.setItem('galaxynotes:zoom-presets', JSON.stringify(next)).catch(() => {});
+    AsyncStorage.setItem(StorageKeys.zoomPresets, JSON.stringify(next)).catch(() => {});
   }, []);
 
   const saveCurrentZoomAs = (name: string) => {
@@ -1685,7 +1725,7 @@ export default function DrawScreen() {
   // ---------- Ruler preferences (state is declared above, here we just persist prefs) ----------
   // Persist ruler preferences (not position — it re-centers each time).
   useEffect(() => {
-    AsyncStorage.getItem('galaxynotes:ruler-prefs').then((raw) => {
+    AsyncStorage.getItem(StorageKeys.rulerPrefs).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -1699,7 +1739,7 @@ export default function DrawScreen() {
     });
   }, []);
   useEffect(() => {
-    AsyncStorage.setItem('galaxynotes:ruler-prefs', JSON.stringify({
+    AsyncStorage.setItem(StorageKeys.rulerPrefs, JSON.stringify({
       unit: rulerState.unit,
       scaleWithPaper: rulerState.scaleWithPaper,
     })).catch(() => {});
@@ -1827,7 +1867,10 @@ export default function DrawScreen() {
           }
           rightSlot={
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-              <SaveIndicator saving={saving} compact />
+              <SaveIndicator
+                status={saving ? 'saving' : 'saved'}
+                compact
+              />
               <Pressable
                 onPress={(e) => {
                   const px = e?.nativeEvent?.pageX;
@@ -1909,6 +1952,9 @@ export default function DrawScreen() {
                           </Group>
                         );
                       })}
+                      {/* Wet ink. Repaints on its own, without re-rendering
+                          this screen or any committed stroke. */}
+                      <LiveStrokeLayer ref={liveStrokeRef} />
                       {livePreview}
                       {/* Laser strokes — bright red, ephemeral */}
                       {laserStrokes.map((s) => {
@@ -2993,7 +3039,7 @@ export default function DrawScreen() {
               Rename preset
             </Text>
             <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.md }}>
-              New name for "{renamingPreset}".
+              New name for &quot;{renamingPreset}&quot;.
             </Text>
             <TextInput
               value={renameDraft}

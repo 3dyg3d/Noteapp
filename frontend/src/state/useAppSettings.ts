@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { StorageKeys } from '@/src/state/storageKeys';
 import * as Haptics from 'expo-haptics';
 
 export type GestureAction = 'none' | 'undo' | 'redo' | 'eraser';
@@ -27,7 +29,7 @@ export interface AppSettings {
   homeTileScale: number;
 }
 
-const KEY = 'galaxynotes:app-settings';
+const KEY = StorageKeys.appSettings;
 const DEFAULTS: AppSettings = {
   hapticsEnabled: true,
   sPenButton: 'eraser',
@@ -101,6 +103,10 @@ export const haptic = {
   medium() {
     if (cache?.hapticsEnabled === false) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+  },
+  warning() {
+    if (cache?.hapticsEnabled === false) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
   },
   success() {
     if (cache?.hapticsEnabled === false) return;

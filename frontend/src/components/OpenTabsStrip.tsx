@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, typeScale } from '@/src/theme/tokens';
+import { typeScale } from '@/src/theme/tokens';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 
 interface Props {

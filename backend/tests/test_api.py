@@ -1,9 +1,12 @@
-"""GalaxyNotes API tests - notes, folders, AI summarize."""
+"""Geodesic Notes API tests - notes, folders, AI summarize."""
 import os
 import pytest
 import requests
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://smart-notes-app-57.preview.emergentagent.com").rstrip("/")
+# No default: these are integration tests and must be pointed at a server
+# deliberately. The previous default was a vendor preview URL, so an accidental
+# run wrote test notes into whatever was deployed there.
+BASE_URL = os.environ.get("GEODESIC_API_URL", "http://localhost:8000").rstrip("/")
 API = f"{BASE_URL}/api"
 
 

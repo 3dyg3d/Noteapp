@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 import { View, Platform, StyleSheet, Text } from 'react-native';
 
+import { parsePreview } from '@/src/ink/preview';
+
 /**
  * Small preview thumbnail for handwritten notes.
  *
@@ -15,6 +17,15 @@ import { View, Platform, StyleSheet, Text } from 'react-native';
  *    labelled placeholder so bad data can never crash the home grid.
  */
 export interface HandwritingThumbnailProps {
+  /**
+   * Preferred source: the small bounded render stored on the note. The notes
+   * list no longer ships `drawing_data`, so cards pass this instead.
+   */
+  preview?: string | null;
+  /**
+   * Full drawing document. Still accepted for the editor and for notes saved
+   * before previews existed, but the list must not use it: it is unbounded.
+   */
   drawingData?: string | null;
   width: number;
   height: number;
@@ -122,22 +133,54 @@ function strokeToSvgPath(pts: Pt[]): string {
   return d;
 }
 
+/**
+ * Adapt a stored preview into the same document shape the renderer already
+ * understands, so both sources share one code path.
+ */
+function previewToDoc(raw: string): DrawingDoc | null {
+  const doc = parsePreview(raw);
+  if (!doc) return null;
+  const items: Item[] = [];
+  for (const flat of doc.s) {
+    const color = typeof flat[0] === 'string' ? (flat[0] as string) : '#000';
+    const width = typeof flat[1] === 'number' ? (flat[1] as number) : 2;
+    const coords = flat.slice(2) as number[];
+    const points: Pt[] = [];
+    for (let i = 0; i + 1 < coords.length; i += 2) {
+      points.push({ x: coords[i], y: coords[i + 1] });
+    }
+    if (points.length >= 2) items.push({ kind: 'stroke', tool: 'pen', color, width, points });
+  }
+  return {
+    paper: doc.paper,
+    paperSize: 'custom',
+    customSize: { w: doc.w, h: doc.h },
+    orientation: 'portrait',
+    items,
+  };
+}
+
 export default function HandwritingThumbnail({
+  preview,
   drawingData,
   width,
   height,
   fallbackPaperColor = '#FBFAF6',
   radius = 8,
 }: HandwritingThumbnailProps) {
-  // Parse once per drawingData change.
+  // Preview wins when present: it is bounded and already first-page only.
   const parsed = useMemo<DrawingDoc | null>(() => {
+    if (preview) {
+      const fromPreview = previewToDoc(preview);
+      if (fromPreview) return fromPreview;
+    }
     if (!drawingData) return null;
     try {
       const d = JSON.parse(drawingData);
       if (d && typeof d === 'object') return d;
     } catch {}
     return null;
-  }, [drawingData]);
+  }, [preview, drawingData]);
 
   const empty = !parsed || !parsed.items || parsed.items.length === 0;
   const paperColor = parsed?.paperColor || fallbackPaperColor;
@@ -173,7 +216,6 @@ export default function HandwritingThumbnail({
         {empty ? (
           <PlaceholderContent color={paperColor} />
         ) : (
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           React.createElement('svg' as any, {
             width,
             height,

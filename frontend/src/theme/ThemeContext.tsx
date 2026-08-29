@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { StorageKeys } from '@/src/state/storageKeys';
 import { useColorScheme } from 'react-native';
 import { lightColors, darkColors, AppColors, ACCENTS, AccentKey } from './tokens';
 
@@ -16,8 +18,8 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const MODE_KEY = 'galaxynotes:theme-mode';
-const ACCENT_KEY = 'galaxynotes:theme-accent';
+const MODE_KEY = StorageKeys.themeMode;
+const ACCENT_KEY = StorageKeys.themeAccent;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const system = useColorScheme();

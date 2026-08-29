@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const KEY = 'galaxynotes:open-tabs';
+import { StorageKeys } from '@/src/state/storageKeys';
+
+const KEY = StorageKeys.openTabs;
 
 export interface OpenTab {
   id: string;

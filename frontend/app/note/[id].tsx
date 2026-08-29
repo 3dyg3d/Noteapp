@@ -20,8 +20,20 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale } from '@/src/theme/tokens';
-import { NotesApi, FoldersApi, LabelsApi, AiApi, Note, Folder, Label, ChecklistItem } from '@/src/api/client';
+import {
+  NotesApi,
+  FoldersApi,
+  LabelsApi,
+  ApiError,
+  Note,
+  Folder,
+  Label,
+  ChecklistItem,
+} from '@/src/api/client';
 import { haptic } from '@/src/state/useAppSettings';
+import { usePatchQueue } from '@/src/hooks/usePatchQueue';
+import { lockStore } from '@/src/state/lockStore';
+import { useToast } from '@/src/components/Toast';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import DrawingPad from '@/src/components/DrawingPad';
@@ -33,7 +45,11 @@ function uid() {
 }
 
 export default function NoteEditor() {
-  const { id, mode: queryMode } = useLocalSearchParams<{ id: string; mode?: string }>();
+  const { id, mode: queryMode, unlocked } = useLocalSearchParams<{
+    id: string;
+    mode?: string;
+    unlocked?: string;
+  }>();
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
@@ -44,21 +60,69 @@ export default function NoteEditor() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showDrawing, setShowDrawing] = useState(queryMode === 'drawing');
   const [showMore, setShowMore] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [labelDraftName, setLabelDraftName] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
 
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drawingRef = useRef<any | null>(null);
+  const toast = useToast();
+
+  // Server version of the note we last read, for conflict detection.
+  const versionRef = useRef<number | undefined>(undefined);
+
+  /**
+   * All writes go through one queue. It merges patches rather than replacing
+   * them, flushes on unmount and on backgrounding, serialises requests, and
+   * surfaces failures instead of swallowing them.
+   */
+  // `onError` needs to offer a retry, but that retry belongs to the queue being
+  // constructed. A ref breaks the cycle.
+  const queueRef = useRef<ReturnType<typeof usePatchQueue<Note>> | null>(null);
+
+  const queue = usePatchQueue<Note>({
+    save: async (patch) => {
+      const saved = await NotesApi.update(id as string, patch, versionRef.current);
+      versionRef.current = saved.version;
+    },
+    delay: 600,
+    onError: (err) => {
+      const api = err instanceof ApiError ? err : null;
+      if (api?.isConflict) {
+        // Another device won. Re-read rather than fighting over the note.
+        toast.show({ message: 'This note changed elsewhere. Reloading.', tone: 'info' });
+        void reload();
+        return;
+      }
+      toast.show({
+        message: api?.userMessage ?? 'Could not save your changes.',
+        tone: 'destructive',
+        // Sticky: an unsaved-changes warning must not time out on its own.
+        duration: -1,
+        actionLabel: 'Retry',
+        onAction: () => queueRef.current?.retry(),
+      });
+    },
+  });
+
+  queueRef.current = queue;
+
+  const reload = useCallback(async () => {
+    try {
+      const fresh = await NotesApi.get(id as string);
+      versionRef.current = fresh.version;
+      setNote(fresh);
+    } catch (e) {
+      console.warn('reload', e);
+    }
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     setNote(null); // clear previous note so old content doesn't briefly show when switching tabs
     (async () => {
       try {
@@ -68,51 +132,51 @@ export default function NoteEditor() {
           LabelsApi.list(),
         ]);
         if (cancelled) return;
+
+        // The lock gate lives here, on the screen that renders the content.
+        // Previously it lived only on a separate route, so any deep link
+        // straight to /note/[id] walked past it.
+        if (n.locked && unlocked !== '1' && (await lockStore.isConfigured())) {
+          router.replace(`/lock?noteId=${n.id}`);
+          return;
+        }
+
+        versionRef.current = n.version;
         setNote(n);
         setFolders(f);
         setLabels(l);
         openTab({ id: n.id, title: n.title || 'Untitled', type: 'text' });
       } catch (e) {
-        console.warn(e);
+        if (cancelled) return;
+        // A failed load used to render as a blank editor, which looks exactly
+        // like an empty note and invites the person to type over nothing.
+        setLoadError(e instanceof ApiError ? e.userMessage : 'Could not open this note.');
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [id, unlocked, router, openTab]);
 
+  /** Optimistic local update plus a queued write. */
   const scheduleSave = useCallback(
     (updates: Partial<Note>) => {
       setNote((prev) => (prev ? { ...prev, ...updates } : prev));
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        if (!note) return;
-        try {
-          setSaving(true);
-          await NotesApi.update(id as string, updates);
-        } catch (e) {
-          console.warn('save', e);
-        } finally {
-          setSaving(false);
-        }
-      }, 600);
+      queue.push(updates);
     },
-    [id, note]
+    [queue]
   );
 
+  /** Same queue, but skip the quiet period for deliberate one-off actions. */
   const persistImmediately = useCallback(
     async (updates: Partial<Note>) => {
       setNote((prev) => (prev ? { ...prev, ...updates } : prev));
-      try {
-        setSaving(true);
-        await NotesApi.update(id as string, updates);
-      } catch (e) {
-        console.warn(e);
-      } finally {
-        setSaving(false);
-      }
+      queue.push(updates);
+      await queue.flush();
     },
-    [id]
+    [queue]
   );
 
   const addChecklistItem = () => {
@@ -172,23 +236,6 @@ export default function NoteEditor() {
     }
   };
 
-  const summarize = async () => {
-    if (!note) return;
-    const text = [note.title, note.content, ...note.checklist.map((c) => `- ${c.text}`)]
-      .join('\n')
-      .trim();
-    if (!text) return;
-    try {
-      setAiLoading(true);
-      const r = await AiApi.summarize(text);
-      setAiSummary(r.summary);
-    } catch (e: any) {
-      setAiSummary(`Failed: ${e?.message || e}`);
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
   const insertFormatting = (kind: 'bold' | 'italic' | 'heading' | 'bullet') => {
     if (!note) return;
     const map: Record<typeof kind, string> = {
@@ -245,6 +292,69 @@ export default function NoteEditor() {
     }
   }, [labelDraftName, labels, note, persistImmediately]);
 
+  if (loadError) {
+    // A failed load used to fall through to the blank-surface branch below,
+    // which is indistinguishable from an empty note. Someone would start typing
+    // into an editor that had nothing behind it.
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: colors.surface,
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: spacing.xl,
+        }}
+      >
+        <Ionicons name="cloud-offline-outline" size={40} color={colors.muted} />
+        <Text
+          testID="note-load-error"
+          style={{
+            color: colors.onSurface,
+            fontSize: typeScale.base,
+            textAlign: 'center',
+            marginTop: spacing.md,
+          }}
+        >
+          {loadError}
+        </Text>
+        <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg }}>
+          <Pressable
+            testID="note-load-back"
+            accessibilityRole="button"
+            onPress={() => router.back()}
+            style={{
+              paddingHorizontal: spacing.lg,
+              paddingVertical: spacing.sm,
+              borderRadius: radius.pill,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <Text style={{ color: colors.onSurface }}>Go back</Text>
+          </Pressable>
+          <Pressable
+            testID="note-load-retry"
+            accessibilityRole="button"
+            onPress={() => {
+              setLoadError(null);
+              setLoading(true);
+              void reload().finally(() => setLoading(false));
+            }}
+            style={{
+              paddingHorizontal: spacing.lg,
+              paddingVertical: spacing.sm,
+              borderRadius: radius.pill,
+              backgroundColor: colors.brand,
+            }}
+          >
+            <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Try again</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   if (loading || !note) {
     // Plain surface — no spinner — to avoid a flash when switching between open tabs.
     return <View style={{ flex: 1, backgroundColor: colors.surface }} />;
@@ -277,7 +387,12 @@ export default function NoteEditor() {
           }
           rightSlot={
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-              <SaveIndicator saving={saving} compact />
+              <SaveIndicator
+                status={queue.status}
+                hasUnsaved={queue.hasUnsaved}
+                onRetry={queue.retry}
+                compact
+              />
               <Pressable testID="pin-btn" onPress={togglePin} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
                 <Ionicons
                   name={note.pinned ? 'pin' : 'pin-outline'}
@@ -489,27 +604,6 @@ export default function NoteEditor() {
           </View>
         )}
 
-        {/* AI summary card */}
-        {!!aiSummary && (
-          <View
-            style={[
-              styles.aiCard,
-              { backgroundColor: colors.brandTertiary, borderColor: colors.brand },
-            ]}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs }}>
-              <Ionicons name="sparkles" size={16} color={colors.brand} />
-              <Text style={{ marginLeft: 6, color: colors.brand, fontWeight: '700' }}>
-                AI Summary
-              </Text>
-              <View style={{ flex: 1 }} />
-              <Pressable onPress={() => setAiSummary(null)} testID="ai-close">
-                <Ionicons name="close" size={16} color={colors.brand} />
-              </Pressable>
-            </View>
-            <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{aiSummary}</Text>
-          </View>
-        )}
       </ScrollView>
 
       {/* Bottom toolbar */}
@@ -536,11 +630,6 @@ export default function NoteEditor() {
             onPress={() => setShowDrawing((s) => !s)}
             testID="toggle-drawing"
             active={showDrawing}
-          />
-          <ToolButton
-            icon={aiLoading ? 'hourglass-outline' : 'sparkles-outline'}
-            onPress={summarize}
-            testID="ai-summarize"
           />
         </ScrollView>
       </View>
@@ -925,12 +1014,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  aiCard: {
-    marginTop: spacing.lg,
-    padding: spacing.lg,
-    borderRadius: radius.md,
-    borderWidth: 1,
   },
   bottomBar: {
     position: 'absolute',

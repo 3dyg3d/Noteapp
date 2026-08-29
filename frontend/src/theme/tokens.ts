@@ -68,6 +68,8 @@ export const radius = {
 };
 
 export const typeScale = {
+  // Compact affordances (the save pill, card metadata) ask for this size.
+  xs: 11,
   sm: 12,
   base: 14,
   lg: 16,

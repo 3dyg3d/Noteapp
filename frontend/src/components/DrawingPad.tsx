@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
 import { View, StyleSheet, Pressable, Text, ScrollView, Platform } from 'react-native';
-import { Canvas, Path, Skia, SkPath } from '@shopify/react-native-skia';
+import { Canvas, Path, Skia, SkPath, useCanvasRef } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/theme/ThemeContext';
@@ -27,10 +27,37 @@ interface DrawingPadProps {
   height?: number;
 }
 
-export default function DrawingPad({ height = 360 }: DrawingPadProps) {
-  const { colors } = useTheme();
+/**
+ * What the note editor drives this component with.
+ *
+ * The editor has always rendered `<DrawingPad ref={drawingRef} />` and called
+ * `snapshotBase64()` and `clear()` from its save button, but the component was
+ * a plain function that never forwarded a ref. `drawingRef.current` was
+ * therefore always null and the save button silently did nothing.
+ */
+export interface DrawingPadHandle {
+  /** PNG of the current canvas, base64, or null if there is nothing to save. */
+  snapshotBase64: () => string | null;
+  clear: () => void;
+  isEmpty: () => boolean;
+}
 
-  if (Platform.OS === 'web') {
+const DrawingPad = forwardRef<DrawingPadHandle, DrawingPadProps>(function DrawingPad(
+  { height = 360 },
+  ref
+) {
+  const { colors } = useTheme();
+  const isWeb = Platform.OS === 'web';
+
+  // On web there is no canvas, so hand back a handle that reports empty instead
+  // of leaving ref.current null and making the caller guard for it.
+  useImperativeHandle(
+    ref,
+    () => ({ snapshotBase64: () => null, clear: () => {}, isEmpty: () => true }),
+    []
+  );
+
+  if (isWeb) {
     return (
       <View
         style={[
@@ -56,15 +83,21 @@ export default function DrawingPad({ height = 360 }: DrawingPadProps) {
     );
   }
 
-  return <NativeDrawingPad height={height} />;
-}
+  return <NativeDrawingPad height={height} ref={ref} />;
+});
 
-function NativeDrawingPad({ height = 360 }: DrawingPadProps) {
+export default DrawingPad;
+
+const NativeDrawingPad = forwardRef<DrawingPadHandle, DrawingPadProps>(function NativeDrawingPad(
+  { height = 360 },
+  ref
+) {
   const { colors, isDark } = useTheme();
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [color, setColor] = useState<string>(isDark ? '#F2F2F7' : '#1A1A1C');
   const [baseWidth, setBaseWidth] = useState<number>(3);
   const [mode, setMode] = useState<'pen' | 'highlight' | 'eraser'>('pen');
+  const canvasRef = useCanvasRef();
 
   // Refs for the live stroke being drawn (don't trigger re-render per point)
   const currentStrokeRef = useRef<Stroke | null>(null);
@@ -130,7 +163,31 @@ function NativeDrawingPad({ height = 360 }: DrawingPadProps) {
     });
 
   const undo = () => setStrokes((p) => p.slice(0, -1));
-  const clear = () => setStrokes([]);
+  const clear = useCallback(() => setStrokes([]), []);
+
+  // Expose the operations the note editor's save button calls. Encoding happens
+  // here so the caller never has to know this is a Skia canvas.
+  useImperativeHandle(
+    ref,
+    () => ({
+      snapshotBase64: () => {
+        if (strokes.length === 0) return null;
+        try {
+          const image = canvasRef.current?.makeImageSnapshot();
+          if (!image) return null;
+          return `data:image/png;base64,${image.encodeToBase64()}`;
+        } catch {
+          // A snapshot can fail if the canvas has not laid out yet. Returning
+          // null lets the caller skip the save rather than write a broken
+          // attachment.
+          return null;
+        }
+      },
+      clear,
+      isEmpty: () => strokes.length === 0,
+    }),
+    [strokes, clear, ref, canvasRef]
+  );
 
   return (
     <View style={{ marginVertical: spacing.md }}>
@@ -141,7 +198,7 @@ function NativeDrawingPad({ height = 360 }: DrawingPadProps) {
         ]}
       >
         <GestureDetector gesture={pan}>
-          <Canvas style={{ width: '100%', height }}>
+          <Canvas ref={canvasRef} style={{ width: '100%', height }}>
             {strokes.map((stroke, si) =>
               stroke.segments.map((seg, segi) => (
                 <Path
@@ -212,7 +269,7 @@ function NativeDrawingPad({ height = 360 }: DrawingPadProps) {
       </Text>
     </View>
   );
-}
+});
 
 function ToolBtn({
   icon,

@@ -2,14 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, ACCENTS, AccentKey } from '@/src/theme/tokens';
 import { useAppSettings, GestureAction, SPenAction } from '@/src/state/useAppSettings';
-
-const PASS_KEY = 'galaxynotes:passcode';
+import { lockStore } from '@/src/state/lockStore';
 
 export default function SettingsScreen() {
   const { mode, setMode, accent, setAccent, colors } = useTheme();
@@ -22,21 +20,44 @@ export default function SettingsScreen() {
   const [passcode, setPasscode] = useState('');
   const [hasPasscode, setHasPasscode] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [passcodeError, setPasscodeError] = useState<string | null>(null);
 
   useEffect(() => {
-    AsyncStorage.getItem(PASS_KEY).then((v) => setHasPasscode(!!v));
+    let cancelled = false;
+    (async () => {
+      // Upgrade any plaintext passcode left by an older build before reporting
+      // whether one is set.
+      await lockStore.migrateLegacy();
+      const configured = await lockStore.isConfigured();
+      if (!cancelled) setHasPasscode(configured);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
+  // The passcode is salted, hashed and written to the device keystore. It is
+  // never stored in readable form, and never leaves the device.
   const savePasscode = async () => {
-    if (passcode.length < 4) return;
-    await AsyncStorage.setItem(PASS_KEY, passcode);
-    setHasPasscode(true);
-    setEditing(false);
-    setPasscode('');
+    if (passcode.length < 4) {
+      setPasscodeError('Use at least 4 digits.');
+      return;
+    }
+    try {
+      await lockStore.set(passcode);
+      setHasPasscode(true);
+      setEditing(false);
+      setPasscode('');
+      setPasscodeError(null);
+    } catch (e) {
+      setPasscodeError(e instanceof Error ? e.message : 'Could not save the passcode.');
+    }
   };
+
   const removePasscode = async () => {
-    await AsyncStorage.removeItem(PASS_KEY);
+    await lockStore.clear();
     setHasPasscode(false);
+    setPasscodeError(null);
   };
 
   const ThemeOption = ({ value, label }: { value: 'system' | 'light' | 'dark'; label: string }) => {
@@ -314,7 +335,7 @@ export default function SettingsScreen() {
           testID="spen-action"
         />
         <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: -spacing.sm, marginBottom: spacing.md, paddingHorizontal: spacing.md }}>
-          Requires Galaxy Tab / Note device — works in production build.
+          Requires a stylus-equipped device. Works in a production build.
         </Text>
 
         <ActionPicker
@@ -412,16 +433,37 @@ export default function SettingsScreen() {
             <TextInput
               testID="passcode-input"
               value={passcode}
-              onChangeText={(t) => setPasscode(t.replace(/\D/g, '').slice(0, 8))}
+              onChangeText={(t) => {
+                setPasscode(t.replace(/\D/g, '').slice(0, 8));
+                setPasscodeError(null);
+              }}
               keyboardType="number-pad"
               secureTextEntry
               placeholder="••••"
               placeholderTextColor={colors.muted}
-              style={[styles.input, { color: colors.onSurface, backgroundColor: colors.surface }]}
+              accessibilityLabel="New passcode"
+              style={[
+                styles.input,
+                {
+                  color: colors.onSurface,
+                  backgroundColor: colors.surface,
+                  borderColor: passcodeError ? colors.error : 'transparent',
+                  borderWidth: 1,
+                },
+              ]}
             />
+            {passcodeError ? (
+              <Text
+                testID="passcode-error"
+                accessibilityLiveRegion="polite"
+                style={{ color: colors.error, marginTop: spacing.xs }}
+              >
+                {passcodeError}
+              </Text>
+            ) : null}
             <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
               <Pressable
-                onPress={() => { setEditing(false); setPasscode(''); }}
+                onPress={() => { setEditing(false); setPasscode(''); setPasscodeError(null); }}
                 style={[styles.btn, { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }]}
               >
                 <Text style={{ color: colors.onSurface }}>Cancel</Text>
@@ -438,7 +480,7 @@ export default function SettingsScreen() {
         <Text style={[styles.section, { color: colors.muted }]}>ABOUT</Text>
         <View style={[styles.row, { backgroundColor: colors.surfaceSecondary }]}>
           <Ionicons name="information-circle-outline" size={22} color={colors.onSurface} />
-          <Text style={[styles.label, { color: colors.onSurface, marginLeft: spacing.md }]}>GalaxyNotes v1.0</Text>
+          <Text style={[styles.label, { color: colors.onSurface, marginLeft: spacing.md }]}>Geodesic Notes v1.0</Text>
         </View>
         </>)}
         </View>
