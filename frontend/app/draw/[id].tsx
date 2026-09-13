@@ -10,7 +10,9 @@ import {
   ActivityIndicator,
   Modal,
   useWindowDimensions,
+  StatusBar,
 } from 'react-native';
+import type { DimensionValue, ViewStyle } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -473,8 +475,10 @@ export default function DrawScreen() {
    * Zen leaves a single small restore button, or the app becomes a trap.
    */
   const [chrome, setChrome] = useState<'normal' | 'immersive' | 'zen'>('normal');
+  /** Toolbar visibility, toggled independently of the fullscreen level. */
+  const [toolbarHidden, setToolbarHidden] = useState(false);
   const hideHeader = chrome !== 'normal';
-  const hideToolbar = chrome === 'zen';
+  const hideToolbar = chrome === 'zen' || toolbarHidden;
   // Sub-menus opened from the main kebab menu
   const [showSubColor, setShowSubColor] = useState(false);
   const [showSubTemplate, setShowSubTemplate] = useState(false);
@@ -545,6 +549,47 @@ export default function DrawScreen() {
   /** Width of the vertical toolbar. Popovers offset by this so they never sit on top of it. */
   const VERTICAL_TOOLBAR_W = 60;
   const isVerticalToolbar = toolbarPos === 'left' || toolbarPos === 'right';
+
+  /**
+   * Popover placement on wide screens.
+   *
+   * Full-width bottom sheets are a phone idiom. On a tablet they stretch a
+   * short list of folders across 1200pt and put it at the opposite end of the
+   * screen from the three-dots button that opened it. Above `WIDE_MIN` these
+   * become panels hanging under that button instead, offset clear of a
+   * right-docked toolbar.
+   */
+  const WIDE_MIN = 700;
+  const isWideScreen = winWidth >= WIDE_MIN;
+  const sidePanelStyle = (maxH: DimensionValue = '70%'): ViewStyle =>
+    isWideScreen
+      ? {
+          position: 'absolute' as const,
+          top: insets.top + 48,
+          right: (toolbarPos === 'right' ? 60 : 0) + 8,
+          width: 320,
+          maxHeight: maxH,
+          borderRadius: radius.lg,
+          padding: spacing.lg,
+          backgroundColor: colors.surface,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: 0.28,
+          shadowRadius: 24,
+          elevation: 16,
+        }
+      : {
+          position: 'absolute' as const,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          padding: spacing.lg,
+          paddingBottom: insets.bottom + spacing.lg,
+          borderTopLeftRadius: radius.lg,
+          borderTopRightRadius: radius.lg,
+          backgroundColor: colors.surface,
+          maxHeight: maxH,
+        };
   const { openTab, renameTab } = useOpenTabs();
 
   // Ref mirrors of settings so gesture handlers always read the latest value
@@ -670,7 +715,18 @@ export default function DrawScreen() {
 
   // ----- Persist (debounced) -----
   const persist = useCallback(
-    (nextItems: Item[], nextPaper: Paper, nextSize: PaperSize, nextColor: string, nextTitle?: string) => {
+    (
+      nextItems: Item[],
+      nextPaper: Paper,
+      nextSize: PaperSize,
+      nextColor: string,
+      nextTitle?: string,
+      _reserved?: undefined,
+      // Passed explicitly by handleSetCanvasColor: React state updates are not
+      // synchronous, so reading canvasColorHex from the closure here would
+      // write the PREVIOUS colour.
+      nextCanvasColor?: string
+    ) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         try {
@@ -685,7 +741,7 @@ export default function DrawScreen() {
               customSize: customSize ?? undefined,
               orientation,
               paperColor: nextColor,
-              canvasColor: canvasColorHex,
+              canvasColor: nextCanvasColor ?? canvasColorHex,
               lineSpacing,
               pageCount,
               docVersion: 3,
@@ -1446,6 +1502,22 @@ export default function DrawScreen() {
     setPaperColorId(c);
     persist(items, paper, paperSize, c);
   };
+  /**
+   * Canvas colour, saved with the note.
+   *
+   * The picker previously called `setCanvasColorHex` alone. Every other paper
+   * setting routes through `persist()`, so canvas colour was the one that
+   * looked applied, then reverted to the default the next time the note opened
+   * because it was never written to the document.
+   *
+   * `persist` reads canvasColorHex from its closure, so the new value is passed
+   * explicitly rather than relying on the state update having landed.
+   */
+  const handleSetCanvasColor = (hex: string) => {
+    setCanvasColorHex(hex);
+    persist(items, paper, paperSize, paperColorId, undefined, undefined, hex);
+  };
+
   const handleSetLineSpacing = (val: number) => {
     setLineSpacing(val);
     persist(items, paper, paperSize, paperColorId);
@@ -1882,6 +1954,9 @@ export default function DrawScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: paperColor }}>
       {/* Chrome-style tabs row with back arrow inline */}
+      {/* Fullscreen means fullscreen: the system bar goes too. */}
+      <StatusBar hidden={chrome !== 'normal' || settings.statusBarHidden} />
+
       {!hideHeader && (
       <View style={{ paddingTop: insets.top, backgroundColor: colors.surfaceSecondary }}>
         <OpenTabsStrip
@@ -2198,25 +2273,27 @@ export default function DrawScreen() {
       {!hideToolbar && toolbarPos === 'bottom' && renderToolbar()}
 
       {/* Tool options popover (tap an already-active tool again) — small card anchored near the tap */}
-      {/* Escape hatch for immersive/zen. Deliberately small and low-contrast so
-          it doesn't compete with the page, but always present — hiding every
-          control with no way back is a trap, not a feature. */}
-      {chrome !== 'normal' && (
+      {/* Escape hatch for immersive/zen.
+          Bottom-trailing, not top-left: the top-left corner is where the
+          vertical toolbar puts undo/redo, and the button sat on top of them.
+          The bottom outer corner is empty in every toolbar position. */}
+      {(chrome !== 'normal' || toolbarHidden) && (
         <Pressable
           testID="draw-exit-fullscreen"
           accessibilityRole="button"
           accessibilityLabel="Show toolbars"
-          onPress={() => { haptic.selection(); setChrome('normal'); }}
+          onPress={() => { haptic.selection(); setChrome('normal'); setToolbarHidden(false); }}
           style={{
             position: 'absolute',
-            top: insets.top + 6,
-            left: 8,
-            width: 34,
-            height: 34,
-            borderRadius: 17,
+            bottom: insets.bottom + 12,
+            // Sit on the side AWAY from the toolbar so it never overlaps it.
+            ...(toolbarPos === 'right' ? { left: 12 } : { right: 12 }),
+            width: 36,
+            height: 36,
+            borderRadius: 18,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: withAlpha(colors.surface, 0.65),
+            backgroundColor: withAlpha(colors.surface, 0.7),
           }}
           hitSlop={10}
         >
@@ -3243,6 +3320,17 @@ export default function DrawScreen() {
               }}
               testID="draw-menu-fullscreen"
             />
+            <DrawMenuRow
+              icon={toolbarHidden ? 'eye-outline' : 'eye-off-outline'}
+              label="Toolbar"
+              valueText={toolbarHidden ? 'Hidden' : 'Shown'}
+              onPress={() => {
+                haptic.selection();
+                setToolbarHidden((v) => !v);
+                setShowPaperMenu(false);
+              }}
+              testID="draw-menu-toolbar-toggle"
+            />
             {rulerEnabled && (
               <>
                 <DrawMenuRow
@@ -3412,7 +3500,7 @@ export default function DrawScreen() {
       {/* SUB: Page color */}
       <Modal visible={showSubColor} transparent animationType="fade" onRequestClose={() => setShowSubColor(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={[styles.backdrop, isWideScreen ? null : { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
           onPressIn={() => setShowSubColor(false)}
         >
           <Pressable
@@ -3472,23 +3560,12 @@ export default function DrawScreen() {
       {/* SUB: Canvas color — the surround, not the paper */}
       <Modal visible={showSubCanvasColor} transparent animationType="fade" onRequestClose={() => setShowSubCanvasColor(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={[styles.backdrop, isWideScreen ? null : { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
           onPressIn={() => setShowSubCanvasColor(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
-            style={{
-              width: '100%',
-              maxWidth: 520,
-              backgroundColor: colors.surface,
-              borderRadius: radius.lg,
-              padding: spacing.lg,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 10 },
-              shadowOpacity: 0.22,
-              shadowRadius: 24,
-              elevation: 16,
-            }}
+            style={sidePanelStyle('80%')}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
               <Pressable onPress={() => { setShowSubCanvasColor(false); setShowPaperMenu(true); }} hitSlop={6}>
@@ -3507,7 +3584,7 @@ export default function DrawScreen() {
                 return (
                   <Pressable
                     key={c.id}
-                    onPress={() => { setCanvasColorHex(c.hex); haptic.selection(); }}
+                    onPress={() => { handleSetCanvasColor(c.hex); haptic.selection(); }}
                     testID={`sub-canvas-${c.id}`}
                     accessibilityLabel={c.label}
                     style={{
@@ -3533,24 +3610,12 @@ export default function DrawScreen() {
       {/* SUB: Page template */}
       <Modal visible={showSubTemplate} transparent animationType="fade" onRequestClose={() => setShowSubTemplate(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={[styles.backdrop, isWideScreen ? null : { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
           onPressIn={() => setShowSubTemplate(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
-            style={{
-              width: '100%',
-              maxWidth: 520,
-              maxHeight: '80%',
-              backgroundColor: colors.surface,
-              borderRadius: radius.lg,
-              padding: spacing.lg,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 10 },
-              shadowOpacity: 0.22,
-              shadowRadius: 24,
-              elevation: 16,
-            }}
+            style={sidePanelStyle('80%')}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
               <Pressable onPress={() => { setShowSubTemplate(false); setShowPaperMenu(true); }} hitSlop={6}>
@@ -3609,7 +3674,7 @@ export default function DrawScreen() {
       {/* SUB: Page size */}
       <Modal visible={showSubSize} transparent animationType="fade" onRequestClose={() => setShowSubSize(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={[styles.backdrop, isWideScreen ? null : { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
           onPressIn={() => setShowSubSize(false)}
         >
           <Pressable
@@ -3707,7 +3772,7 @@ export default function DrawScreen() {
       {/* SUB: Line spacing */}
       <Modal visible={showSubSpacing} transparent animationType="fade" onRequestClose={() => setShowSubSpacing(false)}>
         <Pressable
-          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          style={[styles.backdrop, isWideScreen ? null : { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
           onPressIn={() => setShowSubSpacing(false)}
         >
           <Pressable
@@ -3873,21 +3938,13 @@ export default function DrawScreen() {
         <Pressable style={styles.backdrop} onPress={() => setShowFolderPicker(false)}>
           <Pressable
             onPress={(e) => e.stopPropagation && e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              padding: spacing.lg,
-              paddingBottom: insets.bottom + spacing.lg,
-              borderTopLeftRadius: radius.lg,
-              borderTopRightRadius: radius.lg,
-              backgroundColor: colors.surface,
-              maxHeight: '70%',
-            }}
+            style={sidePanelStyle('70%')}
           >
             <View
               style={{
+                // The grab handle is a bottom-sheet affordance; a side panel
+                // isn't draggable, so it would be lying about the interaction.
+                display: isWideScreen ? 'none' : 'flex',
                 width: 44,
                 height: 4,
                 borderRadius: 2,
@@ -3967,21 +4024,13 @@ export default function DrawScreen() {
         <Pressable style={styles.backdrop} onPress={() => setShowLabelPicker(false)}>
           <Pressable
             onPress={(e) => e.stopPropagation && e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              padding: spacing.lg,
-              paddingBottom: insets.bottom + spacing.lg,
-              borderTopLeftRadius: radius.lg,
-              borderTopRightRadius: radius.lg,
-              backgroundColor: colors.surface,
-              maxHeight: '75%',
-            }}
+            style={sidePanelStyle('75%')}
           >
             <View
               style={{
+                // The grab handle is a bottom-sheet affordance; a side panel
+                // isn't draggable, so it would be lying about the interaction.
+                display: isWideScreen ? 'none' : 'flex',
                 width: 44,
                 height: 4,
                 borderRadius: 2,

@@ -196,9 +196,9 @@ export default function HomeScreen() {
    * an icon and a one-line caption need, so folders ended up marooned in
    * whitespace. Roughly 108pt each, packed to fill the row.
    */
-  const folderCols = useMemo(() => Math.max(3, Math.floor((winW - spacing.lg * 2) / 112)), [winW]);
+  const folderCols = useMemo(() => Math.max(4, Math.floor((winW - spacing.lg * 2) / 84)), [winW]);
   const folderPxWidth = useMemo(() => {
-    const avail = winW - spacing.lg * 2 - spacing.sm * (folderCols - 1);
+    const avail = winW - spacing.lg * 2 - spacing.xs * (folderCols - 1);
     return avail / folderCols;
   }, [winW, folderCols]);
 
@@ -1216,7 +1216,7 @@ export default function HomeScreen() {
             },
           ]}
         >
-          <Ionicons name="add-circle-outline" size={42} color={colors.brand} />
+          <Ionicons name="add-circle-outline" size={48} color={colors.brand} />
           <Text numberOfLines={1} style={{ color: colors.brand, fontWeight: '600', marginTop: spacing.xs, fontSize: typeScale.sm }}>
             New folder
           </Text>
@@ -1236,7 +1236,7 @@ export default function HomeScreen() {
               },
             ]}
           >
-            <Ionicons name="folder" size={46} color={f.color} />
+            <Ionicons name="folder" size={54} color={f.color} />
             <Text
               numberOfLines={1}
               style={{
@@ -3362,9 +3362,9 @@ const styles = StyleSheet.create({
     // Was a 130pt boxed card, which gave folders more weight than the notes
     // inside them. No background or border now, but the glyph is back up to a
     // readable size — the first pass overcorrected and left them tiny.
-    height: 92,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: 2,
+    height: 88,
+    paddingVertical: 2,
+    paddingHorizontal: 0,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 0,
@@ -3404,8 +3404,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'flex-start',
-    columnGap: spacing.sm,
-    rowGap: spacing.xs,
+    columnGap: spacing.xs,
+    rowGap: 2,
     marginBottom: spacing.md,
   },
   breadcrumbRow: {

@@ -145,7 +145,12 @@ export default function OpenTabsStrip({
             >
               <Pressable
                 testID={`opentab-${t.id}`}
-                onPress={(e) => {
+                // onPressIn: a Pressable inside a horizontal ScrollView holds
+                // onPress back until the gesture is ruled out as a scroll, and
+                // cancels entirely on a few pixels of drift — which is why
+                // switching tabs felt laggy and sometimes took two or three
+                // taps. Switching on touch-down is immediate.
+                onPressIn={(e) => {
                   if (active) {
                     // Tapping the tab you're already on has nothing to navigate
                     // to, so use it to rename. Anchored at the touch point so
@@ -164,6 +169,7 @@ export default function OpenTabsStrip({
                     router.replace(route as any);
                   }
                 }}
+                hitSlop={4}
                 style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingRight: 4, flex: 1 }}
               >
                 <Ionicons
