@@ -1340,20 +1340,10 @@ export default function HomeScreen() {
           own section below Trash, which meant the drawer had two places that
           both said "folders". Tapping the row opens the folder view; tapping
           the chevron expands the tree in place. */}
+      {/* Chevron and + sit at the TRAILING edge. A leading chevron indented the
+          row relative to All notes / Recents above it, so Folders read as a
+          child of Recents rather than a sibling. */}
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <Pressable
-          testID="drawer-folders-expand"
-          accessibilityRole="button"
-          accessibilityLabel={foldersExpanded ? 'Collapse folders' : 'Expand folders'}
-          onPress={() => { haptic.selection(); setFoldersExpanded((v) => !v); }}
-          style={styles.expandBtn}
-        >
-          <Ionicons
-            name={foldersExpanded ? 'chevron-down' : 'chevron-forward'}
-            size={14}
-            color={folders.length ? colors.onSurface : 'transparent'}
-          />
-        </Pressable>
         <View style={{ flex: 1 }}>
           <DrawerRow
             icon="folder-outline"
@@ -1365,10 +1355,26 @@ export default function HomeScreen() {
         </View>
         <Pressable
           testID="drawer-new-folder"
+          accessibilityRole="button"
+          accessibilityLabel="New folder"
           onPress={(e) => openFolderCreate(null, e)}
           style={styles.iconBtnSmall}
         >
           <Ionicons name="add" size={18} color={colors.muted} />
+        </Pressable>
+        <Pressable
+          testID="drawer-folders-expand"
+          accessibilityRole="button"
+          accessibilityLabel={foldersExpanded ? 'Collapse folders' : 'Expand folders'}
+          onPress={() => { haptic.selection(); setFoldersExpanded((v) => !v); }}
+          style={styles.iconBtnSmall}
+          hitSlop={8}
+        >
+          <Ionicons
+            name={foldersExpanded ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color={folders.length ? colors.muted : 'transparent'}
+          />
         </Pressable>
       </View>
 

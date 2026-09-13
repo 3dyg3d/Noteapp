@@ -53,7 +53,6 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
         label_ids    TEXT    NOT NULL DEFAULT '[]',
         color        TEXT,
         pinned       INTEGER NOT NULL DEFAULT 0,
-        favorite     INTEGER NOT NULL DEFAULT 0,
         locked       INTEGER NOT NULL DEFAULT 0,
         image_count  INTEGER NOT NULL DEFAULT 0,
         created_at   TEXT    NOT NULL,
@@ -90,6 +89,12 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   if (current < 2) {
     // Favourites. Separate from `pinned`: pinning controls ordering within the
     // current list, favouriting is a cross-cutting collection.
+    //
+    // Deliberately NOT also declared in the v1 CREATE TABLE above. A fresh
+    // database starts at user_version 0 and runs every block in order, so a
+    // column declared in both places makes this ALTER fail with "duplicate
+    // column name" — which aborts migrate(), leaves the database unopened, and
+    // makes every single query fail. Each column belongs to exactly one step.
     await db.execAsync(`
       ALTER TABLE notes ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS idx_notes_favorite
