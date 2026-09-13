@@ -22,7 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale, folderColors, labelColors } from '@/src/theme/tokens';
+import { spacing, radius, typeScale, folderColors, labelColors, withAlpha } from '@/src/theme/tokens';
 import {
   NotesApi,
   FoldersApi,
@@ -114,20 +114,6 @@ const TEMPLATES: Template[] = [
 
 function rid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-/**
- * Convert a `#RRGGBB` hex color into an rgba() string with the given alpha.
- * Falls back gracefully to the raw color if parsing fails.
- */
-function withAlpha(hex: string, alpha: number): string {
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
-  if (!m) return hex;
-  const int = parseInt(m[1], 16);
-  const r = (int >> 16) & 0xff;
-  const g = (int >> 8) & 0xff;
-  const b = int & 0xff;
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function formatDate(iso: string) {
@@ -1214,13 +1200,12 @@ export default function HomeScreen() {
             styles.folderTile,
             {
               width: cardPxWidth,
-              backgroundColor: colors.brandTertiary,
-              opacity: pressed ? 0.8 : 1,
+              opacity: pressed ? 0.6 : 1,
             },
           ]}
         >
-          <Ionicons name="add-circle-outline" size={40} color={colors.brand} />
-          <Text style={{ color: colors.brand, fontWeight: '700', marginTop: spacing.sm }}>
+          <Ionicons name="add-circle-outline" size={30} color={colors.brand} />
+          <Text numberOfLines={1} style={{ color: colors.brand, fontWeight: '600', marginTop: spacing.xs, fontSize: typeScale.sm }}>
             New folder
           </Text>
         </Pressable>
@@ -1235,21 +1220,18 @@ export default function HomeScreen() {
               styles.folderTile,
               {
                 width: cardPxWidth,
-                backgroundColor: colors.surfaceSecondary,
-                borderTopWidth: 6,
-                borderTopColor: f.color,
-                opacity: pressed ? 0.85 : 1,
+                opacity: pressed ? 0.6 : 1,
               },
             ]}
           >
-            <Ionicons name="folder" size={36} color={f.color} />
+            <Ionicons name="folder" size={30} color={f.color} />
             <Text
               numberOfLines={1}
               style={{
-                marginTop: spacing.sm,
-                fontWeight: '700',
+                marginTop: spacing.xs,
+                fontWeight: '600',
                 color: colors.onSurface,
-                fontSize: typeScale.base,
+                fontSize: typeScale.sm,
                 maxWidth: '100%',
               }}
             >
@@ -1554,9 +1536,11 @@ export default function HomeScreen() {
           testID="inline-sidebar"
           style={{
             width: SIDEBAR_WIDTH,
-            backgroundColor: colors.surface,
+            // Distinct from the note area next to it: a bare hairline against
+            // an identical background gave no sense of two panes.
+            backgroundColor: colors.surfaceSecondary,
             borderRightWidth: StyleSheet.hairlineWidth,
-            borderRightColor: colors.divider,
+            borderRightColor: colors.border,
             paddingHorizontal: spacing.lg,
             paddingTop: insets.top + spacing.lg,
             paddingBottom: insets.bottom + spacing.lg,
@@ -1970,7 +1954,11 @@ export default function HomeScreen() {
                 style={[
                   styles.drawerPanel,
                   {
-                    backgroundColor: colors.surface,
+                    // The drawer used to be the same `surface` as the content
+                    // behind it, so there was no edge to read. A raised shade
+                    // plus a border and shadow separate the two planes.
+                    backgroundColor: colors.surfaceSecondary,
+                    borderRightColor: colors.border,
                     paddingTop: insets.top + spacing.lg,
                     paddingBottom: insets.bottom + spacing.sm,
                   },
@@ -3359,12 +3347,15 @@ const styles = StyleSheet.create({
   },
   iconBtnSmall: { padding: spacing.xs },
   folderTile: {
-    height: 130,
-    padding: spacing.lg,
-    borderRadius: radius.lg,
+    // Was a 130pt boxed tile with a 36pt glyph, which gave folders more visual
+    // weight than the notes they contain. Now a plain icon with a caption and
+    // no background, sized closer to a row than a card.
+    height: 84,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.xs,
   },
   topActionRow: {
     flexDirection: 'row',
@@ -3580,6 +3571,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderTopRightRadius: radius.lg,
     borderBottomRightRadius: radius.lg,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 18,
+    elevation: 16,
   },
   drawerBrand: { fontSize: typeScale.xxl, fontWeight: '800' },
   drawerSub: { fontSize: typeScale.sm, marginTop: 4 },

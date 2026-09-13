@@ -153,12 +153,17 @@ export default function SettingsScreen() {
       <View
         style={{
           width: wide ? 460 : '100%',
-          backgroundColor: colors.surface,
+          // A raised shade rather than the same `surface` as the screen behind
+          // it, plus a leading border. As a slide-over on a wide screen the two
+          // planes were previously indistinguishable.
+          backgroundColor: colors.surfaceSecondary,
+          borderLeftWidth: wide ? StyleSheet.hairlineWidth : 0,
+          borderLeftColor: colors.border,
           alignItems: 'center',
           overflow: 'hidden',
           shadowColor: '#000',
           shadowOffset: { width: -6, height: 6 },
-          shadowOpacity: wide ? 0.32 : 0,
+          shadowOpacity: wide ? 0.4 : 0,
           shadowRadius: 28,
           elevation: wide ? 20 : 0,
           // Rounded card that floats clearly away from the screen edges on tablets.

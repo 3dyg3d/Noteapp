@@ -176,3 +176,17 @@ export const ACCENTS: Record<AccentKey, { label: string; swatch: string; light: 
     dark:  { brand: '#D1D1D6', brandPrimary: '#D1D1D6', brandSecondary: '#8E8E93', brandTertiary: '#38383A', onBrandPrimary: '#111113' },
   },
 };
+
+/**
+ * Convert a `#RRGGBB` hex colour into an `rgba()` string with the given alpha.
+ * Falls back to the raw colour if it isn't a 6-digit hex.
+ *
+ * Lived as a private helper in app/index.tsx until the drawing screen needed it
+ * too; shared here rather than copied.
+ */
+export function withAlpha(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const int = parseInt(m[1], 16);
+  return `rgba(${(int >> 16) & 0xff},${(int >> 8) & 0xff},${int & 0xff},${alpha})`;
+}

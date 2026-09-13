@@ -27,7 +27,7 @@ import { GestureDetector, Gesture, PointerType } from 'react-native-gesture-hand
 import { useSharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale } from '@/src/theme/tokens';
+import { spacing, radius, typeScale, withAlpha } from '@/src/theme/tokens';
 import { NotesApi, LabelsApi, FoldersApi, Note, Label, Folder } from '@/src/api/client';
 import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
@@ -193,6 +193,21 @@ function familyVariantToTool(f: ToolFamily, v: string): Tool {
 
 /** World-space distance below which a new sample carries no new information. */
 const MIN_SAMPLE_DISTANCE = 0.25;
+
+/**
+ * Choices for the canvas surround. Deliberately desaturated: the surround sits
+ * directly against the page all day, so a saturated colour fights the ink.
+ */
+const CANVAS_COLORS = [
+  { id: 'light', label: 'Light grey', hex: '#d4d4d4' },
+  { id: 'paper', label: 'Warm grey', hex: '#cfc9bf' },
+  { id: 'slate', label: 'Slate', hex: '#8a8f94' },
+  { id: 'graphite', label: 'Graphite', hex: '#4a4d50' },
+  { id: 'ink', label: 'Near black', hex: '#1c1d1f' },
+  { id: 'olive', label: 'Olive', hex: '#9aa08c' },
+  { id: 'navy', label: 'Navy', hex: '#3c4658' },
+  { id: 'white', label: 'White', hex: '#f5f5f5' },
+] as const;
 
 /**
  * Normalised stylus pressure, when the digitiser reports it.
@@ -459,6 +474,17 @@ export default function DrawScreen() {
     });
   }, []);
   const [showPaperMenu, setShowPaperMenu] = useState(false);
+  const [showSubCanvasColor, setShowSubCanvasColor] = useState(false);
+  /**
+   * Chrome visibility.
+   *   'normal'     — header + tabs + toolbar
+   *   'immersive'  — toolbar only; header and tab strip hidden
+   *   'zen'        — nothing but the page
+   * Zen leaves a single small restore button, or the app becomes a trap.
+   */
+  const [chrome, setChrome] = useState<'normal' | 'immersive' | 'zen'>('normal');
+  const hideHeader = chrome !== 'normal';
+  const hideToolbar = chrome === 'zen';
   // Sub-menus opened from the main kebab menu
   const [showSubColor, setShowSubColor] = useState(false);
   const [showSubTemplate, setShowSubTemplate] = useState(false);
@@ -526,6 +552,8 @@ export default function DrawScreen() {
   // App settings (haptics + gestures + toolbar)
   const { settings, update } = useAppSettings();
   const toolbarPos: ToolbarPosition = settings.toolbarPosition || 'left';
+  /** Width of the vertical toolbar. Popovers offset by this so they never sit on top of it. */
+  const VERTICAL_TOOLBAR_W = 60;
   const isVerticalToolbar = toolbarPos === 'left' || toolbarPos === 'right';
   const { openTab, renameTab } = useOpenTabs();
 
@@ -1773,7 +1801,7 @@ export default function DrawScreen() {
           },
           vertical
             ? {
-                width: 60,
+                width: VERTICAL_TOOLBAR_W,
                 paddingTop: spacing.xs,
                 paddingBottom: insets.bottom + spacing.xs,
                 borderRightWidth: toolbarPos === 'left' ? StyleSheet.hairlineWidth : 0,
@@ -1863,6 +1891,7 @@ export default function DrawScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: paperColor }}>
       {/* Chrome-style tabs row with back arrow inline */}
+      {!hideHeader && (
       <View style={{ paddingTop: insets.top, backgroundColor: colors.surfaceSecondary }}>
         <OpenTabsStrip
           currentId={id as string}
@@ -1923,12 +1952,13 @@ export default function DrawScreen() {
           }
         />
       </View>
+      )}
 
-      {toolbarPos === 'top' && renderToolbar()}
+      {!hideToolbar && toolbarPos === 'top' && renderToolbar()}
 
       {/* Canvas (+ optional left/right toolbars wrapping it) */}
       <View style={{ flex: 1, flexDirection: isVerticalToolbar ? 'row' : 'column' }}>
-        {toolbarPos === 'left' && renderToolbar()}
+        {!hideToolbar && toolbarPos === 'left' && renderToolbar()}
         <View
           style={{ flex: 1, backgroundColor: canvasColorHex, overflow: 'hidden' }}
           onLayout={(e) => setViewport({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
@@ -2171,14 +2201,40 @@ export default function DrawScreen() {
             </View>
           )}
         </View>
-        {toolbarPos === 'right' && renderToolbar()}
+        {!hideToolbar && toolbarPos === 'right' && renderToolbar()}
       </View>
 
-      {toolbarPos === 'bottom' && renderToolbar()}
+      {!hideToolbar && toolbarPos === 'bottom' && renderToolbar()}
 
       {/* Tool options popover (tap an already-active tool again) — small card anchored near the tap */}
+      {/* Escape hatch for immersive/zen. Deliberately small and low-contrast so
+          it doesn't compete with the page, but always present — hiding every
+          control with no way back is a trap, not a feature. */}
+      {chrome !== 'normal' && (
+        <Pressable
+          testID="draw-exit-fullscreen"
+          accessibilityRole="button"
+          accessibilityLabel="Show toolbars"
+          onPress={() => { haptic.selection(); setChrome('normal'); }}
+          style={{
+            position: 'absolute',
+            top: insets.top + 6,
+            left: 8,
+            width: 34,
+            height: 34,
+            borderRadius: 17,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: withAlpha(colors.surface, 0.65),
+          }}
+          hitSlop={10}
+        >
+          <Ionicons name="contract-outline" size={18} color={colors.onSurface} />
+        </Pressable>
+      )}
+
       <Modal visible={showToolOpts} transparent animationType="fade" onRequestClose={() => { setShowToolOpts(false); setExpandedColors(false); }}>
-        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => { setShowToolOpts(false); setExpandedColors(false); }}>
+        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPressIn={() => { setShowToolOpts(false); setExpandedColors(false); }}>
           {(() => {
             const CARD_W = 260;
             // Approximate popup height used only for overflow detection when
@@ -2893,7 +2949,7 @@ export default function DrawScreen() {
 
       {/* Zoom presets menu (tap zoom pill) + save prompt (long-press zoom pill) */}
       <Modal visible={showZoomMenu} transparent animationType="fade" onRequestClose={() => setShowZoomMenu(false)}>
-        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPress={() => setShowZoomMenu(false)}>
+        <Pressable style={{ flex: 1, backgroundColor: 'transparent' }} onPressIn={() => setShowZoomMenu(false)}>
           <Pressable
             onPress={(e) => e.stopPropagation && e.stopPropagation()}
             style={{
@@ -3132,14 +3188,19 @@ export default function DrawScreen() {
       <Modal visible={showPaperMenu} transparent animationType="fade" onRequestClose={() => setShowPaperMenu(false)}>
         <Pressable
           style={styles.backdrop}
-          onPress={() => setShowPaperMenu(false)}
+          // onPressIn, not onPress: starting a stroke is a drag, and Pressable
+          // only fires onPress for a tap that doesn't move. The menu used to
+          // stay up while you were already writing underneath it.
+          onPressIn={() => setShowPaperMenu(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
               top: insets.top + 40,
-              right: 4,
+              // Slide clear of the toolbar when it is docked on the right,
+              // otherwise the menu lands directly on top of the tools.
+              right: (toolbarPos === 'right' ? VERTICAL_TOOLBAR_W : 0) + 4,
               width: 260,
               maxHeight: '80%',
               backgroundColor: colors.surface,
@@ -3171,6 +3232,25 @@ export default function DrawScreen() {
               valueSwatch={paperColor}
               onPress={() => { setShowPaperMenu(false); setShowSubColor(true); }}
               testID="draw-menu-color"
+            />
+            {/* The surface the pages sit on, as distinct from the pages
+                themselves. Previously fixed at #d4d4d4 with no way to change it. */}
+            <DrawMenuRow
+              icon="color-palette-outline"
+              label="Canvas color"
+              onPress={() => { setShowPaperMenu(false); setShowSubCanvasColor(true); }}
+              testID="draw-menu-canvas-color"
+            />
+            <DrawMenuRow
+              icon={chrome === 'normal' ? 'expand-outline' : 'contract-outline'}
+              label="Full screen"
+              valueText={chrome === 'normal' ? 'Off' : chrome === 'immersive' ? 'Hide top bars' : 'Hide everything'}
+              onPress={() => {
+                haptic.selection();
+                setChrome((c) => (c === 'normal' ? 'immersive' : c === 'immersive' ? 'zen' : 'normal'));
+                setShowPaperMenu(false);
+              }}
+              testID="draw-menu-fullscreen"
             />
             {rulerEnabled && (
               <>
@@ -3342,7 +3422,7 @@ export default function DrawScreen() {
       <Modal visible={showSubColor} transparent animationType="fade" onRequestClose={() => setShowSubColor(false)}>
         <Pressable
           style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
-          onPress={() => setShowSubColor(false)}
+          onPressIn={() => setShowSubColor(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
@@ -3398,11 +3478,72 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
+      {/* SUB: Canvas color — the surround, not the paper */}
+      <Modal visible={showSubCanvasColor} transparent animationType="fade" onRequestClose={() => setShowSubCanvasColor(false)}>
+        <Pressable
+          style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
+          onPressIn={() => setShowSubCanvasColor(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 520,
+              backgroundColor: colors.surface,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.22,
+              shadowRadius: 24,
+              elevation: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md }}>
+              <Pressable onPress={() => { setShowSubCanvasColor(false); setShowPaperMenu(true); }} hitSlop={6}>
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+              </Pressable>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '700', textAlign: 'center', marginRight: 22 }}>
+                Canvas color
+              </Text>
+            </View>
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.md, textAlign: 'center' }}>
+              The surface your pages sit on.
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, justifyContent: 'center' }}>
+              {CANVAS_COLORS.map((c) => {
+                const active = canvasColorHex.toLowerCase() === c.hex.toLowerCase();
+                return (
+                  <Pressable
+                    key={c.id}
+                    onPress={() => { setCanvasColorHex(c.hex); haptic.selection(); }}
+                    testID={`sub-canvas-${c.id}`}
+                    accessibilityLabel={c.label}
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 28,
+                      backgroundColor: c.hex,
+                      borderWidth: active ? 3 : 1,
+                      borderColor: active ? colors.brand : colors.border,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {active && <Ionicons name="checkmark" size={22} color={colors.brand} />}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* SUB: Page template */}
       <Modal visible={showSubTemplate} transparent animationType="fade" onRequestClose={() => setShowSubTemplate(false)}>
         <Pressable
           style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
-          onPress={() => setShowSubTemplate(false)}
+          onPressIn={() => setShowSubTemplate(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
@@ -3478,7 +3619,7 @@ export default function DrawScreen() {
       <Modal visible={showSubSize} transparent animationType="fade" onRequestClose={() => setShowSubSize(false)}>
         <Pressable
           style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
-          onPress={() => setShowSubSize(false)}
+          onPressIn={() => setShowSubSize(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
@@ -3576,7 +3717,7 @@ export default function DrawScreen() {
       <Modal visible={showSubSpacing} transparent animationType="fade" onRequestClose={() => setShowSubSpacing(false)}>
         <Pressable
           style={[styles.backdrop, { alignItems: 'center', justifyContent: 'center', padding: spacing.lg }]}
-          onPress={() => setShowSubSpacing(false)}
+          onPressIn={() => setShowSubSpacing(false)}
         >
           <Pressable
             onPress={(e) => e.stopPropagation()}
