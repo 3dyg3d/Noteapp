@@ -1,68 +1,66 @@
 # Geodesic Notes
 
-A handwriting-first notes app. Expo + React Native on the front, FastAPI +
-MongoDB on the back.
+A handwriting-first Android notes app. Fully offline: notes live in a SQLite
+database on the device. There is no server, no account, no network call.
 
-## Layout
+The app ships without the `INTERNET` permission, so this is enforced by Android
+rather than merely intended.
 
-```
-backend/     FastAPI service, mounted at /api
-frontend/    Expo Router app
-memory/      Product requirements
-```
-
-## Backend
-
-```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # add -dev for tests and linters
-cp .env.example .env                     # then fill in MONGO_URL
-uvicorn server:app --reload
-```
-
-`GET /api/health` pings the database and is the readiness probe.
-
-There are no API keys to configure. The service needs a MongoDB connection and
-nothing else: no LLM provider, no third-party account, no metered calls.
-
-### Tests
-
-```bash
-pip install -r requirements-dev.txt
-GEODESIC_API_URL=http://localhost:8000 pytest backend/tests
-```
-
-These are integration tests and write real notes, so point them at a scratch
-database rather than anything you care about.
-
-## Frontend
+## Build
 
 ```bash
 cd frontend
-yarn install
-yarn start
+npm install
+npx expo prebuild --platform android --clean
+npx expo export:embed \
+  --platform android --dev false \
+  --entry-file node_modules/expo-router/entry.js \
+  --bundle-output android/app/src/main/assets/index.android.bundle \
+  --assets-dest android/app/src/main/res
+cd android && ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Set `EXPO_PUBLIC_BACKEND_URL` to the API's origin. The handwriting canvas needs
-a real device or simulator; Skia does not render in the web preview.
+The `export:embed` step bundles the JavaScript into the APK. Without it a debug
+build expects a Metro server at runtime and hangs on the splash screen.
 
-## Cost
+Requires: JDK 17+, Android SDK platform 35, build-tools 35.0.0,
+NDK 27.1.12297006. On Fedora, `./scripts/setup-fedora.sh` installs them.
 
-Nothing here requires a subscription or a paid service. MongoDB Community
-Server is free and self-hosted, and every dependency is open source. Building
-and sideloading the APK costs nothing; only publishing to the Play Store
-carries Google's one-off developer registration fee.
+## Where data lives
+
+`geodesic.db` in the app's private storage, created and migrated on first
+launch by `src/db/index.ts`. Uninstalling the app deletes it. There is no sync
+and no automatic backup.
+
+`src/api/client.ts` keeps the old HTTP client's exact function signatures
+(`NotesApi.list()`, `NotesApi.update()` and so on) but reads and writes SQLite.
+The screens were not changed.
+
+## Regenerating icons
+
+`assets/images/` is generated from `assets/icon-source.png` and
+`assets/splash-source.png`:
+
+```bash
+pip install -r scripts/requirements-icons.txt
+python scripts/build-icons.py
+```
+
+## Checks
+
+```bash
+npx tsc --noEmit                    # must be clean
+npx eslint .                        # warnings only
+```
 
 ## Notes on the current state
 
-- **There is no authentication.** Every client reads and writes one shared
-  collection. Note locking gates access on the device; the server stores note
-  bodies in the clear. Do not deploy this to the open internet as-is.
-- **There is no offline mode.** The app needs the API to show anything.
+- No sync between devices, by design.
+- No backup or export yet. Worth adding before you rely on it.
+- Note locking gates access on this device. Note bodies are not encrypted at
+  rest, so a passcode is not protection against someone with the device
+  unlocked and a file browser.
 - `app/index.tsx` and `app/draw/[id].tsx` are single components of roughly 3,600
   and 4,400 lines.
-- There is no frontend test setup.
-
-See `memory/PRD.md` for the full picture, including the ink pipeline and the
-data-shape rules the API depends on.
+- No frontend test setup.

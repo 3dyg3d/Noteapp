@@ -1349,7 +1349,18 @@ export default function DrawScreen() {
   // pen sample repaints one path instead of re-rendering this screen. Shapes
   // still go through state: they update once per drag, not once per sample, so
   // the extra render is not on the hot path.
-  const pushLive = useCallback(() => {
+  // Declared with `function`, not `const`, deliberately.
+  //
+  // The gesture objects below are constructed during render, *above* this point,
+  // and their callbacks call these. Reanimated's babel plugin lifts gesture
+  // callbacks into worklets, which capture referenced identifiers by value at
+  // construction time. A `const` arrow declared further down is still in its
+  // temporal dead zone at that moment, so the worklet captured `undefined` and
+  // the first pen stroke died with "C is not a function (it is undefined)".
+  //
+  // Function declarations are hoisted and initialised before any of this runs,
+  // so there is nothing left to capture too early.
+  function pushLive() {
     if (!isPenTool(tool)) {
       liveStrokeRef.current?.set(null);
       return;
@@ -1360,11 +1371,11 @@ export default function DrawScreen() {
         ? { points: pts as InkPoint[], tool: tool as InkTool, color, width: widths[tool] }
         : null
     );
-  }, [tool, color, widths]);
+  }
 
-  const clearLive = useCallback(() => {
+  function clearLive() {
     liveStrokeRef.current?.set(null);
-  }, []);
+  }
 
   const livePreview =
     isShapeTool(tool) && liveShapeRef.current

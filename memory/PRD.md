@@ -13,7 +13,7 @@ shipping under someone else's design language is a legal and product liability.
 ## Tech
 - **Frontend**: Expo Router (SDK 54), React Native 0.81, `@shopify/react-native-skia`,
   `react-native-gesture-handler` 2.28
-- **Backend**: FastAPI + Motor (MongoDB), mounted at `/api`
+- **Storage**: SQLite on device via `expo-sqlite`. No backend.
 
 ## No paid dependencies
 
@@ -82,34 +82,28 @@ Handwriting quality is a primary requirement, not a nice-to-have.
   pressure error.
 
 ## Data boundaries
-- The notes list returns **summaries only**. `drawing_data`, `drawings` and
-  `images` are projected out. Cards render from a small bounded `preview` field
-  written at save time.
-- Full documents are fetched one note at a time; handwriting payloads have their
-  own endpoint.
-- Writes are patches. An omitted key is untouched; an explicit `null` clears the
-  field. This is what makes "move a note out of its folder" expressible.
-- Writes carry a `version` for optimistic concurrency and get a 409 rather than
-  clobbering a concurrent edit.
-- Deletes are idempotent. Only `permanent=true` destroys.
 
-## Backend endpoints (`/api`)
-- `GET /health`
-- `GET /notes` (paginated summaries: `status`, `folder_id`, `label_id`, `q`,
-  `pinned`, `limit`, `offset`), `POST /notes`
-- `GET/PUT/DELETE /notes/{id}`, `GET /notes/{id}/drawing`
-- `POST /notes/{id}/restore`, `POST /notes/trash/empty`
-- `GET/POST /folders`, `PUT/DELETE /folders/{id}`
-- `GET/POST /labels`, `PUT/DELETE /labels/{id}`
+- Everything is local. `src/api/client.ts` keeps the old HTTP client's exported
+  signatures so no screen changed, but every call now hits SQLite.
+- The notes list selects **summary columns only**. `drawing_data`, `images` and
+  `drawings` are never read by the list; cards render from a small bounded
+  `preview` written at save time.
+- Writes are patches. An omitted key is untouched; an explicit `null` clears the
+  column. This is what makes "move a note out of its folder" expressible.
+- Deletes are idempotent. Only an explicit `permanent` destroys.
+- Search uses `LIKE` with `ESCAPE`, so a query of `100%` matches the literal
+  rather than every note.
+- Trash older than 30 days is purged at startup, since there is no server timer.
 
 ## Known gaps
 These are open, not done:
 
-- **No authentication.** Every client shares one notes collection. "Locked"
-  currently means gated on this device; the server still stores note bodies in
-  the clear. Real at-rest protection needs the body encrypted under a key
-  derived from the passcode.
-- **No offline mode.** The app renders nothing without a network.
+- **No backup or export.** The database lives only in app-private storage and
+  goes away with an uninstall. This is the most important gap.
+- **Note bodies are not encrypted at rest.** "Locked" gates the UI on this
+  device; it is not protection against someone holding the unlocked phone.
+- **No sync.** Deliberate, but the `version` column is retained so adding it
+  later is not a migration.
 - `app/index.tsx` and `app/draw/[id].tsx` are single components of ~3,600 and
   ~4,400 lines. Not a correctness bug, but the reason most fixes are harder than
   they should be.

@@ -153,49 +153,35 @@ def build_adaptive_background(_src: Image.Image) -> Image.Image:
     return Image.composite(highlight, out, vignette.point(lambda v: v // 3))
 
 
-def build_splash() -> Image.Image:
-    """The wordmark lockup, keyed off its black surround.
+def build_splash(src: Image.Image) -> Image.Image:
+    """Splash icon: the emblem, square, sized for a circular mask.
 
-    Alpha comes from a flood fill seeded at the frame edge, not from a plain
-    luminance threshold. A threshold would punch holes through every enclosed
-    black area inside the mark; only the surround that actually reaches the edge
-    should become transparent.
+    Android 12+ hands the splash image to the system SplashScreen API, which
+    masks it to a **circle** (240 dp outer, ~160 dp of guaranteed inner space).
+    The wide "GEODESIC NOTES" wordmark lockup is roughly 1.5:1, so the mask cut
+    the ends off and it rendered as "DESIC N". No amount of `imageWidth` or
+    `resizeMode` fixes that: the artwork has to be square.
+
+    So the splash uses the round emblem instead of the wordmark. The launcher
+    already shows the app name under the icon, and the system shows it while
+    loading, so the text was redundant anyway.
     """
-    import numpy as np
-    from scipy import ndimage
+    emblem = square_crop(src, EMBLEM_CX, EMBLEM_CY, EMBLEM_R).convert("RGBA")
+    size = emblem.size[0]
 
-    if not SPLASH_SOURCE.exists():
-        raise SystemExit(f"Missing splash artwork: {SPLASH_SOURCE}")
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(4))
+    emblem.putalpha(mask)
 
-    rgb = np.array(Image.open(SPLASH_SOURCE).convert("RGB")).astype(np.float32)
-    lum = rgb.mean(axis=2)
-
-    dark = lum < 14
-    labels, _ = ndimage.label(dark)
-    edge_labels = set(
-        np.unique(np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]))
-    ) - {0}
-    surround = np.isin(labels, list(edge_labels))
-
-    # A soft ramp rather than a hard cut, so the metal's own edge antialiasing
-    # survives instead of turning into a jagged outline.
-    alpha = np.full(lum.shape, 255.0)
-    alpha[surround] = (np.clip((lum - 4.0) / 20.0, 0.0, 1.0) * 255.0)[surround]
-
-    out = Image.fromarray(
-        np.dstack([rgb.astype(np.uint8), alpha.astype(np.uint8)]), "RGBA"
-    )
-
-    # Trim to the ink, then restore an even margin. The source framing is not
-    # symmetric, which would otherwise show as an off-centre splash.
-    bbox = out.getchannel("A").point(lambda v: 255 if v > 6 else 0).getbbox()
-    out = out.crop(bbox)
-    pad = int(out.width * 0.03)
-    canvas = Image.new("RGBA", (out.width + pad * 2, out.height + pad * 2), (0, 0, 0, 0))
-    canvas.paste(out, (pad, pad), out)
-
-    width = 1024
-    return canvas.resize((width, round(width * canvas.height / canvas.width)), Image.LANCZOS)
+    # Sit the emblem inside the guaranteed-visible portion of the circular mask
+    # rather than letting it run to the edge, where it can be clipped.
+    canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    inner = int(1024 * 0.68)
+    emblem = emblem.resize((inner, inner), Image.LANCZOS)
+    offset = (1024 - inner) // 2
+    canvas.paste(emblem, (offset, offset), emblem)
+    return canvas
 
 
 def build_favicon(icon: Image.Image) -> Image.Image:
@@ -286,14 +272,14 @@ def main() -> None:
     build_adaptive_foreground(src).save(OUT / "adaptive-icon.png", optimize=True)
     build_adaptive_background(src).save(OUT / "adaptive-icon-background.png", optimize=True)
     build_monochrome().save(OUT / "adaptive-icon-monochrome.png", optimize=True)
-    splash = build_splash()
+    splash = build_splash(src)
     splash.save(OUT / "splash-image.png", optimize=True)
 
     print(f"icon.png             512x512   opaque, full bleed (legacy + web)")
     print(f"adaptive-icon.png   1024x1024  emblem in the {int(ADAPTIVE_SAFE_FRACTION * 100)}% safe zone")
     print(f"adaptive-icon-background.png 1024x1024  slate texture, full bleed")
     print(f"adaptive-icon-monochrome.png 1024x1024  drawn glyph for themed icons")
-    print(f"splash-image.png    {splash.width}x{splash.height}  wordmark lockup, transparent")
+    print(f"splash-image.png   {splash.width}x{splash.height}  emblem, square (Android masks to a circle)")
     print(f"favicon.png          196x196")
     print(f"\nbackground: {BACKGROUND}   splash: {SPLASH_BACKGROUND}")
 
