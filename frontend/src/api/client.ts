@@ -35,6 +35,7 @@ export interface NoteSummary {
   label_ids: string[];
   color: string | null;
   pinned: boolean;
+  favorite: boolean;
   locked: boolean;
   has_drawing: boolean;
   image_count: number;
@@ -150,6 +151,7 @@ interface NoteRow {
   label_ids: string;
   color: string | null;
   pinned: number;
+  favorite: number;
   locked: number;
   image_count: number;
   created_at: string;
@@ -170,6 +172,7 @@ function toSummary(row: NoteRow): NoteSummary {
     label_ids: parseJson<string[]>(row.label_ids, []),
     color: row.color,
     pinned: !!row.pinned,
+    favorite: !!row.favorite,
     locked: !!row.locked,
     has_drawing: !!row.preview || row.note_type === 'handwriting',
     image_count: row.image_count ?? 0,
@@ -194,7 +197,7 @@ function toNote(row: NoteRow): Note {
 /** Columns the list reads. Deliberately excludes every blob column. */
 const SUMMARY_COLUMNS = `
   id, title, content, checklist, preview, note_type, folder_id, label_ids,
-  color, pinned, locked, image_count, created_at, updated_at, deleted_at, version,
+  color, pinned, favorite, locked, image_count, created_at, updated_at, deleted_at, version,
   '[]' AS images, '[]' AS drawings, NULL AS drawing_data
 `;
 
@@ -206,6 +209,7 @@ export interface ListOpts {
   labelId?: string | null;
   status?: NoteStatus;
   pinned?: boolean;
+  favorite?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -229,6 +233,10 @@ function buildWhere(opts: ListOpts): { sql: string; args: (string | number)[] } 
   if (typeof opts.pinned === 'boolean') {
     clauses.push('pinned = ?');
     args.push(opts.pinned ? 1 : 0);
+  }
+  if (typeof opts.favorite === 'boolean') {
+    clauses.push('favorite = ?');
+    args.push(opts.favorite ? 1 : 0);
   }
   if (opts.q && opts.q.trim()) {
     // ESCAPE matters: without it, searching for "100%" matches every note.
@@ -261,6 +269,7 @@ const WRITABLE: Record<string, (v: unknown) => string | number | null> = {
   label_ids: (v) => JSON.stringify(v ?? []),
   color: (v) => (v == null ? null : String(v)),
   pinned: (v) => (v ? 1 : 0),
+  favorite: (v) => (v ? 1 : 0),
   locked: (v) => (v ? 1 : 0),
 };
 
@@ -330,9 +339,9 @@ export const NotesApi = {
       await db.runAsync(
         `INSERT INTO notes (
            id, title, content, checklist, images, drawings, drawing_data, preview,
-           note_type, folder_id, label_ids, color, pinned, locked, image_count,
+           note_type, folder_id, label_ids, color, pinned, favorite, locked, image_count,
            created_at, updated_at, deleted_at, version
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,1)`,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,1)`,
         [
           id,
           data.title ?? '',
@@ -347,6 +356,7 @@ export const NotesApi = {
           JSON.stringify(data.label_ids ?? []),
           data.color ?? null,
           data.pinned ? 1 : 0,
+          data.favorite ? 1 : 0,
           data.locked ? 1 : 0,
           images.length,
           stamp,

@@ -23,7 +23,7 @@ import * as SQLite from 'expo-sqlite';
 const DB_NAME = 'geodesic.db';
 
 /** Bump when the schema changes and add a matching block in `migrate`. */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -53,6 +53,7 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
         label_ids    TEXT    NOT NULL DEFAULT '[]',
         color        TEXT,
         pinned       INTEGER NOT NULL DEFAULT 0,
+        favorite     INTEGER NOT NULL DEFAULT 0,
         locked       INTEGER NOT NULL DEFAULT 0,
         image_count  INTEGER NOT NULL DEFAULT 0,
         created_at   TEXT    NOT NULL,
@@ -83,6 +84,16 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
         ON notes (deleted_at, folder_id, updated_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_name
         ON labels (name COLLATE NOCASE);
+    `);
+  }
+
+  if (current < 2) {
+    // Favourites. Separate from `pinned`: pinning controls ordering within the
+    // current list, favouriting is a cross-cutting collection.
+    await db.execAsync(`
+      ALTER TABLE notes ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_notes_favorite
+        ON notes (deleted_at, favorite, updated_at DESC);
     `);
   }
 

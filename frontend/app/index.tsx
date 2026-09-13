@@ -176,7 +176,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const { width: winW } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
 
   // Responsive column count: phones=2, tablets scale up
   // Base column count purely from viewport width — each breakpoint targets a
@@ -221,6 +221,9 @@ export default function HomeScreen() {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [sortBy, setSortBy] = useState<SortBy>('updated');
   const [showSortMenu, setShowSortMenu] = useState(false);
+  // Where the sort button is on screen, so the menu can open beside it. On a
+  // tablet a bottom sheet is a long way from a control in the top bar.
+  const [sortAnchor, setSortAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // Global snackbar / toast handle — used for reversible destructive actions
   // (trash / restore / move-to-folder / permanent delete). Wired here at the
@@ -252,6 +255,7 @@ export default function HomeScreen() {
   const [showLabelPicker, setShowLabelPicker] = useState(false);
 
   // Drawer expand state
+  const [foldersExpanded, setFoldersExpanded] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // Multi-select
@@ -271,7 +275,7 @@ export default function HomeScreen() {
     return null;
   }, [category]);
   const folderFilter = useMemo(() => {
-    if (category === 'all' || category === 'pinned' || category === 'recent' || category === 'trash' || category === 'folders') return null;
+    if (category === 'all' || category === 'favorites' || category === 'pinned' || category === 'recent' || category === 'trash' || category === 'folders') return null;
     if (labelFilter) return null;
     return category;
   }, [category, labelFilter]);
@@ -285,6 +289,7 @@ export default function HomeScreen() {
           labelId: labelFilter,
           status,
           pinned: category === 'pinned' ? true : undefined,
+          favorite: category === 'favorites' ? true : undefined,
         }),
         FoldersApi.list(),
         LabelsApi.list(),
@@ -498,6 +503,19 @@ export default function HomeScreen() {
     const anyUnpinned = notes.some((n) => selectedIds.has(n.id) && !n.pinned);
     await bulkUpdate({ pinned: anyUnpinned });
   };
+  /** Favourite when any selected note isn't yet; otherwise unfavourite all. */
+  const bulkFavorite = async () => {
+    const ids = Array.from(selectedIds);
+    const anyUnfavorited = notes.some((n) => selectedIds.has(n.id) && !n.favorite);
+    await Promise.all(ids.map((id) => NotesApi.update(id, { favorite: anyUnfavorited })));
+    haptic.success();
+    clearSelection();
+    load();
+  };
+
+  const allSelectedAreFavorites =
+    selectionMode && notes.filter((n) => selectedIds.has(n.id)).every((n) => n.favorite);
+
   const bulkDuplicate = async () => {
     const targets = notes.filter((n) => selectedIds.has(n.id));
     if (targets.length === 0) return;
@@ -717,6 +735,7 @@ export default function HomeScreen() {
 
   const categoryLabel = useMemo(() => {
     if (category === 'all') return 'All notes';
+    if (category === 'favorites') return 'Favorites';
     if (category === 'pinned') return 'Pinned';
     if (category === 'recent') return 'Recents';
     if (category === 'trash') return 'Trash';
@@ -917,20 +936,36 @@ export default function HomeScreen() {
               {
                 width: '100%',
                 height: cardHeight,
+                // Rounded corners only. The tile used to carry a full border
+                // plus a coloured left edge, which framed every note in a box
+                // and fought the page content inside it. Selection is now shown
+                // by a ring drawn outside the content, not by a border that
+                // shifts the layout.
                 borderRadius: radius.lg,
                 backgroundColor: isSelected ? colors.brandTertiary : colors.surfaceSecondary,
-                borderLeftColor: folder?.color || 'transparent',
-                borderLeftWidth: folder ? 3 : 0,
-                borderWidth: isSelected ? 2 : 0,
-                borderColor: isSelected ? colors.brand : 'transparent',
                 opacity: pressed ? 0.85 : 1,
                 overflow: 'hidden',
-                padding: spacing.md,
+                // Handwriting fills the tile edge to edge so the card reads as
+                // the first page; typed notes keep padding so text isn't
+                // jammed against the corner radius.
+                padding: note.note_type === 'handwriting' ? 0 : spacing.md,
               },
             ]}
           >
+            {isSelected && (
+              <View
+                pointerEvents="none"
+                style={{
+                  ...StyleSheet.absoluteFillObject,
+                  borderRadius: radius.lg,
+                  borderWidth: 2,
+                  borderColor: colors.brand,
+                  zIndex: 2,
+                }}
+              />
+            )}
             {selectionMode && (
-              <View style={[styles.selectMark, { backgroundColor: isSelected ? colors.brand : colors.surface, borderColor: colors.brand }]}>
+              <View style={[styles.selectMark, { backgroundColor: isSelected ? colors.brand : colors.surface, borderColor: colors.brand, zIndex: 3 }]}>
                 {isSelected && <Ionicons name="checkmark" size={14} color={colors.onBrandPrimary} />}
               </View>
             )}
@@ -947,9 +982,9 @@ export default function HomeScreen() {
                 {note.preview || note.has_drawing ? (
                   <HandwritingThumbnail
                     preview={note.preview}
-                    width={cardPxWidth - spacing.md * 2}
-                    height={Math.max(80, (cardPxHeight ?? Math.round(cardPxWidth * 0.9)) - spacing.md * 2)}
-                    radius={6}
+                    width={cardPxWidth}
+                    height={cardPxHeight ?? Math.round(cardPxWidth * 0.9)}
+                    radius={radius.lg}
                   />
                 ) : (
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -978,6 +1013,10 @@ export default function HomeScreen() {
               matching iOS Photos-style tiles. Labels flow below the caption. */}
           <View style={{ paddingHorizontal: 4, paddingTop: spacing.xs }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {folder && (
+                <View style={[styles.folderDot, { backgroundColor: folder.color, marginRight: 4, width: 8, height: 8, borderRadius: 4 }]} />
+              )}
+              {note.favorite && <Ionicons name="star" size={12} color={colors.brand} style={{ marginRight: 4 }} />}
               {note.pinned && <Ionicons name="pin" size={12} color={colors.brand} style={{ marginRight: 4 }} />}
               {note.locked && <Ionicons name="lock-closed" size={12} color={colors.muted} style={{ marginRight: 4 }} />}
               <Text
@@ -1018,7 +1057,13 @@ export default function HomeScreen() {
       );
     }
 
-    // ---- List mode (unchanged): compact single-row card with everything inside.
+    // ---- List mode: a page thumbnail on the left, details on the right,
+    // the way a PDF reader lists documents. The previous list row was a
+    // shrunken version of the grid card with the text stacked inside it, which
+    // gave no sense of what the note looked like.
+    const THUMB_W = 56;
+    const THUMB_H = 74;   // roughly A-series proportions
+
     return (
       <Pressable
         key={note.id}
@@ -1033,79 +1078,96 @@ export default function HomeScreen() {
         onLongPress={() => enterSelectionWith(note)}
         delayLongPress={300}
         style={({ pressed }) => [
-          styles.card,
+          styles.listRow,
           {
-            backgroundColor: isSelected ? colors.brandTertiary : colors.surfaceSecondary,
-            width: cardWidth,
-            height: cardHeight,
-            alignSelf: 'stretch',
-            borderLeftColor: folder?.color || 'transparent',
-            borderLeftWidth: folder ? 3 : 0,
-            borderWidth: isSelected ? 2 : 0,
-            borderColor: isSelected ? colors.brand : 'transparent',
-            opacity: pressed ? 0.85 : 1,
-            overflow: 'hidden',
+            backgroundColor: isSelected
+              ? colors.brandTertiary
+              : pressed
+                ? colors.surfaceSecondary
+                : 'transparent',
           },
         ]}
       >
         {selectionMode && (
-          <View style={[styles.selectMark, { backgroundColor: isSelected ? colors.brand : colors.surface, borderColor: colors.brand }]}>
-            {isSelected && <Ionicons name="checkmark" size={14} color={colors.onBrandPrimary} />}
+          <View
+            style={[
+              styles.listCheck,
+              { backgroundColor: isSelected ? colors.brand : 'transparent', borderColor: isSelected ? colors.brand : colors.border },
+            ]}
+          >
+            {isSelected && <Ionicons name="checkmark" size={13} color={colors.onBrandPrimary} />}
           </View>
         )}
-        <View style={styles.cardHeader}>
-          {note.pinned && <Ionicons name="pin" size={14} color={colors.brand} style={{ marginRight: 6 }} />}
-          {note.locked && <Ionicons name="lock-closed" size={14} color={colors.muted} style={{ marginRight: 6 }} />}
-          <Text style={[styles.cardDate, { color: colors.muted }]}>{formatDate(note.updated_at)}</Text>
+
+        {/* Page thumbnail */}
+        <View
+          style={[
+            styles.listThumb,
+            { width: THUMB_W, height: THUMB_H, backgroundColor: colors.surfaceSecondary, borderColor: colors.divider },
+          ]}
+        >
+          {note.locked ? (
+            <Ionicons name="lock-closed" size={20} color={colors.muted} />
+          ) : note.note_type === 'handwriting' && (note.preview || note.has_drawing) ? (
+            <HandwritingThumbnail preview={note.preview} width={THUMB_W} height={THUMB_H} radius={0} />
+          ) : note.note_type === 'handwriting' ? (
+            <Ionicons name="brush" size={20} color={colors.brand} />
+          ) : (
+            // Typed notes get a miniature of their own first lines, so the
+            // column still reads as "pages" rather than as blank placeholders.
+            <Text
+              numberOfLines={6}
+              style={{ fontSize: 4.5, lineHeight: 6, color: colors.onSurfaceSecondary, padding: 4 }}
+            >
+              {previewText(note) || ' '}
+            </Text>
+          )}
         </View>
-        <Text numberOfLines={1} style={[styles.cardTitle, { color: colors.onSurface }]}>
-          {note.title || 'Untitled note'}
-        </Text>
-        {!note.locked && note.note_type !== 'handwriting' && (
-          <Text
-            numberOfLines={2}
-            style={[styles.cardPreview, { color: colors.onSurfaceSecondary }]}
-          >
-            {previewText(note) || 'No additional text'}
-          </Text>
-        )}
-        {!note.locked && note.note_type === 'handwriting' && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs }}>
-            <Ionicons name="brush" size={14} color={colors.brand} />
-            <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
-              Handwritten note
+
+        {/* Details */}
+        <View style={{ flex: 1, marginLeft: spacing.md, justifyContent: 'center' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {note.favorite && <Ionicons name="star" size={13} color={colors.brand} style={{ marginRight: 4 }} />}
+            {note.pinned && <Ionicons name="pin" size={13} color={colors.brand} style={{ marginRight: 4 }} />}
+            <Text numberOfLines={1} style={{ flex: 1, fontSize: typeScale.lg, fontWeight: '600', color: colors.onSurface }}>
+              {note.title || 'Untitled note'}
             </Text>
           </View>
-        )}
-        {note.locked && (
-          <Text style={[styles.cardPreview, { color: colors.muted, fontStyle: 'italic' }]}>
-            Tap to unlock
-          </Text>
-        )}
-        {!!note.image_count && (
-          <View style={styles.cardMeta}>
-            <Ionicons name="image-outline" size={12} color={colors.muted} />
-            <Text style={[styles.cardMetaText, { color: colors.muted }]}>{note.image_count}</Text>
-          </View>
-        )}
-        {noteLabels.length > 0 && (
-          <View style={styles.labelChipRow}>
-            {noteLabels.slice(0, 3).map((l) => (
-              <View
-                key={l.id}
-                style={[styles.labelChip, { backgroundColor: withAlpha(l.color, 0.18), borderColor: l.color }]}
-              >
-                <View style={[styles.labelChipDot, { backgroundColor: l.color }]} />
-                <Text numberOfLines={1} style={[styles.labelChipText, { color: l.color }]}>
-                  {l.name}
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+            <Text style={[styles.cardDate, { color: colors.muted }]}>{formatDate(note.updated_at)}</Text>
+            {folder && (
+              <>
+                <Text style={{ color: colors.muted, marginHorizontal: 5 }}>·</Text>
+                <View style={[styles.folderDot, { backgroundColor: folder.color, width: 7, height: 7, borderRadius: 4, marginRight: 4 }]} />
+                <Text numberOfLines={1} style={{ color: colors.muted, fontSize: typeScale.sm, maxWidth: 110 }}>
+                  {folder.name}
                 </Text>
-              </View>
-            ))}
-            {noteLabels.length > 3 && (
-              <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginLeft: 4 }}>+{noteLabels.length - 3}</Text>
+              </>
+            )}
+            {!!note.image_count && (
+              <>
+                <Text style={{ color: colors.muted, marginHorizontal: 5 }}>·</Text>
+                <Ionicons name="image-outline" size={11} color={colors.muted} />
+                <Text style={[styles.cardMetaText, { color: colors.muted, marginLeft: 2 }]}>{note.image_count}</Text>
+              </>
             )}
           </View>
-        )}
+
+          {noteLabels.length > 0 && (
+            <View style={[styles.labelChipRow, { marginTop: 4 }]}>
+              {noteLabels.slice(0, 3).map((l) => (
+                <View key={l.id} style={[styles.labelChip, { backgroundColor: withAlpha(l.color, 0.18), borderColor: l.color }]}>
+                  <View style={[styles.labelChipDot, { backgroundColor: l.color }]} />
+                  <Text numberOfLines={1} style={[styles.labelChipText, { color: l.color }]}>{l.name}</Text>
+                </View>
+              ))}
+              {noteLabels.length > 3 && (
+                <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginLeft: 4 }}>+{noteLabels.length - 3}</Text>
+              )}
+            </View>
+          )}
+        </View>
       </Pressable>
     );
   };
@@ -1256,6 +1318,13 @@ export default function HomeScreen() {
       <DrawerRow
         icon="star-outline"
         label="Favorites"
+        active={category === 'favorites'}
+        onPress={() => { setCategory('favorites'); closeDrawerIfPhone(); }}
+        testID="drawer-favorites"
+      />
+      <DrawerRow
+        icon="pin-outline"
+        label="Pinned"
         active={category === 'pinned'}
         onPress={() => { setCategory('pinned'); closeDrawerIfPhone(); }}
         testID="drawer-pinned"
@@ -1267,46 +1336,53 @@ export default function HomeScreen() {
         onPress={() => { setCategory('recent'); closeDrawerIfPhone(); }}
         testID="drawer-recent"
       />
-      <DrawerRow
-        icon="grid-outline"
-        label="Folders"
-        active={category === 'folders'}
-        onPress={() => { setCategory('folders'); closeDrawerIfPhone(); }}
-        testID="drawer-folders-view"
-      />
-      <DrawerRow
-        icon="trash-outline"
-        label="Trash"
-        active={category === 'trash'}
-        onPress={() => { setCategory('trash'); closeDrawerIfPhone(); }}
-        testID="drawer-trash"
-      />
-
-      <View style={styles.drawerSectionRow}>
-        <Text style={[styles.drawerSection, { color: colors.muted }]}>FOLDERS</Text>
+      {/* Folders is now a single expandable row. The tree used to live in its
+          own section below Trash, which meant the drawer had two places that
+          both said "folders". Tapping the row opens the folder view; tapping
+          the chevron expands the tree in place. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Pressable
+          testID="drawer-folders-expand"
+          accessibilityRole="button"
+          accessibilityLabel={foldersExpanded ? 'Collapse folders' : 'Expand folders'}
+          onPress={() => { haptic.selection(); setFoldersExpanded((v) => !v); }}
+          style={styles.expandBtn}
+        >
+          <Ionicons
+            name={foldersExpanded ? 'chevron-down' : 'chevron-forward'}
+            size={14}
+            color={folders.length ? colors.onSurface : 'transparent'}
+          />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <DrawerRow
+            icon="folder-outline"
+            label="Folders"
+            active={category === 'folders'}
+            onPress={() => { setCategory('folders'); closeDrawerIfPhone(); }}
+            testID="drawer-folders-view"
+          />
+        </View>
         <Pressable
           testID="drawer-new-folder"
           onPress={(e) => openFolderCreate(null, e)}
-          style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
+          style={styles.iconBtnSmall}
         >
-          <Ionicons name="add" size={16} color={colors.brand} />
-          <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
-            New
-          </Text>
+          <Ionicons name="add" size={18} color={colors.muted} />
         </Pressable>
       </View>
 
       <ScrollView style={{ flex: 1 }}>
-        {folders.length === 0 && (
-          <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
-            No folders yet. Tap &quot;New&quot; to create one.
+        {foldersExpanded && folders.length === 0 && (
+          <Text style={{ color: colors.muted, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm }}>
+            No folders yet. Tap + to create one.
           </Text>
         )}
-        {visibleTree.map(({ folder: f, depth, hasChildren }) => {
+        {foldersExpanded && visibleTree.map(({ folder: f, depth, hasChildren }) => {
           const isOpen = expanded.has(f.id);
           const isActive = category === f.id;
           return (
-            <View key={f.id} style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: depth * 18 }}>
+            <View key={f.id} style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.md + depth * 18 }}>
               <Pressable
                 onPress={() => toggleExpand(f.id)}
                 style={styles.expandBtn}
@@ -1335,7 +1411,15 @@ export default function HomeScreen() {
                   },
                 ]}
               >
-                <View style={[styles.folderDot, { backgroundColor: f.color, marginRight: spacing.md }]} />
+                {/* A folder icon rather than a colour dot: the dot said
+                    nothing about what the row was, and matched the label
+                    rows below it. The folder's colour still tints the icon. */}
+                <Ionicons
+                  name={isOpen && hasChildren ? 'folder-open' : 'folder'}
+                  size={20}
+                  color={isActive ? colors.brand : f.color}
+                  style={{ marginRight: spacing.md }}
+                />
                 <Text
                   numberOfLines={1}
                   style={{
@@ -1359,11 +1443,19 @@ export default function HomeScreen() {
           );
         })}
 
-        {folders.length > 0 && (
-          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, marginBottom: spacing.sm, paddingHorizontal: spacing.md }}>
+        {foldersExpanded && folders.length > 0 && (
+          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, marginBottom: spacing.sm, paddingHorizontal: spacing.xl }}>
             Tip: long-press a folder to edit or delete.
           </Text>
         )}
+
+        <DrawerRow
+          icon="trash-outline"
+          label="Trash"
+          active={category === 'trash'}
+          onPress={() => { setCategory('trash'); closeDrawerIfPhone(); }}
+          testID="drawer-trash"
+        />
 
         {/* ---- Labels section (tags) — sits directly under the folder tree so
             both categorisation lists stay together within the same scrollable
@@ -1503,7 +1595,10 @@ export default function HomeScreen() {
             </Text>
             <Pressable
               testID="sort-btn"
-              onPress={() => setShowSortMenu(true)}
+              onPress={async (e) => {
+                setSortAnchor(await measureAnchor(e));
+                setShowSortMenu(true);
+              }}
               style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
             >
               <Ionicons name="swap-vertical-outline" size={20} color={colors.onSurface} />
@@ -1573,68 +1668,6 @@ export default function HomeScreen() {
                 />
               </Pressable>
             </View>
-            {/* Inline bulk actions row at the top. On small phones the row
-                easily overflows because of the number of actions — horizontal
-                ScrollView lets users swipe through them instead of visibly
-                overlapping. Each button has a min-width so labels never
-                clip mid-word. */}
-            <ScrollView
-              testID="bulk-action-bar"
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              // Layout props (flexDirection, alignItems) belong to the CONTENT
-              // container in RN ScrollView; putting them on `style` throws
-              // "ScrollView child layout must be applied through the
-              // contentContainerStyle prop".
-              contentContainerStyle={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                paddingHorizontal: 2,
-              }}
-              style={{
-                backgroundColor: colors.surfaceSecondary,
-                borderRadius: radius.md,
-                marginBottom: spacing.sm,
-              }}
-            >
-              {category !== 'trash' ? (
-                <>
-                  <TopBulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
-                  <TopBulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
-                  <TopBulkBtn
-                    icon="pricetag-outline"
-                    label="Label"
-                    onPress={() => setShowLabelPicker(true)}
-                    testID="bulk-label"
-                  />
-                  <TopBulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
-                  {selectedIds.size === 1 && (
-                    <TopBulkBtn
-                      icon="information-circle-outline"
-                      label="Info"
-                      onPress={() => {
-                        const id = Array.from(selectedIds)[0];
-                        const n = notes.find((nn) => nn.id === id);
-                        if (n) setInfoTarget({ kind: 'note', note: n });
-                      }}
-                      testID="bulk-info"
-                    />
-                  )}
-                  <TopBulkBtn icon="trash-outline" label="Trash" onPress={bulkDelete} destructive testID="bulk-delete" />
-                </>
-              ) : (
-                <>
-                  <TopBulkBtn icon="refresh" label="Restore" onPress={bulkRestore} testID="bulk-restore" />
-                  <TopBulkBtn
-                    icon="trash-bin-outline"
-                    label="Delete forever"
-                    onPress={bulkDelete}
-                    destructive
-                    testID="bulk-delete-forever"
-                  />
-                </>
-              )}
-            </ScrollView>
           </>
         )}
 
@@ -1789,6 +1822,56 @@ export default function HomeScreen() {
       })()}
 
       {/* FAB (hidden in selection / trash) */}
+      {/* Bulk actions live at the BOTTOM, within thumb reach. They used to sit
+          in the header, which on a tablet is a long way from where the hand is
+          after a long-press. */}
+      {selectionMode && (
+        <View
+          testID="bulk-action-bar"
+          style={[
+            styles.bulkBar,
+            {
+              backgroundColor: colors.surfaceSecondary,
+              borderTopColor: colors.divider,
+              paddingBottom: insets.bottom + spacing.sm,
+            },
+          ]}
+        >
+          {category !== 'trash' ? (
+            <>
+              <TopBulkBtn
+                icon={allSelectedAreFavorites ? 'star' : 'star-outline'}
+                label={allSelectedAreFavorites ? 'Unfavorite' : 'Favorite'}
+                onPress={bulkFavorite}
+                testID="bulk-favorite"
+              />
+              <TopBulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
+              <TopBulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
+              <TopBulkBtn icon="pricetag-outline" label="Label" onPress={() => setShowLabelPicker(true)} testID="bulk-label" />
+              <TopBulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
+              {selectedIds.size === 1 && (
+                <TopBulkBtn
+                  icon="information-circle-outline"
+                  label="Info"
+                  onPress={() => {
+                    const id = Array.from(selectedIds)[0];
+                    const n = notes.find((nn) => nn.id === id);
+                    if (n) setInfoTarget({ kind: 'note', note: n });
+                  }}
+                  testID="bulk-info"
+                />
+              )}
+              <TopBulkBtn icon="trash-outline" label="Trash" onPress={bulkDelete} destructive testID="bulk-delete" />
+            </>
+          ) : (
+            <>
+              <TopBulkBtn icon="refresh" label="Restore" onPress={bulkRestore} testID="bulk-restore" />
+              <TopBulkBtn icon="trash-bin-outline" label="Delete forever" onPress={bulkDelete} destructive testID="bulk-delete-forever" />
+            </>
+          )}
+        </View>
+      )}
+
       {!selectionMode && category !== 'trash' && (
         <Pressable
           testID="fab-create-note"
@@ -2641,13 +2724,22 @@ export default function HomeScreen() {
       <Modal visible={showSortMenu} transparent animationType="fade" onRequestClose={() => setShowSortMenu(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowSortMenu(false)}>
           <Pressable
+            onPress={(e) => e.stopPropagation && e.stopPropagation()}
             style={[
-              styles.sheet,
-              { backgroundColor: colors.surface, paddingBottom: insets.bottom + spacing.lg, maxWidth: 480, alignSelf: 'center', borderRadius: radius.lg, marginBottom: insets.bottom + 80 },
+              styles.popover,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.divider,
+                // Hang the menu just under the button that opened it, clamped
+                // so it can never run off either edge. Falls back to a centred
+                // sheet when the measurement is unavailable (web, older RN).
+                top: sortAnchor ? Math.min(sortAnchor.y + sortAnchor.h + 8, winH - 260) : insets.top + 72,
+                right: sortAnchor ? Math.max(12, winW - (sortAnchor.x + sortAnchor.w)) : undefined,
+                alignSelf: sortAnchor ? undefined : 'center',
+              },
             ]}
           >
-            <View style={styles.sheetHandle} />
-            <Text style={[styles.sheetTitle, { color: colors.onSurface }]}>Sort by</Text>
+            <Text style={[styles.sheetTitle, { color: colors.onSurface, fontSize: typeScale.lg }]}>Sort by</Text>
             {([
               { id: 'updated', label: 'Recently updated' },
               { id: 'created', label: 'Newest first' },
@@ -3371,6 +3463,58 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderRadius: radius.pill,
   },
+  listRow: {
+    // Full width so it occupies its own line inside the wrapping grid
+    // container, which the grid tiles share.
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+  },
+  listThumb: {
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  popover: {
+    position: 'absolute',
+    minWidth: 240,
+    maxWidth: 320,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  bulkBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    flexWrap: 'wrap',
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   fab: {
     position: 'absolute',
     right: spacing.lg,
@@ -3406,13 +3550,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 10,
     elevation: 10,
-  },
-  bulkBar: {
-    position: 'absolute',
-    left: 0, right: 0, bottom: 56,
-    flexDirection: 'row',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: spacing.xs,
   },
   folderPopup: {
     position: 'absolute',
