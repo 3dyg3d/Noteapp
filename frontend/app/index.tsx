@@ -190,6 +190,18 @@ export default function HomeScreen() {
     const totalGap = spacing.md * (numColumns - 1);
     return (winW - horizPad - totalGap) / numColumns;
   }, [winW, numColumns]);
+  /**
+   * Folder tiles are sized independently of note cards. They were reusing
+   * `cardPxWidth`, which is sized to show a page preview — far more room than
+   * an icon and a one-line caption need, so folders ended up marooned in
+   * whitespace. Roughly 108pt each, packed to fill the row.
+   */
+  const folderCols = useMemo(() => Math.max(3, Math.floor((winW - spacing.lg * 2) / 112)), [winW]);
+  const folderPxWidth = useMemo(() => {
+    const avail = winW - spacing.lg * 2 - spacing.sm * (folderCols - 1);
+    return avail / folderCols;
+  }, [winW, folderCols]);
+
   // Uniform card height so every note tile in the grid lines up evenly, regardless
   // of preview length / labels / thumbnail. A portrait-ish 1.35 aspect ratio feels
   // like a real page peek without stretching. List mode ignores this — its rows
@@ -1190,7 +1202,7 @@ export default function HomeScreen() {
       )}
 
       {/* Folder tiles grid */}
-      <View style={styles.grid}>
+      <View style={styles.folderGrid}>
         <Pressable
           testID="folder-tile-add"
           onPress={(e) =>
@@ -1199,12 +1211,12 @@ export default function HomeScreen() {
           style={({ pressed }) => [
             styles.folderTile,
             {
-              width: cardPxWidth,
+              width: folderPxWidth,
               opacity: pressed ? 0.6 : 1,
             },
           ]}
         >
-          <Ionicons name="add-circle-outline" size={30} color={colors.brand} />
+          <Ionicons name="add-circle-outline" size={42} color={colors.brand} />
           <Text numberOfLines={1} style={{ color: colors.brand, fontWeight: '600', marginTop: spacing.xs, fontSize: typeScale.sm }}>
             New folder
           </Text>
@@ -1219,12 +1231,12 @@ export default function HomeScreen() {
             style={({ pressed }) => [
               styles.folderTile,
               {
-                width: cardPxWidth,
+                width: folderPxWidth,
                 opacity: pressed ? 0.6 : 1,
               },
             ]}
           >
-            <Ionicons name="folder" size={30} color={f.color} />
+            <Ionicons name="folder" size={46} color={f.color} />
             <Text
               numberOfLines={1}
               style={{
@@ -3347,15 +3359,15 @@ const styles = StyleSheet.create({
   },
   iconBtnSmall: { padding: spacing.xs },
   folderTile: {
-    // Was a 130pt boxed tile with a 36pt glyph, which gave folders more visual
-    // weight than the notes they contain. Now a plain icon with a caption and
-    // no background, sized closer to a row than a card.
-    height: 84,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
+    // Was a 130pt boxed card, which gave folders more weight than the notes
+    // inside them. No background or border now, but the glyph is back up to a
+    // readable size — the first pass overcorrected and left them tiny.
+    height: 92,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.xs,
+    marginBottom: 0,
   },
   topActionRow: {
     flexDirection: 'row',
@@ -3386,6 +3398,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'flex-start',
     gap: spacing.md,
+  },
+  /** Tighter than `grid`: folders are icons, not page previews. */
+  folderGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    columnGap: spacing.sm,
+    rowGap: spacing.xs,
+    marginBottom: spacing.md,
   },
   breadcrumbRow: {
     flexDirection: 'row',

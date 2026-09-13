@@ -44,11 +44,38 @@ export function useOpenTabs() {
     return () => { listeners.delete(l); };
   }, []);
 
+  /**
+   * Open a note in the tab strip.
+   *
+   * A tab that is already open keeps its position. The previous version
+   * filtered the tab out and re-appended it, so simply tapping a tab to switch
+   * to it yanked it to the right-hand end and every other tab shifted — the
+   * strip reshuffled itself on every navigation, which makes tabs impossible to
+   * aim at. Only genuinely new tabs are appended.
+   */
   const openTab = useCallback(async (t: Omit<OpenTab, 'openedAt'>) => {
     const cur = await load();
-    const filtered = cur.filter((x) => x.id !== t.id);
-    const next = [...filtered, { ...t, openedAt: Date.now() }].slice(-8); // keep last 8
-    save(next);
+    const existing = cur.findIndex((x) => x.id === t.id);
+
+    if (existing !== -1) {
+      // Keep the slot; refresh the title in case the note was renamed.
+      const next = cur.slice();
+      if (next[existing].title !== t.title) {
+        next[existing] = { ...next[existing], ...t };
+        save(next);
+      }
+      return;
+    }
+
+    // New tab: append, and drop the OLDEST when over the cap rather than
+    // slicing blindly, so the tab you just opened is never the one evicted.
+    const next = [...cur, { ...t, openedAt: Date.now() }];
+    if (next.length > 8) {
+      const oldest = next.reduce((a, b) => (a.openedAt <= b.openedAt ? a : b));
+      save(next.filter((x) => x.id !== oldest.id));
+    } else {
+      save(next);
+    }
   }, []);
 
   const closeTab = useCallback(async (id: string) => {

@@ -27,7 +27,7 @@ import { GestureDetector, Gesture, PointerType } from 'react-native-gesture-hand
 import { useSharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale, withAlpha } from '@/src/theme/tokens';
+import { spacing, radius, typeScale, withAlpha, CANVAS_COLORS } from '@/src/theme/tokens';
 import { NotesApi, LabelsApi, FoldersApi, Note, Label, Folder } from '@/src/api/client';
 import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
@@ -194,20 +194,7 @@ function familyVariantToTool(f: ToolFamily, v: string): Tool {
 /** World-space distance below which a new sample carries no new information. */
 const MIN_SAMPLE_DISTANCE = 0.25;
 
-/**
- * Choices for the canvas surround. Deliberately desaturated: the surround sits
- * directly against the page all day, so a saturated colour fights the ink.
- */
-const CANVAS_COLORS = [
-  { id: 'light', label: 'Light grey', hex: '#d4d4d4' },
-  { id: 'paper', label: 'Warm grey', hex: '#cfc9bf' },
-  { id: 'slate', label: 'Slate', hex: '#8a8f94' },
-  { id: 'graphite', label: 'Graphite', hex: '#4a4d50' },
-  { id: 'ink', label: 'Near black', hex: '#1c1d1f' },
-  { id: 'olive', label: 'Olive', hex: '#9aa08c' },
-  { id: 'navy', label: 'Navy', hex: '#3c4658' },
-  { id: 'white', label: 'White', hex: '#f5f5f5' },
-] as const;
+
 
 /**
  * Normalised stylus pressure, when the digitiser reports it.
@@ -295,6 +282,9 @@ export default function DrawScreen() {
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [paperColorId, setPaperColorId] = useState<string>('white');
   const [lineSpacing, setLineSpacing] = useState<number | undefined>(undefined);
+  // Starts from the app-wide default. A note that already has its own canvas
+  // colour saved overrides this on load (see `doc.canvasColor` below), so
+  // changing the global default never rewrites existing notes.
   const [canvasColorHex, setCanvasColorHex] = useState<string>('#d4d4d4');
   // Viewport = the actual on-screen container size. pageDims = the effective page size,
   // derived from paperSize / orientation / customSize (fitting into viewport width).
@@ -663,7 +653,8 @@ export default function DrawScreen() {
             if (doc.customSize) setCustomSize(doc.customSize);
             if (doc.orientation) setOrientation(doc.orientation);
             if (doc.paperColor) setPaperColorId(doc.paperColor);
-            if (doc.canvasColor) setCanvasColorHex(doc.canvasColor);
+            // Per-note colour wins; otherwise fall back to the app default.
+            setCanvasColorHex(doc.canvasColor || settings.defaultCanvasColor || '#d4d4d4');
             if (typeof doc.lineSpacing === 'number') setLineSpacing(doc.lineSpacing);
             if (typeof doc.pageCount === 'number') setPageCount(Math.max(1, doc.pageCount));
           } catch {}

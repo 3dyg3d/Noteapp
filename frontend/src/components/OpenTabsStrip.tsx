@@ -1,10 +1,10 @@
-import React from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, Pressable, ScrollView, StyleSheet, Modal, TextInput, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { typeScale } from '@/src/theme/tokens';
+import { typeScale, spacing, radius } from '@/src/theme/tokens';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 
 interface Props {
@@ -29,9 +29,80 @@ export default function OpenTabsStrip({
 }: Props) {
   const router = useRouter();
   const { colors } = useTheme();
-  const { tabs, closeTab } = useOpenTabs();
+  const { tabs, closeTab, renameTab } = useOpenTabs();
+  const { width: winW } = useWindowDimensions();
+
+  /** Rename popover: which tab, where it was tapped, and the draft text. */
+  const [renaming, setRenaming] = useState<{ id: string; title: string; x: number; y: number } | null>(null);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<TextInput>(null);
+
+  const commitRename = () => {
+    if (!renaming) return;
+    const next = draft.trim();
+    if (next && next !== renaming.title) renameTab(renaming.id, next);
+    setRenaming(null);
+  };
 
   if (hideWhenSingle && tabs.length <= 1) return null;
+
+  const renamePopover = renaming ? (
+    <Modal visible transparent animationType="fade" onRequestClose={() => setRenaming(null)}>
+      <Pressable style={{ flex: 1 }} onPressIn={commitRename}>
+        <Pressable
+          onPress={(e) => e.stopPropagation && e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            // Hang just below the tab that was tapped, clamped so a tab near
+            // either edge doesn't push the field off screen.
+            top: renaming.y + 12,
+            left: Math.max(8, Math.min(renaming.x - 110, winW - 236)),
+            width: 228,
+            backgroundColor: colors.surface,
+            borderRadius: radius.md,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.border,
+            padding: spacing.sm,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 6 },
+            shadowOpacity: 0.28,
+            shadowRadius: 14,
+            elevation: 14,
+          }}
+        >
+          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: 4 }}>Rename note</Text>
+          <TextInput
+            ref={inputRef}
+            testID="tab-rename-input"
+            value={draft}
+            onChangeText={setDraft}
+            onSubmitEditing={commitRename}
+            autoFocus
+            selectTextOnFocus
+            returnKeyType="done"
+            placeholder="Untitled"
+            placeholderTextColor={colors.muted}
+            style={{
+              color: colors.onSurface,
+              backgroundColor: colors.surfaceSecondary,
+              borderRadius: radius.sm,
+              paddingHorizontal: spacing.sm,
+              paddingVertical: 6,
+              fontSize: typeScale.base,
+            }}
+          />
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: spacing.sm, gap: spacing.sm }}>
+            <Pressable testID="tab-rename-cancel" onPress={() => setRenaming(null)} hitSlop={6}>
+              <Text style={{ color: colors.muted, fontWeight: '600' }}>Cancel</Text>
+            </Pressable>
+            <Pressable testID="tab-rename-save" onPress={commitRename} hitSlop={6}>
+              <Text style={{ color: colors.brand, fontWeight: '700' }}>Save</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  ) : null;
 
   return (
     <View
@@ -74,8 +145,16 @@ export default function OpenTabsStrip({
             >
               <Pressable
                 testID={`opentab-${t.id}`}
-                onPress={() => {
-                  if (active) return;
+                onPress={(e) => {
+                  if (active) {
+                    // Tapping the tab you're already on has nothing to navigate
+                    // to, so use it to rename. Anchored at the touch point so
+                    // the field appears where the finger already is.
+                    const { pageX, pageY } = e.nativeEvent;
+                    setDraft(t.title || '');
+                    setRenaming({ id: t.id, title: t.title || '', x: pageX, y: pageY });
+                    return;
+                  }
                   // Find the type of the CURRENT tab so we can decide whether to swap
                   // params (same type — no transition) or do a stack replace.
                   const cur = tabs.find((x) => x.id === currentId);
@@ -139,6 +218,7 @@ export default function OpenTabsStrip({
       </ScrollView>
 
       {rightSlot ? <View style={styles.slot}>{rightSlot}</View> : null}
+      {renamePopover}
     </View>
   );
 }

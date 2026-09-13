@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
-import { spacing, radius, typeScale, ACCENTS, AccentKey } from '@/src/theme/tokens';
+import { spacing, radius, typeScale, ACCENTS, AccentKey, CANVAS_COLORS } from '@/src/theme/tokens';
 import { useAppSettings, GestureAction, SPenAction } from '@/src/state/useAppSettings';
 import { lockStore } from '@/src/state/lockStore';
 
@@ -146,7 +146,10 @@ export default function SettingsScreen() {
       {wide && (
         <Pressable
           testID="settings-backdrop"
-          onPress={() => router.back()}
+          // onPressIn, not onPress. Settings opens as a slide-over on top of
+          // the drawing screen, and the natural way to dismiss it is to start
+          // writing again — which is a drag, so onPress never fired.
+          onPressIn={() => router.back()}
           style={{ flex: 1, backgroundColor: 'transparent' }}
         />
       )}
@@ -291,6 +294,39 @@ export default function SettingsScreen() {
             thumbColor={settings.statusBarHidden ? colors.brand : colors.muted}
             trackColor={{ false: colors.border, true: colors.brandTertiary }}
           />
+        </View>
+
+        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>CANVAS</Text>
+        <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.sm }}>
+          Default colour of the surface pages sit on. Notes that already have
+          their own canvas colour keep it; change a single note from its
+          three-dots menu.
+        </Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm }}>
+          {CANVAS_COLORS.map((c) => {
+            const active = (settings.defaultCanvasColor || '#d4d4d4').toLowerCase() === c.hex.toLowerCase();
+            return (
+              <Pressable
+                key={c.id}
+                testID={`settings-canvas-${c.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={c.label}
+                onPress={() => update({ defaultCanvasColor: c.hex })}
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 23,
+                  backgroundColor: c.hex,
+                  borderWidth: active ? 3 : 1,
+                  borderColor: active ? colors.brand : colors.border,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {active && <Ionicons name="checkmark" size={20} color={colors.brand} />}
+              </Pressable>
+            );
+          })}
         </View>
 
         <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>FEEDBACK</Text>

@@ -27,6 +27,12 @@ export interface AppSettings {
   // count derived from viewport width; >1 shows FEWER, larger tiles; <1 shows
   // MORE, smaller tiles. Persisted so the user's preferred density sticks.
   homeTileScale: number;
+  /**
+   * Default colour of the canvas the pages sit on. A note that has its own
+   * canvas colour saved keeps it; this is only the starting point for notes
+   * that don't, so changing it doesn't rewrite existing work.
+   */
+  defaultCanvasColor: string;
 }
 
 const KEY = StorageKeys.appSettings;
@@ -36,6 +42,7 @@ const DEFAULTS: AppSettings = {
   gestureTwoFingerTap: 'undo',
   gestureThreeFingerTap: 'redo',
   toolbarPosition: 'left',
+  defaultCanvasColor: '#d4d4d4',
   palmRejection: false,
   favoriteHwColors: ['#FBFAF6', '#F4ECDA', '#FFF4C4'], // White, Cream, Yellow
   statusBarHidden: false,

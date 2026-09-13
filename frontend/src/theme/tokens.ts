@@ -190,3 +190,20 @@ export function withAlpha(hex: string, alpha: number): string {
   const int = parseInt(m[1], 16);
   return `rgba(${(int >> 16) & 0xff},${(int >> 8) & 0xff},${int & 0xff},${alpha})`;
 }
+
+
+/**
+ * Colours offered for the canvas surround (the surface pages sit on).
+ * Deliberately desaturated: the surround sits against the page all day, and a
+ * saturated colour fights the ink.
+ */
+export const CANVAS_COLORS = [
+  { id: 'light', label: 'Light grey', hex: '#d4d4d4' },
+  { id: 'paper', label: 'Warm grey', hex: '#cfc9bf' },
+  { id: 'slate', label: 'Slate', hex: '#8a8f94' },
+  { id: 'graphite', label: 'Graphite', hex: '#4a4d50' },
+  { id: 'ink', label: 'Near black', hex: '#1c1d1f' },
+  { id: 'olive', label: 'Olive', hex: '#9aa08c' },
+  { id: 'navy', label: 'Navy', hex: '#3c4658' },
+  { id: 'white', label: 'White', hex: '#f5f5f5' },
+] as const;
