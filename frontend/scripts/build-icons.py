@@ -52,6 +52,23 @@ SPLASH_BACKGROUND = "#000000"
 
 # Android reserves the outer 33%: a 1024 px foreground has a 682 px safe circle.
 ADAPTIVE_SAFE_FRACTION = 0.66
+# Fraction of the 1024 canvas the full badge occupies.
+#
+# Derived, not guessed. An Android adaptive icon is a 108dp canvas of which only
+# the centre 72dp is guaranteed visible, so the safe circle has diameter
+# 72/108 = 0.667 of the canvas. A square inscribed in that circle has side
+# 0.667 / sqrt(2) = 0.472.
+#
+# A previous version shipped 0.58 because the mask preview was drawn at the full
+# canvas instead of the safe zone, which is why the wordmark was still clipped on
+# device. 0.45 leaves a little margin under launchers that mask tighter still.
+BADGE_SCALE = 0.45
+
+# Same derivation for the Android 12+ splash icon: a 288dp image masked to a
+# 192dp circle, so the safe circle is 0.667 of the canvas. The wordmark lockup is
+# about 1.5:1, and a 1.5:1 rectangle inscribed in that circle can be at most
+# 0.556 of the canvas wide. 0.52 leaves margin.
+SPLASH_WORDMARK_WIDTH = 0.52
 
 
 def load_source() -> Image.Image:
@@ -88,24 +105,34 @@ def build_legacy_icon(src: Image.Image) -> Image.Image:
 
 
 def build_adaptive_foreground(src: Image.Image) -> Image.Image:
-    """Emblem on transparency, scaled into Android's guaranteed-visible circle."""
-    # Take the emblem with a little air, then mask it to a soft-edged disc so no
-    # square edge can show through a circular launcher mask.
-    half = EMBLEM_R
-    emblem = square_crop(src, EMBLEM_CX, EMBLEM_CY, half).convert("RGBA")
+    """The whole badge, wordmark included, scaled to survive Android's masks.
 
-    size = emblem.size[0]
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(3))
-    emblem.putalpha(mask)
+    Earlier this cropped to the emblem and dropped the "GEODESIC NOTES"
+    wordmark, on the reasoning that the launcher prints the app name anyway.
+    Keeping the wordmark means the badge has to shrink: Android may mask the
+    icon to a circle, and a square only fits inside a circle at about 70% of its
+    diameter. At 58% of the 1024 canvas the full badge clears every mask shape
+    with a little air, which is what BADGE_SCALE is.
 
-    safe = int(1024 * ADAPTIVE_SAFE_FRACTION)
-    emblem = emblem.resize((safe, safe), Image.LANCZOS)
+    Trade-off, stated plainly: at a 48 dp launcher size the wordmark is a few
+    pixels tall and reads as texture rather than text. It is legible in the app
+    drawer and in settings, not on the home screen.
+    """
+    badge = src.crop(BADGE).convert("RGBA")
+    side = int(1024 * BADGE_SCALE)
+    badge = badge.resize((side, side), Image.LANCZOS)
+
+    # Round the badge's own corners so its hard edge never fights the system
+    # mask, and feather it so the boundary is not a stair-step at small sizes.
+    mask = Image.new("L", (side, side), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, side - 1, side - 1), radius=int(side * 0.14), fill=255
+    )
+    badge.putalpha(mask.filter(ImageFilter.GaussianBlur(2)))
 
     canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
-    offset = (1024 - safe) // 2
-    canvas.paste(emblem, (offset, offset), emblem)
+    offset = (1024 - side) // 2
+    canvas.paste(badge, (offset, offset), badge)
     return canvas
 
 
@@ -153,34 +180,52 @@ def build_adaptive_background(_src: Image.Image) -> Image.Image:
     return Image.composite(highlight, out, vignette.point(lambda v: v // 3))
 
 
-def build_splash(src: Image.Image) -> Image.Image:
-    """Splash icon: the emblem, square, sized for a circular mask.
+def build_splash(_src: Image.Image) -> Image.Image:
+    """The wordmark lockup, on a square canvas, sized to survive a circular mask.
 
-    Android 12+ hands the splash image to the system SplashScreen API, which
-    masks it to a **circle** (240 dp outer, ~160 dp of guaranteed inner space).
-    The wide "GEODESIC NOTES" wordmark lockup is roughly 1.5:1, so the mask cut
-    the ends off and it rendered as "DESIC N". No amount of `imageWidth` or
-    `resizeMode` fixes that: the artwork has to be square.
+    Android 12+ masks the splash icon to a circle. An earlier attempt fixed the
+    cropping by dropping the wordmark and using the round emblem instead, which
+    worked but lost the name. The wordmark can be kept: what it cannot do is
+    reach the canvas edges.
 
-    So the splash uses the round emblem instead of the wordmark. The launcher
-    already shows the app name under the icon, and the system shows it while
-    loading, so the text was redundant anyway.
+    So the canvas is square (it has to be, or the mask clips the sides) and the
+    lockup sits centred at SPLASH_WORDMARK_WIDTH, which is the widest a 1.5:1
+    rectangle can be while still fitting inside the mask's circle.
     """
-    emblem = square_crop(src, EMBLEM_CX, EMBLEM_CY, EMBLEM_R).convert("RGBA")
-    size = emblem.size[0]
+    import numpy as np
+    from scipy import ndimage
 
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(4))
-    emblem.putalpha(mask)
+    if not SPLASH_SOURCE.exists():
+        raise SystemExit(f"Missing splash artwork: {SPLASH_SOURCE}")
 
-    # Sit the emblem inside the guaranteed-visible portion of the circular mask
-    # rather than letting it run to the edge, where it can be clipped.
-    canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
-    inner = int(1024 * 0.68)
-    emblem = emblem.resize((inner, inner), Image.LANCZOS)
-    offset = (1024 - inner) // 2
-    canvas.paste(emblem, (offset, offset), emblem)
+    rgb = np.array(Image.open(SPLASH_SOURCE).convert("RGB")).astype(np.float32)
+    lum = rgb.mean(axis=2)
+
+    # Alpha from a flood fill seeded at the frame edge, not a plain threshold: a
+    # threshold would punch holes through every enclosed black area inside the
+    # mark (the book's unlit pages, the cells between the globe struts, the
+    # counters inside the letters).
+    dark = lum < 14
+    labels, _ = ndimage.label(dark)
+    edge_labels = set(
+        np.unique(np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]))
+    ) - {0}
+    surround = np.isin(labels, list(edge_labels))
+
+    alpha = np.full(lum.shape, 255.0)
+    alpha[surround] = (np.clip((lum - 4.0) / 20.0, 0.0, 1.0) * 255.0)[surround]
+
+    mark = Image.fromarray(np.dstack([rgb.astype(np.uint8), alpha.astype(np.uint8)]), "RGBA")
+    bbox = mark.getchannel("A").point(lambda v: 255 if v > 6 else 0).getbbox()
+    mark = mark.crop(bbox)
+
+    canvas_size = 1024
+    target_w = int(canvas_size * SPLASH_WORDMARK_WIDTH)
+    target_h = round(target_w * mark.height / mark.width)
+    mark = mark.resize((target_w, target_h), Image.LANCZOS)
+
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    canvas.paste(mark, ((canvas_size - target_w) // 2, (canvas_size - target_h) // 2), mark)
     return canvas
 
 
@@ -276,10 +321,10 @@ def main() -> None:
     splash.save(OUT / "splash-image.png", optimize=True)
 
     print(f"icon.png             512x512   opaque, full bleed (legacy + web)")
-    print(f"adaptive-icon.png   1024x1024  emblem in the {int(ADAPTIVE_SAFE_FRACTION * 100)}% safe zone")
+    print(f"adaptive-icon.png   1024x1024  full badge + wordmark at {int(BADGE_SCALE * 100)}% (fits 66% safe circle)")
     print(f"adaptive-icon-background.png 1024x1024  slate texture, full bleed")
     print(f"adaptive-icon-monochrome.png 1024x1024  drawn glyph for themed icons")
-    print(f"splash-image.png   {splash.width}x{splash.height}  emblem, square (Android masks to a circle)")
+    print(f"splash-image.png   {splash.width}x{splash.height}  wordmark lockup, square canvas")
     print(f"favicon.png          196x196")
     print(f"\nbackground: {BACKGROUND}   splash: {SPLASH_BACKGROUND}")
 
