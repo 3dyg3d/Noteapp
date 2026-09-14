@@ -1590,6 +1590,34 @@ export default function DrawScreen() {
     setShowLabelPicker(true);
   }, []);
 
+  /**
+   * Folders in tree order, each with its nesting depth.
+   *
+   * The picker rendered `folders.map(...)` — the raw flat array — so a folder
+   * three levels deep looked identical to a top-level one and you couldn't
+   * tell which was inside which. Fully expanded: this is a destination
+   * chooser, so everything needs to be reachable without extra taps.
+   */
+  const folderTree = useMemo(() => {
+    const byParent = new Map<string | null, typeof folders>();
+    for (const f of folders) {
+      const key = f.parent_id ?? null;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key)!.push(f);
+    }
+    const out: { folder: (typeof folders)[number]; depth: number }[] = [];
+    const walk = (parent: string | null, depth: number) => {
+      // Guard against a cycle in stored data rather than recursing forever.
+      if (depth > 8) return;
+      for (const f of byParent.get(parent) ?? []) {
+        out.push({ folder: f, depth });
+        walk(f.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+  }, [folders]);
+
   const openFolderPicker = useCallback(async () => {
     // Refresh so folders created elsewhere are visible in the picker.
     try { setFolders(await FoldersApi.list()); } catch {}
@@ -3274,6 +3302,10 @@ export default function DrawScreen() {
               backgroundColor: colors.surface,
               borderRadius: radius.md,
               paddingVertical: spacing.sm,
+              // Clip to the rounded box. maxHeight alone caps the container but
+              // does nothing about children, so the last rows painted outside
+              // it once the menu grew past the limit.
+              overflow: 'hidden',
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 10 },
               shadowOpacity: 0.22,
@@ -3281,218 +3313,223 @@ export default function DrawScreen() {
               elevation: 16,
             }}
           >
-            <Text
-              style={{
-                color: colors.muted,
-                fontSize: typeScale.sm,
-                fontWeight: '700',
-                letterSpacing: 1.2,
-                paddingHorizontal: spacing.lg,
-                paddingTop: spacing.sm,
-                paddingBottom: spacing.xs,
-              }}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: spacing.xs }}
             >
-              PAGE
-            </Text>
-            <DrawMenuRow
-              icon="color-palette-outline"
-              label="Page color"
-              valueSwatch={paperColor}
-              onPress={() => { setShowPaperMenu(false); setShowSubColor(true); }}
-              testID="draw-menu-color"
-            />
-            {/* The surface the pages sit on, as distinct from the pages
-                themselves. Previously fixed at #d4d4d4 with no way to change it. */}
-            <DrawMenuRow
-              icon="color-palette-outline"
-              label="Canvas color"
-              onPress={() => { setShowPaperMenu(false); setShowSubCanvasColor(true); }}
-              testID="draw-menu-canvas-color"
-            />
-            <DrawMenuRow
-              icon={chrome === 'normal' ? 'expand-outline' : 'contract-outline'}
-              label="Full screen"
-              valueText={chrome === 'normal' ? 'Off' : chrome === 'immersive' ? 'Hide top bars' : 'Hide everything'}
-              onPress={() => {
-                haptic.selection();
-                setChrome((c) => (c === 'normal' ? 'immersive' : c === 'immersive' ? 'zen' : 'normal'));
-                setShowPaperMenu(false);
-              }}
-              testID="draw-menu-fullscreen"
-            />
-            <DrawMenuRow
-              icon={toolbarHidden ? 'eye-outline' : 'eye-off-outline'}
-              label="Toolbar"
-              valueText={toolbarHidden ? 'Hidden' : 'Shown'}
-              onPress={() => {
-                haptic.selection();
-                setToolbarHidden((v) => !v);
-                setShowPaperMenu(false);
-              }}
-              testID="draw-menu-toolbar-toggle"
-            />
-            {rulerEnabled && (
-              <>
-                <DrawMenuRow
-                  icon="options-outline"
-                  label="Ruler unit"
-                  valueText={rulerState.unit === 'cm' ? 'Centimeters' : 'Inches'}
-                  onPress={() => setRulerState((prev) => ({ ...prev, unit: prev.unit === 'cm' ? 'in' : 'cm' }))}
-                  testID="draw-menu-ruler-unit"
-                />
-                <DrawMenuRow
-                  icon="expand-outline"
-                  label="Ruler zoom"
-                  valueText={rulerState.scaleWithPaper ? 'Scale with paper' : 'True dimensions'}
-                  onPress={() => setRulerState((prev) => ({ ...prev, scaleWithPaper: !prev.scaleWithPaper }))}
-                  testID="draw-menu-ruler-scale"
-                />
-              </>
-            )}
-            <DrawMenuRow
-              icon="grid-outline"
-              label="Page template"
-              valueText={paper === 'blank' ? 'Blank' : paper.charAt(0).toUpperCase() + paper.slice(1)}
-              onPress={() => { setShowPaperMenu(false); setShowSubTemplate(true); }}
-              testID="draw-menu-template"
-            />
-            <DrawMenuRow
-              icon="resize-outline"
-              label="Page size"
-              valueText={paperSize === 'custom' ? 'Custom' : (PAPER_SIZES[paperSize]?.label || 'A4')}
-              onPress={() => { setShowPaperMenu(false); setShowSubSize(true); }}
-              testID="draw-menu-size"
-            />
-            {(paper === 'ruled' || paper === 'narrow' || paper === 'grid' || paper === 'dotted' || paper === 'cornell' || paper === 'planner' || paper === 'todo') && (
+              <Text
+                style={{
+                  color: colors.muted,
+                  fontSize: typeScale.sm,
+                  fontWeight: '700',
+                  letterSpacing: 1.2,
+                  paddingHorizontal: spacing.lg,
+                  paddingTop: spacing.sm,
+                  paddingBottom: spacing.xs,
+                }}
+              >
+                PAGE
+              </Text>
               <DrawMenuRow
-                icon="reorder-four-outline"
-                label="Line spacing"
-                valueText={`${lineSpacing ?? 28}px`}
-                onPress={() => { setShowPaperMenu(false); setShowSubSpacing(true); }}
-                testID="draw-menu-spacing"
+                icon="color-palette-outline"
+                label="Page color"
+                valueSwatch={paperColor}
+                onPress={() => { setShowPaperMenu(false); setShowSubColor(true); }}
+                testID="draw-menu-color"
               />
-            )}
-            {/* Inline toolbar position picker — 4 options as a segmented row. */}
-            <Text
-              style={{
-                color: colors.muted,
-                fontSize: typeScale.sm,
-                fontWeight: '600',
-                paddingHorizontal: spacing.lg,
-                paddingTop: spacing.sm,
-                marginBottom: 4,
-              }}
-            >
-              Toolbar position
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: spacing.lg, marginBottom: spacing.sm }}>
-              {(['top', 'bottom', 'left', 'right'] as const).map((pos) => {
-                const active = toolbarPos === pos;
-                const icon: any =
-                  pos === 'top'    ? 'align-vertical-top' :
-                  pos === 'bottom' ? 'align-vertical-bottom' :
-                  pos === 'left'   ? 'align-horizontal-left' : 'align-horizontal-right';
-                return (
-                  <Pressable
-                    key={pos}
-                    testID={`toolbar-pos-${pos}`}
-                    onPress={() => { haptic.selection(); update({ toolbarPosition: pos }); }}
-                    style={{
-                      flex: 1,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      paddingVertical: 8,
-                      borderRadius: radius.sm,
-                      backgroundColor: active ? colors.brand : colors.surfaceSecondary,
-                    }}
-                  >
-                    <MaterialCommunityIcons name={icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
-                    <Text style={{ fontSize: 9, color: active ? colors.onBrandPrimary : colors.onSurface, marginTop: 2, fontWeight: '600', textTransform: 'capitalize' }}>
-                      {pos}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm, marginHorizontal: spacing.lg }} />
-
-            <Text
-              style={{
-                color: colors.muted,
-                fontSize: typeScale.sm,
-                fontWeight: '700',
-                letterSpacing: 1.2,
-                paddingHorizontal: spacing.lg,
-                paddingBottom: spacing.xs,
-              }}
-            >
-              NOTE
-            </Text>
-            <DrawMenuRow
-              icon="create-outline"
-              label="Rename"
-              onPress={(e) => {
-                const t = e?.currentTarget;
-                const commit = (anchor: { x: number; y: number; w: number; h: number } | null) => {
-                  setTitleAnchor(anchor);
+              {/* The surface the pages sit on, as distinct from the pages
+                  themselves. Previously fixed at #d4d4d4 with no way to change it. */}
+              <DrawMenuRow
+                icon="color-palette-outline"
+                label="Canvas color"
+                onPress={() => { setShowPaperMenu(false); setShowSubCanvasColor(true); }}
+                testID="draw-menu-canvas-color"
+              />
+              <DrawMenuRow
+                icon={chrome === 'normal' ? 'expand-outline' : 'contract-outline'}
+                label="Full screen"
+                valueText={chrome === 'normal' ? 'Off' : chrome === 'immersive' ? 'Hide top bars' : 'Hide everything'}
+                onPress={() => {
+                  haptic.selection();
+                  setChrome((c) => (c === 'normal' ? 'immersive' : c === 'immersive' ? 'zen' : 'normal'));
                   setShowPaperMenu(false);
-                  setTitleDraft(note.title);
-                  setShowTitleEdit(true);
-                };
-                if (t && typeof t.measureInWindow === 'function') {
-                  t.measureInWindow((x: number, y: number, w: number, h: number) => {
-                    commit({ x, y, w, h });
-                  });
-                } else {
-                  commit(null);
-                }
-              }}
-              testID="draw-menu-rename"
-            />
-            <DrawMenuRow
-              icon="folder-outline"
-              label={currentFolder ? `Folder: ${currentFolder.name}` : 'Move to folder'}
-              onPress={() => { setShowPaperMenu(false); openFolderPicker(); }}
-              testID="draw-menu-folder"
-            />
-            <DrawMenuRow
-              icon="pricetag-outline"
-              label={noteLabels.length ? `Labels (${noteLabels.length})` : 'Add labels'}
-              onPress={() => { setShowPaperMenu(false); openLabelPicker(); }}
-              testID="draw-menu-labels"
-            />
-            <DrawMenuRow
-              icon="settings-outline"
-              label="Settings"
-              onPress={() => { setShowPaperMenu(false); router.push('/settings'); }}
-              testID="draw-menu-settings"
-            />
-            <DrawMenuRow
-              icon="arrow-undo-outline"
-              label="Undo"
-              onPress={() => { setShowPaperMenu(false); undo(); }}
-              testID="draw-menu-undo"
-            />
-            <DrawMenuRow
-              icon="arrow-redo-outline"
-              label="Redo"
-              onPress={() => { setShowPaperMenu(false); redo(); }}
-              testID="draw-menu-redo"
-            />
-            <DrawMenuRow
-              icon="refresh"
-              label="Clear canvas"
-              onPress={() => { setShowPaperMenu(false); clearAll(); }}
-              testID="draw-menu-clear"
-            />
-            <DrawMenuRow
-              icon="trash-outline"
-              label="Move to trash"
-              destructive
-              onPress={() => { setShowPaperMenu(false); exitDelete(); }}
-              testID="draw-menu-delete"
-            />
+                }}
+                testID="draw-menu-fullscreen"
+              />
+              <DrawMenuRow
+                icon={toolbarHidden ? 'eye-outline' : 'eye-off-outline'}
+                label="Toolbar"
+                valueText={toolbarHidden ? 'Hidden' : 'Shown'}
+                onPress={() => {
+                  haptic.selection();
+                  setToolbarHidden((v) => !v);
+                  setShowPaperMenu(false);
+                }}
+                testID="draw-menu-toolbar-toggle"
+              />
+              {rulerEnabled && (
+                <>
+                  <DrawMenuRow
+                    icon="options-outline"
+                    label="Ruler unit"
+                    valueText={rulerState.unit === 'cm' ? 'Centimeters' : 'Inches'}
+                    onPress={() => setRulerState((prev) => ({ ...prev, unit: prev.unit === 'cm' ? 'in' : 'cm' }))}
+                    testID="draw-menu-ruler-unit"
+                  />
+                  <DrawMenuRow
+                    icon="expand-outline"
+                    label="Ruler zoom"
+                    valueText={rulerState.scaleWithPaper ? 'Scale with paper' : 'True dimensions'}
+                    onPress={() => setRulerState((prev) => ({ ...prev, scaleWithPaper: !prev.scaleWithPaper }))}
+                    testID="draw-menu-ruler-scale"
+                  />
+                </>
+              )}
+              <DrawMenuRow
+                icon="grid-outline"
+                label="Page template"
+                valueText={paper === 'blank' ? 'Blank' : paper.charAt(0).toUpperCase() + paper.slice(1)}
+                onPress={() => { setShowPaperMenu(false); setShowSubTemplate(true); }}
+                testID="draw-menu-template"
+              />
+              <DrawMenuRow
+                icon="resize-outline"
+                label="Page size"
+                valueText={paperSize === 'custom' ? 'Custom' : (PAPER_SIZES[paperSize]?.label || 'A4')}
+                onPress={() => { setShowPaperMenu(false); setShowSubSize(true); }}
+                testID="draw-menu-size"
+              />
+              {(paper === 'ruled' || paper === 'narrow' || paper === 'grid' || paper === 'dotted' || paper === 'cornell' || paper === 'planner' || paper === 'todo') && (
+                <DrawMenuRow
+                  icon="reorder-four-outline"
+                  label="Line spacing"
+                  valueText={`${lineSpacing ?? 28}px`}
+                  onPress={() => { setShowPaperMenu(false); setShowSubSpacing(true); }}
+                  testID="draw-menu-spacing"
+                />
+              )}
+              {/* Inline toolbar position picker — 4 options as a segmented row. */}
+              <Text
+                style={{
+                  color: colors.muted,
+                  fontSize: typeScale.sm,
+                  fontWeight: '600',
+                  paddingHorizontal: spacing.lg,
+                  paddingTop: spacing.sm,
+                  marginBottom: 4,
+                }}
+              >
+                Toolbar position
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: spacing.lg, marginBottom: spacing.sm }}>
+                {(['top', 'bottom', 'left', 'right'] as const).map((pos) => {
+                  const active = toolbarPos === pos;
+                  const icon: any =
+                    pos === 'top'    ? 'align-vertical-top' :
+                    pos === 'bottom' ? 'align-vertical-bottom' :
+                    pos === 'left'   ? 'align-horizontal-left' : 'align-horizontal-right';
+                  return (
+                    <Pressable
+                      key={pos}
+                      testID={`toolbar-pos-${pos}`}
+                      onPress={() => { haptic.selection(); update({ toolbarPosition: pos }); }}
+                      style={{
+                        flex: 1,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        paddingVertical: 8,
+                        borderRadius: radius.sm,
+                        backgroundColor: active ? colors.brand : colors.surfaceSecondary,
+                      }}
+                    >
+                      <MaterialCommunityIcons name={icon} size={16} color={active ? colors.onBrandPrimary : colors.onSurface} />
+                      <Text style={{ fontSize: 9, color: active ? colors.onBrandPrimary : colors.onSurface, marginTop: 2, fontWeight: '600', textTransform: 'capitalize' }}>
+                        {pos}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm, marginHorizontal: spacing.lg }} />
+
+              <Text
+                style={{
+                  color: colors.muted,
+                  fontSize: typeScale.sm,
+                  fontWeight: '700',
+                  letterSpacing: 1.2,
+                  paddingHorizontal: spacing.lg,
+                  paddingBottom: spacing.xs,
+                }}
+              >
+                NOTE
+              </Text>
+              <DrawMenuRow
+                icon="create-outline"
+                label="Rename"
+                onPress={(e) => {
+                  const t = e?.currentTarget;
+                  const commit = (anchor: { x: number; y: number; w: number; h: number } | null) => {
+                    setTitleAnchor(anchor);
+                    setShowPaperMenu(false);
+                    setTitleDraft(note.title);
+                    setShowTitleEdit(true);
+                  };
+                  if (t && typeof t.measureInWindow === 'function') {
+                    t.measureInWindow((x: number, y: number, w: number, h: number) => {
+                      commit({ x, y, w, h });
+                    });
+                  } else {
+                    commit(null);
+                  }
+                }}
+                testID="draw-menu-rename"
+              />
+              <DrawMenuRow
+                icon="folder-outline"
+                label={currentFolder ? `Folder: ${currentFolder.name}` : 'Move to folder'}
+                onPress={() => { setShowPaperMenu(false); openFolderPicker(); }}
+                testID="draw-menu-folder"
+              />
+              <DrawMenuRow
+                icon="pricetag-outline"
+                label={noteLabels.length ? `Labels (${noteLabels.length})` : 'Add labels'}
+                onPress={() => { setShowPaperMenu(false); openLabelPicker(); }}
+                testID="draw-menu-labels"
+              />
+              <DrawMenuRow
+                icon="settings-outline"
+                label="Settings"
+                onPress={() => { setShowPaperMenu(false); router.push('/settings'); }}
+                testID="draw-menu-settings"
+              />
+              <DrawMenuRow
+                icon="arrow-undo-outline"
+                label="Undo"
+                onPress={() => { setShowPaperMenu(false); undo(); }}
+                testID="draw-menu-undo"
+              />
+              <DrawMenuRow
+                icon="arrow-redo-outline"
+                label="Redo"
+                onPress={() => { setShowPaperMenu(false); redo(); }}
+                testID="draw-menu-redo"
+              />
+              <DrawMenuRow
+                icon="refresh"
+                label="Clear canvas"
+                onPress={() => { setShowPaperMenu(false); clearAll(); }}
+                testID="draw-menu-clear"
+              />
+              <DrawMenuRow
+                icon="trash-outline"
+                label="Move to trash"
+                destructive
+                onPress={() => { setShowPaperMenu(false); exitDelete(); }}
+                testID="draw-menu-delete"
+              />
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -3972,7 +4009,7 @@ export default function DrawScreen() {
                 <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>No folder</Text>
                 {!note.folder_id && <Ionicons name="checkmark" size={18} color={colors.brand} />}
               </Pressable>
-              {folders.map((f) => (
+              {folderTree.map(({ folder: f, depth }) => (
                 <Pressable
                   key={f.id}
                   testID={`draw-folder-pick-${f.id}`}
@@ -3981,12 +4018,26 @@ export default function DrawScreen() {
                     flexDirection: 'row',
                     alignItems: 'center',
                     paddingVertical: spacing.md,
+                    // Indent by nesting depth so the hierarchy is visible.
+                    paddingLeft: depth * 18,
                     borderBottomWidth: StyleSheet.hairlineWidth,
                     borderBottomColor: colors.divider,
                   }}
                 >
-                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: f.color, marginRight: spacing.md }} />
-                  <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{f.name}</Text>
+                  {depth > 0 && (
+                    <Ionicons
+                      name="return-down-forward-outline"
+                      size={14}
+                      color={colors.muted}
+                      style={{ marginRight: 4 }}
+                    />
+                  )}
+                  {/* A folder icon, not a colour dot: the dot matched the label
+                      rows elsewhere and said nothing about what the row was. */}
+                  <Ionicons name="folder" size={20} color={f.color} style={{ marginRight: spacing.md }} />
+                  <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>
+                    {f.name}
+                  </Text>
                   {note.folder_id === f.id && <Ionicons name="checkmark" size={18} color={colors.brand} />}
                 </Pressable>
               ))}

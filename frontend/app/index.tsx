@@ -196,7 +196,7 @@ export default function HomeScreen() {
    * an icon and a one-line caption need, so folders ended up marooned in
    * whitespace. Roughly 108pt each, packed to fill the row.
    */
-  const folderCols = useMemo(() => Math.max(4, Math.floor((winW - spacing.lg * 2) / 84)), [winW]);
+  const folderCols = useMemo(() => Math.max(3, Math.floor((winW - spacing.lg * 2) / 126)), [winW]);
   const folderPxWidth = useMemo(() => {
     const avail = winW - spacing.lg * 2 - spacing.xs * (folderCols - 1);
     return avail / folderCols;
@@ -1216,7 +1216,7 @@ export default function HomeScreen() {
             },
           ]}
         >
-          <Ionicons name="add-circle-outline" size={48} color={colors.brand} />
+          <Ionicons name="add-circle-outline" size={72} color={colors.brand} />
           <Text numberOfLines={1} style={{ color: colors.brand, fontWeight: '600', marginTop: spacing.xs, fontSize: typeScale.sm }}>
             New folder
           </Text>
@@ -1236,14 +1236,14 @@ export default function HomeScreen() {
               },
             ]}
           >
-            <Ionicons name="folder" size={54} color={f.color} />
+            <Ionicons name="folder" size={81} color={f.color} />
             <Text
               numberOfLines={1}
               style={{
                 marginTop: spacing.xs,
                 fontWeight: '600',
                 color: colors.onSurface,
-                fontSize: typeScale.sm,
+                fontSize: typeScale.base,
                 maxWidth: '100%',
               }}
             >
@@ -2168,7 +2168,7 @@ export default function HomeScreen() {
                 style={[styles.folderRow, { borderBottomColor: colors.divider }]}
                 testID="move-folder-none"
               >
-                <View style={[styles.folderDot, { backgroundColor: colors.muted }]} />
+                <Ionicons name="folder-open-outline" size={20} color={colors.muted} style={{ marginRight: spacing.md }} />
                 <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>No folder</Text>
               </Pressable>
               {tree.map(({ folder: f, depth }) => (
@@ -2178,8 +2178,8 @@ export default function HomeScreen() {
                   style={[styles.folderRow, { borderBottomColor: colors.divider, paddingLeft: spacing.md + depth * 16 }]}
                   testID={`move-folder-${f.id}`}
                 >
-                  <View style={[styles.folderDot, { backgroundColor: f.color }]} />
-                  <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>{f.name}</Text>
+                  <Ionicons name="folder" size={20} color={f.color} style={{ marginRight: spacing.md }} />
+                  <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{f.name}</Text>
                 </Pressable>
               ))}
             </ScrollView>
@@ -3362,8 +3362,8 @@ const styles = StyleSheet.create({
     // Was a 130pt boxed card, which gave folders more weight than the notes
     // inside them. No background or border now, but the glyph is back up to a
     // readable size — the first pass overcorrected and left them tiny.
-    height: 88,
-    paddingVertical: 2,
+    height: 132,
+    paddingVertical: spacing.xs,
     paddingHorizontal: 0,
     alignItems: 'center',
     justifyContent: 'center',

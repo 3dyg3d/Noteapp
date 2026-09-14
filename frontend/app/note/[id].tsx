@@ -109,6 +109,26 @@ export default function NoteEditor() {
 
   queueRef.current = queue;
 
+  /** Folders in tree order with nesting depth, so the picker shows hierarchy. */
+  const folderTree = useMemo(() => {
+    const byParent = new Map<string | null, Folder[]>();
+    for (const f of folders) {
+      const key = f.parent_id ?? null;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key)!.push(f);
+    }
+    const out: { folder: Folder; depth: number }[] = [];
+    const walk = (parent: string | null, depth: number) => {
+      if (depth > 8) return; // guard against a cycle in stored data
+      for (const f of byParent.get(parent) ?? []) {
+        out.push({ folder: f, depth });
+        walk(f.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+  }, [folders]);
+
   const reload = useCallback(async () => {
     try {
       const fresh = await NotesApi.get(id as string);
@@ -713,21 +733,24 @@ export default function NoteEditor() {
               style={[styles.folderRow, { borderBottomColor: colors.divider }]}
               testID="folder-none"
             >
-              <View style={[styles.folderDot, { backgroundColor: colors.muted }]} />
+              <Ionicons name="folder-open-outline" size={20} color={colors.muted} style={{ marginRight: spacing.md }} />
               <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>No folder</Text>
             </Pressable>
-            {folders.map((f) => (
+            {folderTree.map(({ folder: f, depth }) => (
               <Pressable
                 key={f.id}
                 onPress={() => {
                   persistImmediately({ folder_id: f.id });
                   setShowFolderPicker(false);
                 }}
-                style={[styles.folderRow, { borderBottomColor: colors.divider }]}
+                style={[styles.folderRow, { borderBottomColor: colors.divider, paddingLeft: depth * 18 }]}
                 testID={`folder-pick-${f.id}`}
               >
-                <View style={[styles.folderDot, { backgroundColor: f.color }]} />
-                <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>{f.name}</Text>
+                {depth > 0 && (
+                  <Ionicons name="return-down-forward-outline" size={14} color={colors.muted} style={{ marginRight: 4 }} />
+                )}
+                <Ionicons name="folder" size={20} color={f.color} style={{ marginRight: spacing.md }} />
+                <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: typeScale.lg, flex: 1 }}>{f.name}</Text>
               </Pressable>
             ))}
             {folders.length === 0 && (
