@@ -23,6 +23,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import InkStroke from '@/src/ink/InkStroke';
 import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
+import { NativeInkView, toAndroidColor, type NativeStrokeEvent } from '@/modules/geodesic-ink';
 import { InkPoint, InkTool, inkNow, commitPoints, annotateWidth, OneEuro2D, effectiveWidth } from '@/src/ink/stroke';
 import { buildPreview } from '@/src/ink/preview';
 import type { SaveStatus } from '@/src/hooks/usePatchQueue';
@@ -611,6 +612,11 @@ export default function DrawScreen() {
   // Active drawing state (refs to avoid re-renders per touch)
   const livePtsRef = useRef<InkPoint[]>([]);
   const inkFilterRef = useRef(new OneEuro2D());
+  // Native wet ink (Android). When active it owns stylus pen strokes; the JS
+  // pan below stands aside for them. Fingers, other tools and the ruler still
+  // go through JS.
+  const [nativeCommittedId, setNativeCommittedId] = useState(0);
+  const nativeInkActiveRef = useRef(false);
   const lastRawRef = useRef<InkPoint | null>(null);
   // Imperative handle to the wet-ink layer; see src/ink/LiveStrokeLayer.tsx.
   const liveStrokeRef = useRef<LiveStrokeHandle | null>(null);
@@ -1319,6 +1325,12 @@ export default function DrawScreen() {
       // Default to allowing when pointerType is undefined (older devices) — but
       // still explicitly block when we know it's a finger.
       isStylusRef.current = pt !== 0;
+      // The native layer is drawing this stroke; don't draw it twice.
+      if (nativeInkActiveRef.current && pt === 1 && isPenTool(tool)) {
+        livePtsRef.current = [];
+        clearLive();
+        return;
+      }
       if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
@@ -1517,6 +1529,36 @@ export default function DrawScreen() {
     });
 
   const finalGesture = Gesture.Simultaneous(pan, composedGesture, fingerScrollPan, tapsGesture);
+
+  const nativeInkActive =
+    !!NativeInkView && settings.nativeInk !== false && isPenTool(tool) && !rulerEnabled;
+  nativeInkActiveRef.current = nativeInkActive;
+
+  /**
+   * A stroke finished on the native layer. Its points are already in world
+   * units, filtered, with widths fixed, exactly as the JS path produces them,
+   * so it commits through the same code. The native layer keeps drawing it
+   * until the committed copy has had time to render, then drops it.
+   */
+  const onNativeStroke = (e: NativeStrokeEvent) => {
+    const { id, points: flat } = e.nativeEvent;
+    const pts: InkPoint[] = [];
+    for (let i = 0; i + 4 < flat.length; i += 5) {
+      pts.push({ x: flat[i], y: flat[i + 1], t: flat[i + 2], p: flat[i + 3], w: flat[i + 4] });
+    }
+    if (pts.length >= 2) {
+      const last = pts[pts.length - 1];
+      if (autoAddPageRef.current && last.y > totalPageH - 120) {
+        setPageCount((c) => c + 1);
+        setScrollY(pageCount * pageStrideY);
+      }
+      finalizeStroke(pts);
+    }
+    // Two frames for the committed stroke to reach the screen, plus margin.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => setTimeout(() => setNativeCommittedId((c) => Math.max(c, id)), 32))
+    );
+  };
 
   // ----- Render strokes -----
   // Committed strokes render through <InkStroke />, which caches its SkPath
@@ -2330,6 +2372,23 @@ export default function DrawScreen() {
                     </Group>
                   </Group>
                 </Canvas>
+                {/* Native wet ink sits over the Skia canvas. Mounted for the
+                    whole session (not just while a pen tool is selected) so
+                    switching tools doesn't recreate it; `inkEnabled` gates it,
+                    and when off it ignores every touch. */}
+                {NativeInkView && settings.nativeInk !== false && (
+                  <NativeInkView
+                    style={StyleSheet.absoluteFill}
+                    inkEnabled={nativeInkActive}
+                    tool={tool}
+                    inkColor={toAndroidColor(color)}
+                    baseWidth={isPenTool(tool) ? widths[tool] : 2}
+                    viewTransform={[scale, tx, ty]}
+                    pages={[pageDims.w, basePageH, pageStrideY, pageCount]}
+                    committedId={nativeCommittedId}
+                    onStroke={onNativeStroke}
+                  />
+                )}
               </View>
             </GestureDetector>
           ) : (

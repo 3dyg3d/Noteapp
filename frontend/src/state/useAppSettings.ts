@@ -52,6 +52,11 @@ export interface AppSettings {
   /** Home list order, remembered across launches. */
   homeSortBy: 'updated' | 'created' | 'title';
   homeSortDir: 'desc' | 'asc';
+  /**
+   * Draw the stroke being written with the native ink layer (Android). Lower
+   * latency; off falls back to the JavaScript path.
+   */
+  nativeInk: boolean;
 }
 
 const KEY = StorageKeys.appSettings;
@@ -70,6 +75,7 @@ const DEFAULTS: AppSettings = {
   lastPageSetup: null,
   homeSortBy: 'updated',
   homeSortDir: 'desc',
+  nativeInk: true,
 };
 
 let cache: AppSettings | null = null;

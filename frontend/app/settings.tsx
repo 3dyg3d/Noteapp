@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch, useWi
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { NativeInkView } from '@/modules/geodesic-ink';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, ACCENTS, AccentKey, CANVAS_COLORS } from '@/src/theme/tokens';
@@ -507,6 +508,25 @@ export default function SettingsScreen() {
             trackColor={{ false: colors.border, true: colors.brandTertiary }}
           />
         </View>
+
+        {NativeInkView && (
+          <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md }]}>
+            <Ionicons name="flash-outline" size={22} color={colors.onSurface} />
+            <View style={{ flex: 1, marginLeft: spacing.md }}>
+              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Low-latency ink</Text>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+                Draws S Pen strokes natively, using every pen sample. Turn off if ink misbehaves.
+              </Text>
+            </View>
+            <Switch
+              testID="toggle-native-ink"
+              value={settings.nativeInk}
+              onValueChange={(v) => update({ nativeInk: v })}
+              thumbColor={settings.nativeInk ? colors.brand : colors.muted}
+              trackColor={{ false: colors.border, true: colors.brandTertiary }}
+            />
+          </View>
+        )}
 
         <ActionPicker
           label="S Pen button"
