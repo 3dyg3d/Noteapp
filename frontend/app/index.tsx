@@ -458,6 +458,12 @@ export default function HomeScreen() {
         paperColor: hwPaperColor, // hex
         orientation: hwOrientation,
         lineSpacing: hwSupportsSpacing(hwTemplate) ? hwLineSpacing : undefined,
+        // Written explicitly so a new note is complete on its own: it used to
+        // omit these, and the drawing screen filled the gaps from whatever
+        // note had been open before.
+        canvasColor: settings.defaultCanvasColor || '#d4d4d4',
+        pageCount: 1,
+        docVersion: 3,
         items: [],
       });
       const note = await NotesApi.create({

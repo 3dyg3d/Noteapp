@@ -11,6 +11,7 @@ import {
   Modal,
   useWindowDimensions,
   StatusBar,
+  AppState,
 } from 'react-native';
 import type { DimensionValue, ViewStyle } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -24,6 +25,7 @@ import InkStroke from '@/src/ink/InkStroke';
 import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
 import { InkPoint, InkTool, inkNow, simplify } from '@/src/ink/stroke';
 import { buildPreview } from '@/src/ink/preview';
+import type { SaveStatus } from '@/src/hooks/usePatchQueue';
 import { StorageKeys } from '@/src/state/storageKeys';
 import { GestureDetector, Gesture, PointerType } from 'react-native-gesture-handler';
 import { useSharedValue } from 'react-native-reanimated';
@@ -274,7 +276,6 @@ export default function DrawScreen() {
 
   const [note, setNote] = useState<Note | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
 
   // Doc & history
   const [items, setItems] = useState<Item[]>([]);
@@ -618,10 +619,26 @@ export default function DrawScreen() {
   // ----- Load -----
   useEffect(() => {
     let cancelled = false;
+    idRef.current = id as string;
+    dirtyRef.current = false;
+    loadedShapeRef.current = null;
+    setSaveStatus('idle');
     setLoading(true);
     setNote(null);
     setItems([]);
     historyRef.current = { undo: [], redo: [] };
+    // Reset every per-note setting to its default BEFORE applying the loaded
+    // document. Switching tabs between two handwritten notes reuses this
+    // screen, so anything the next note doesn't specify used to carry over from
+    // the previous one: page count, line spacing, orientation, canvas colour.
+    setPaper('blank');
+    setPaperSize('a4');
+    setCustomSize(null);
+    setOrientation('portrait');
+    setPaperColorId('white');
+    setLineSpacing(undefined);
+    setPageCount(1);
+    setCanvasColorHex(settings.defaultCanvasColor || '#d4d4d4');
     (async () => {
       try {
         const [n, ls, fs] = await Promise.all([
@@ -710,64 +727,179 @@ export default function DrawScreen() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Leaving this note (tab switch reuses the screen): write anything
+      // pending to THIS note before the next one's state replaces it.
+      void flushSave(id as string);
+    };
   }, [id]);
 
   // ----- Persist (debounced) -----
+  // ----- Saving -----
+  //
+  // The document to save is read from `docRef` at WRITE time, not captured when
+  // a change is made. The previous version took values as arguments and read
+  // the rest (line spacing, canvas colour, page count) from its closure, which
+  // still held the values from before the change — so line spacing and canvas
+  // colour edits were written with their OLD values and appeared to revert.
+  //
+  // Writes are debounced, serialised, flushed when the app backgrounds, when
+  // the screen unmounts and before switching to another note, and a failure is
+  // reported as an error rather than showing "Saved".
+  const docRef = useRef<{
+    items: Item[];
+    paper: Paper;
+    paperSize: PaperSize;
+    customSize: { w: number; h: number } | null;
+    orientation: 'portrait' | 'landscape';
+    paperColorId: string;
+    canvasColorHex: string;
+    lineSpacing: number | undefined;
+    pageCount: number;
+  } | null>(null);
+  docRef.current = {
+    items,
+    paper,
+    paperSize,
+    customSize,
+    orientation,
+    paperColorId,
+    canvasColorHex,
+    lineSpacing,
+    pageCount,
+  };
+  const idRef = useRef(id as string);
+  const dirtyRef = useRef(false);
+  const pendingTitleRef = useRef<string | undefined>(undefined);
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
+  const mountedRef = useRef(true);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+
+  /** Write the current document for `noteId` now, if anything changed. */
+  const flushSave = useCallback((noteId: string = idRef.current) => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    if (!dirtyRef.current || !docRef.current) return writeChainRef.current;
+    dirtyRef.current = false;
+    // Snapshot NOW, so a later note switch can't change what this write sends.
+    const d = docRef.current;
+    const title = pendingTitleRef.current;
+    pendingTitleRef.current = undefined;
+    const body: Partial<Note> = {
+      // A small, bounded render for the notes list, so the list never has to
+      // load the full document. See src/ink/preview.ts.
+      preview: buildPreview(d.items as any[], pageDims.w, basePageH, d.paper),
+      drawing_data: JSON.stringify({
+        paper: d.paper,
+        paperSize: d.paperSize,
+        customSize: d.customSize ?? undefined,
+        orientation: d.orientation,
+        paperColor: d.paperColorId,
+        canvasColor: d.canvasColorHex,
+        lineSpacing: d.lineSpacing,
+        pageCount: d.pageCount,
+        docVersion: 3,
+        items: d.items,
+      } as DrawingDoc),
+      note_type: 'handwriting',
+    };
+    if (typeof title === 'string') body.title = title;
+
+    // Serialise: each write waits for the previous one, so two saves can never
+    // land out of order.
+    writeChainRef.current = writeChainRef.current.then(async () => {
+      if (mountedRef.current) setSaveStatus('saving');
+      try {
+        await NotesApi.update(noteId, body);
+        if (mountedRef.current) setSaveStatus(dirtyRef.current ? 'pending' : 'saved');
+      } catch (e) {
+        console.warn('save', e);
+        // Keep the change: mark dirty again so the next flush retries it.
+        dirtyRef.current = true;
+        if (typeof title === 'string' && pendingTitleRef.current === undefined) {
+          pendingTitleRef.current = title;
+        }
+        if (mountedRef.current) {
+          setSaveStatus('error');
+          // One automatic retry. A transient failure (the database busy with
+          // another write) should recover on its own; a persistent one stays
+          // visible as "Not saved", tappable to retry.
+          if (!saveTimer.current) {
+            saveTimer.current = setTimeout(() => {
+              saveTimer.current = null;
+              void flushSave(noteId);
+            }, 3000);
+          }
+        }
+      }
+    });
+    return writeChainRef.current;
+  }, [pageDims.w, basePageH]);
+
+  /**
+   * Mark the document changed and schedule a write.
+   *
+   * The arguments are kept so the many existing call sites didn't need to
+   * change, but only `nextTitle` is used: everything else is read from
+   * `docRef` when the write happens.
+   */
   const persist = useCallback(
     (
-      nextItems: Item[],
-      nextPaper: Paper,
-      nextSize: PaperSize,
-      nextColor: string,
+      _items?: Item[],
+      _paper?: Paper,
+      _size?: PaperSize,
+      _color?: string,
       nextTitle?: string,
       _reserved?: undefined,
-      // Passed explicitly by handleSetCanvasColor: React state updates are not
-      // synchronous, so reading canvasColorHex from the closure here would
-      // write the PREVIOUS colour.
-      nextCanvasColor?: string
+      _canvas?: string
     ) => {
+      dirtyRef.current = true;
+      if (typeof nextTitle === 'string') pendingTitleRef.current = nextTitle;
+      if (mountedRef.current) setSaveStatus('pending');
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        try {
-          setSaving(true);
-          const body: Partial<Note> = {
-            // A small, bounded render for the notes list, so the list endpoint
-            // never has to ship the full document. See src/ink/preview.ts.
-            preview: buildPreview(nextItems as any[], pageDims.w, basePageH, nextPaper),
-            drawing_data: JSON.stringify({
-              paper: nextPaper,
-              paperSize: nextSize,
-              customSize: customSize ?? undefined,
-              orientation,
-              paperColor: nextColor,
-              canvasColor: nextCanvasColor ?? canvasColorHex,
-              lineSpacing,
-              pageCount,
-              docVersion: 3,
-              items: nextItems,
-            } as DrawingDoc),
-            note_type: 'handwriting',
-          };
-          if (typeof nextTitle === 'string') body.title = nextTitle;
-          await NotesApi.update(id as string, body);
-        } catch (e) {
-          console.warn('save', e);
-        } finally {
-          setSaving(false);
-        }
-      }, 500);
+      // 600ms after the last change. State set just before persist() has
+      // rendered into docRef long before this fires.
+      saveTimer.current = setTimeout(() => { void flushSave(); }, 600);
     },
-    [id, canvasColorHex, lineSpacing, customSize, pageCount, orientation]
+    [flushSave]
   );
 
-  // Persist when pageCount changes (debounced via persist())
+  // Flush when the app goes to the background: that's when Android may kill
+  // the process, and anything still in the debounce window would be lost.
   useEffect(() => {
-    if (!loading && note) {
-      persist(items, paper, paperSize, paperColorId);
-    }
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' || next === 'inactive') void flushSave();
+    });
+    return () => sub.remove();
+  }, [flushSave]);
+
+  // Flush on unmount (back button, closing the tab).
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      void flushSave();
+    };
+  }, [flushSave]);
+
+  // Save when page count or orientation actually change.
+  //
+  // Compared against the values the note was loaded with: without this, the
+  // load itself set pageCount, fired this effect, and saved the note — which
+  // bumped its "updated" time, so merely OPENING a note moved it to the top of
+  // the list.
+  const loadedShapeRef = useRef<{ pageCount: number; orientation: string } | null>(null);
+  useEffect(() => {
+    if (loading || !note) return;
+    const base = loadedShapeRef.current;
+    if (base && base.pageCount === pageCount && base.orientation === orientation) return;
+    loadedShapeRef.current = { pageCount, orientation };
+    if (base) persist();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageCount, orientation]);
+  }, [pageCount, orientation, loading]);
 
   const pushHistory = useCallback((prev: Item[]) => {
     historyRef.current.undo.push(prev);
@@ -2002,7 +2134,9 @@ export default function DrawScreen() {
           rightSlot={
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
               <SaveIndicator
-                status={saving ? 'saving' : 'saved'}
+                status={saveStatus}
+                hasUnsaved={saveStatus === 'pending' || saveStatus === 'error'}
+                onRetry={() => { dirtyRef.current = true; void flushSave(); }}
                 compact
               />
               <Pressable
