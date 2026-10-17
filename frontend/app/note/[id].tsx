@@ -12,6 +12,7 @@ import {
   Modal,
   useWindowDimensions,
 } from 'react-native';
+import { displayTitle } from '@/src/notes/display';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,6 +35,8 @@ import { haptic } from '@/src/state/useAppSettings';
 import { usePatchQueue } from '@/src/hooks/usePatchQueue';
 import { lockStore } from '@/src/state/lockStore';
 import { useToast } from '@/src/components/Toast';
+import { toggleList, continueList, Sel } from '@/src/editor/textOps';
+import { onNoteRenamed } from '@/src/state/noteEvents';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import DrawingPad from '@/src/components/DrawingPad';
@@ -165,7 +168,7 @@ export default function NoteEditor() {
         setNote(n);
         setFolders(f);
         setLabels(l);
-        openTab({ id: n.id, title: n.title || 'Untitled', type: 'text' });
+        openTab({ id: n.id, title: displayTitle(n), type: 'text' });
       } catch (e) {
         if (cancelled) return;
         // A failed load used to render as a blank editor, which looks exactly
@@ -236,10 +239,11 @@ export default function NoteEditor() {
     persistImmediately({ images: note.images.filter((_, i) => i !== idx) });
   };
 
-  const togglePin = () => {
+  // A star, not a pin: Pinned and Favorites were merged into Favorites.
+  const toggleFavorite = () => {
     if (!note) return;
     haptic.selection();
-    persistImmediately({ pinned: !note.pinned });
+    persistImmediately({ favorite: !note.favorite });
   };
 
   const toggleLock = () => {
@@ -256,15 +260,57 @@ export default function NoteEditor() {
     }
   };
 
-  const insertFormatting = (kind: 'bold' | 'italic' | 'heading' | 'bullet') => {
+  // Keep the tab label in step with the title as it's typed (debounced). The
+  // tab used to keep whatever the title was when the note was opened.
+  const noteIdForTab = note?.id;
+  const noteTitleForTab = note?.title;
+  useEffect(() => {
+    if (!noteIdForTab) return;
+    const t = setTimeout(() => renameTab(noteIdForTab, noteTitleForTab || 'Untitled'), 400);
+    return () => clearTimeout(t);
+  }, [noteIdForTab, noteTitleForTab, renameTab]);
+
+  // A rename made from the tab strip updates this open editor too.
+  useEffect(
+    () => onNoteRenamed((nid, title) => {
+      setNote((prev) => (prev && prev.id === nid ? { ...prev, title } : prev));
+    }),
+    []
+  );
+
+  // ----- Plain-text list editing (see src/editor/textOps.ts) -----
+  // The editor can't render bold/italic, so those buttons are gone. Lists apply
+  // to the lines the cursor or selection is on, not to the end of the note.
+  const selRef = useRef<Sel>({ start: 0, end: 0 });
+  // Set only right after a programmatic edit so the caret lands correctly, then
+  // released: keeping `selection` controlled permanently makes Android's cursor
+  // jump while typing.
+  const [forcedSel, setForcedSel] = useState<Sel | undefined>(undefined);
+
+  const applyList = (kind: 'bullet' | 'numbered') => {
     if (!note) return;
-    const map: Record<typeof kind, string> = {
-      bold: '**bold** ',
-      italic: '_italic_ ',
-      heading: '\n# Heading\n',
-      bullet: '\n• ',
-    };
-    scheduleSave({ content: (note.content || '') + map[kind] });
+    haptic.selection();
+    const r = toggleList(note.content || '', selRef.current, kind);
+    selRef.current = r.selection;
+    setForcedSel(r.selection);
+    scheduleSave({ content: r.text });
+  };
+
+  const onContentChange = (next: string) => {
+    const prev = note?.content || '';
+    // Where did the text change? For a typed character the caret sits just
+    // after it. Derived from the text rather than from onSelectionChange,
+    // whose ordering relative to onChangeText differs across Android versions.
+    let i = 0;
+    while (i < prev.length && i < next.length && prev[i] === next[i]) i++;
+    const cont = continueList(prev, next, i + 1);
+    if (cont) {
+      selRef.current = cont.selection;
+      setForcedSel(cont.selection);
+      scheduleSave({ content: cont.text });
+      return;
+    }
+    scheduleSave({ content: next });
   };
 
   const currentFolder = useMemo(
@@ -413,11 +459,11 @@ export default function NoteEditor() {
                 onRetry={queue.retry}
                 compact
               />
-              <Pressable testID="pin-btn" onPress={togglePin} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
+              <Pressable testID="favorite-btn" accessibilityLabel={note.favorite ? 'Remove from favorites' : 'Add to favorites'} onPress={toggleFavorite} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
                 <Ionicons
-                  name={note.pinned ? 'pin' : 'pin-outline'}
+                  name={note.favorite ? 'star' : 'star-outline'}
                   size={20}
-                  color={note.pinned ? colors.brand : colors.onSurface}
+                  color={note.favorite ? colors.brand : colors.onSurface}
                 />
               </Pressable>
               <Pressable testID="more-btn" onPress={() => setShowMore(true)} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 }} hitSlop={6}>
@@ -429,7 +475,15 @@ export default function NoteEditor() {
       </View>
 
       <ScrollView
-        contentContainerStyle={{ padding: spacing.lg, paddingBottom: 160 }}
+        contentContainerStyle={{
+          padding: spacing.lg,
+          paddingBottom: 160,
+          // A readable measure. On a tablet the text used to run the full
+          // screen width, 150+ characters a line, which is hard to read.
+          width: '100%',
+          maxWidth: 760,
+          alignSelf: 'center',
+        }}
         keyboardShouldPersistTaps="handled"
       >
         <TextInput
@@ -441,6 +495,31 @@ export default function NoteEditor() {
           style={[styles.title, { color: colors.onSurface }]}
           multiline
         />
+
+        {/* Where the note lives and when it last changed: neither was shown
+            anywhere in the editor before. Tapping the folder moves the note. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm, marginTop: 2, marginBottom: spacing.sm }}>
+          <Pressable
+            testID="note-meta-folder"
+            onPress={() => setShowFolderPicker(true)}
+            hitSlop={6}
+            style={{ flexDirection: 'row', alignItems: 'center' }}
+          >
+            <Ionicons
+              name={currentFolder ? 'folder' : 'folder-open-outline'}
+              size={14}
+              color={currentFolder ? currentFolder.color : colors.muted}
+              style={{ marginRight: 4 }}
+            />
+            <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>
+              {currentFolder ? currentFolder.name : 'No folder'}
+            </Text>
+          </Pressable>
+          <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>·</Text>
+          <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>
+            Edited {new Date(note.updated_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+          </Text>
+        </View>
 
         {/* Labels chips row (tap the + chip to open the manager) */}
         <View style={styles.noteLabelRow} testID="note-labels-row">
@@ -472,7 +551,12 @@ export default function NoteEditor() {
         <TextInput
           testID="note-content-input"
           value={note.content}
-          onChangeText={(t) => scheduleSave({ content: t })}
+          onChangeText={onContentChange}
+          selection={forcedSel}
+          onSelectionChange={(e) => {
+            selRef.current = e.nativeEvent.selection;
+            if (forcedSel) setForcedSel(undefined);
+          }}
           placeholder="Start writing..."
           placeholderTextColor={colors.muted}
           style={[styles.body, { color: colors.onSurface }]}
@@ -638,10 +722,8 @@ export default function NoteEditor() {
         ]}
       >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 4, paddingHorizontal: spacing.xs }}>
-          <ToolButton icon="text" label="B" onPress={() => insertFormatting('bold')} testID="fmt-bold" bold />
-          <ToolButton icon="text" label="I" onPress={() => insertFormatting('italic')} testID="fmt-italic" italic />
-          <ToolButton icon="reorder-three" onPress={() => insertFormatting('heading')} testID="fmt-heading" />
-          <ToolButton icon="list" onPress={() => insertFormatting('bullet')} testID="fmt-bullet" />
+          <ToolButton icon="list" onPress={() => applyList('bullet')} testID="fmt-bullet" />
+          <ToolButton icon="text" label="1." onPress={() => applyList('numbered')} testID="fmt-numbered" bold />
           <Divider />
           <ToolButton icon="checkbox-outline" onPress={addChecklistItem} testID="add-check" />
           <ToolButton icon="image-outline" onPress={pickImage} testID="add-image" />

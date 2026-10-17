@@ -5,6 +5,8 @@ import { useRouter } from 'expo-router';
 
 import { useTheme } from '@/src/theme/ThemeContext';
 import { typeScale, spacing, radius } from '@/src/theme/tokens';
+import { NotesApi } from '@/src/api/client';
+import { emitNoteRenamed } from '@/src/state/noteEvents';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 
 interface Props {
@@ -37,10 +39,18 @@ export default function OpenTabsStrip({
   const [draft, setDraft] = useState('');
   const inputRef = useRef<TextInput>(null);
 
+  /**
+   * Renames the NOTE, not just its tab. The first version only relabelled the
+   * tab, so reopening the note showed the old title again.
+   */
   const commitRename = () => {
     if (!renaming) return;
     const next = draft.trim();
-    if (next && next !== renaming.title) renameTab(renaming.id, next);
+    if (next && next !== renaming.title) {
+      renameTab(renaming.id, next);
+      emitNoteRenamed(renaming.id, next);
+      NotesApi.update(renaming.id, { title: next }).catch((e) => console.warn('rename', e));
+    }
     setRenaming(null);
   };
 

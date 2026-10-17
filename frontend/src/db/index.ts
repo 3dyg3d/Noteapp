@@ -23,7 +23,7 @@ import * as SQLite from 'expo-sqlite';
 const DB_NAME = 'geodesic.db';
 
 /** Bump when the schema changes and add a matching block in `migrate`. */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -99,6 +99,18 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
       ALTER TABLE notes ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS idx_notes_favorite
         ON notes (deleted_at, favorite, updated_at DESC);
+    `);
+  }
+
+  if (current < 3) {
+    // Pinned and Favorites were two stars for the same idea, with two drawer
+    // rows, two bulk actions and two sections. They are one now: Favorites.
+    // Anything pinned becomes a favourite, so nothing the user marked is lost.
+    // The column stays (old backups and future sync still carry it); the app
+    // just no longer sets it.
+    await db.execAsync(`
+      UPDATE notes SET favorite = 1 WHERE pinned = 1;
+      UPDATE notes SET pinned = 0 WHERE pinned = 1;
     `);
   }
 

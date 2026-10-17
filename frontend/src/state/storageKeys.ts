@@ -40,6 +40,9 @@ export const StorageKeys = {
   /** Plaintext passcode written by builds before the rename. */
   legacyPasscode: `${LEGACY_NS}:passcode`,
 
+  /** ISO time of the last successful backup export, shown in Settings. */
+  lastBackupAt: `${NS}:last-backup-at`,
+
   /** Set once the migration below has run, so it never runs twice. */
   migrationMarker: `${NS}:ns-migrated`,
 } as const;

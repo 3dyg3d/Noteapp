@@ -23,9 +23,10 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import InkStroke from '@/src/ink/InkStroke';
 import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
-import { InkPoint, InkTool, inkNow, simplify } from '@/src/ink/stroke';
+import { InkPoint, InkTool, inkNow, commitPoints, annotateWidth, OneEuro2D, effectiveWidth } from '@/src/ink/stroke';
 import { buildPreview } from '@/src/ink/preview';
 import type { SaveStatus } from '@/src/hooks/usePatchQueue';
+import { onNoteRenamed } from '@/src/state/noteEvents';
 import { StorageKeys } from '@/src/state/storageKeys';
 import { GestureDetector, Gesture, PointerType } from 'react-native-gesture-handler';
 import { useSharedValue } from 'react-native-reanimated';
@@ -33,7 +34,8 @@ import { useSharedValue } from 'react-native-reanimated';
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, withAlpha, CANVAS_COLORS } from '@/src/theme/tokens';
 import { NotesApi, LabelsApi, FoldersApi, Note, Label, Folder } from '@/src/api/client';
-import { useAppSettings, haptic, GestureAction, ToolbarPosition } from '@/src/state/useAppSettings';
+import { displayTitle } from '@/src/notes/display';
+import { useAppSettings, haptic, GestureAction, ToolbarPosition, type PageSetup } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
 import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import SkiaPaper from '@/src/components/SkiaPaper';
@@ -608,6 +610,8 @@ export default function DrawScreen() {
 
   // Active drawing state (refs to avoid re-renders per touch)
   const livePtsRef = useRef<InkPoint[]>([]);
+  const inkFilterRef = useRef(new OneEuro2D());
+  const lastRawRef = useRef<InkPoint | null>(null);
   // Imperative handle to the wet-ink layer; see src/ink/LiveStrokeLayer.tsx.
   const liveStrokeRef = useRef<LiveStrokeHandle | null>(null);
   const liveShapeRef = useRef<{ start: Pt; end: Pt } | null>(null);
@@ -650,7 +654,7 @@ export default function DrawScreen() {
         setNote(n);
         setLabels(ls);
         setFolders(fs);
-        openTab({ id: n.id, title: n.title || 'Untitled', type: 'handwriting' });
+        openTab({ id: n.id, title: displayTitle(n), type: 'handwriting' });
         if (n.drawing_data) {
           try {
             const doc: DrawingDoc = JSON.parse(n.drawing_data);
@@ -736,6 +740,14 @@ export default function DrawScreen() {
   }, [id]);
 
   // ----- Persist (debounced) -----
+  // A rename made from the tab strip updates this open screen's title too.
+  useEffect(
+    () => onNoteRenamed((nid, title) => {
+      setNote((prev) => (prev && prev.id === nid ? { ...prev, title } : prev));
+    }),
+    []
+  );
+
   // ----- Saving -----
   //
   // The document to save is read from `docRef` at WRITE time, not captured when
@@ -941,7 +953,7 @@ export default function DrawScreen() {
     // measured against real shape and pressure error rather than a fixed
     // distance threshold, so corners and width modulation survive while the
     // stored document shrinks by roughly an order of magnitude.
-    const points = simplify(pts);
+    const points = commitPoints(pts, tool as InkTool, effectiveWidth(tool as InkTool, w));
     const stroke: StrokeData = {
       kind: 'stroke',
       tool,
@@ -1321,7 +1333,7 @@ export default function DrawScreen() {
           snapToRulerRef.current = true;
           const w = toWorld(proj.x, proj.y);
           if (isPenTool(tool)) {
-            livePtsRef.current = [{ x: w.x, y: w.y, t: inkNow(), p: stylusPressure(e) }];
+            beginInk(w.x, w.y, stylusPressure(e));
             setLiveTick((n) => n + 1);
             return;
           }
@@ -1362,7 +1374,7 @@ export default function DrawScreen() {
         return;
       }
       if (isPenTool(tool)) {
-        livePtsRef.current = [{ x: w.x, y: w.y, t: inkNow(), p: stylusPressure(e) }];
+        beginInk(w.x, w.y, stylusPressure(e));
         setLiveTick((n) => n + 1);
       } else if (isShapeTool(tool)) {
         const p: Pt = { x: w.x, y: w.y, t: Date.now() };
@@ -1418,23 +1430,9 @@ export default function DrawScreen() {
         return;
       }
       if (isPenTool(tool)) {
-        const last = livePtsRef.current[livePtsRef.current.length - 1];
-        if (!last) return;
-        const d = Math.hypot(w.x - last.x, w.y - last.y);
-        // A much finer gate than the old `1.2 / scale`. That threshold threw
-        // away most of the samples in small handwriting and captured different
-        // amounts of detail depending on the zoom level the person happened to
-        // be at. Redundant points are removed properly at commit time by the
-        // simplification pass, which measures actual shape error.
-        if (d < MIN_SAMPLE_DISTANCE) return;
-        livePtsRef.current.push({
-          x: w.x,
-          y: w.y,
-          // Sub-millisecond clock: Date.now() cannot resolve 120 Hz sampling,
-          // so the old velocity model was reading quantisation noise.
-          t: inkNow(),
-          p: stylusPressure(e),
-        });
+        // A fine distance gate; redundant points are removed properly at
+        // commit by the simplification pass, which measures shape error.
+        if (!extendInk(w.x, w.y, stylusPressure(e))) return;
         pushLive();
       } else if (isShapeTool(tool) && liveShapeRef.current) {
         liveShapeRef.current.end = { x: w.x, y: w.y, t: inkNow() };
@@ -1500,6 +1498,7 @@ export default function DrawScreen() {
         }
       }
       if (isPenTool(tool)) {
+        closeInk();
         finalizeStroke(livePtsRef.current);
         livePtsRef.current = [];
         setLiveTick((n) => n + 1);
@@ -1567,6 +1566,46 @@ export default function DrawScreen() {
   //
   // Function declarations are hoisted and initialised before any of this runs,
   // so there is nothing left to capture too early.
+  /**
+   * Start / extend the wet stroke. Positions go through an adaptive low-pass
+   * filter (strong when slow, where digitiser jitter shows as fuzz; almost
+   * none when fast, where it would show as lag). Each sample's width is fixed
+   * here, once, so the committed stroke draws exactly what was on screen.
+   * Function declarations for the same TDZ reason as pushLive below.
+   */
+  function beginInk(x: number, y: number, p: number | undefined) {
+    inkFilterRef.current.reset();
+    const t = inkNow();
+    const f = inkFilterRef.current.filter(x, y, t);
+    livePtsRef.current = [{ x: f.x, y: f.y, t, p }];
+    annotateWidth(livePtsRef.current as InkPoint[], 0, tool as InkTool);
+    lastRawRef.current = { x, y, t, p };
+  }
+  /** Returns false when the sample was too close to the last one to keep. */
+  function extendInk(x: number, y: number, p: number | undefined): boolean {
+    const pts = livePtsRef.current as InkPoint[];
+    const last = pts[pts.length - 1];
+    if (!last) return false;
+    const t = inkNow();
+    lastRawRef.current = { x, y, t, p };
+    const f = inkFilterRef.current.filter(x, y, t);
+    if (Math.hypot(f.x - last.x, f.y - last.y) < MIN_SAMPLE_DISTANCE) return false;
+    pts.push({ x: f.x, y: f.y, t, p });
+    annotateWidth(pts, pts.length - 1, tool as InkTool);
+    return true;
+  }
+  /** The filter trails the pen slightly; end the line where the pen lifted. */
+  function closeInk() {
+    const pts = livePtsRef.current as InkPoint[];
+    const raw = lastRawRef.current;
+    const last = pts[pts.length - 1];
+    if (raw && last && Math.hypot(raw.x - last.x, raw.y - last.y) > MIN_SAMPLE_DISTANCE) {
+      pts.push({ x: raw.x, y: raw.y, t: Math.max(raw.t, last.t + 0.5), p: raw.p });
+      annotateWidth(pts, pts.length - 1, tool as InkTool);
+    }
+    lastRawRef.current = null;
+  }
+
   function pushLive() {
     if (!isPenTool(tool)) {
       liveStrokeRef.current?.set(null);
@@ -1622,17 +1661,37 @@ export default function DrawScreen() {
   const isDarkPaper = paperLuminance < 0.45;
   const paperLine = isDarkPaper ? '#5a5a5e' : '#C9C2B0';
 
+  /**
+   * A paper change made inside a note becomes the starting page for the next
+   * new note, so "+" on the home screen opens the paper the user actually uses.
+   */
+  const rememberSetup = (patch: Partial<PageSetup>) => {
+    update({
+      lastPageSetup: {
+        paper,
+        paperSize,
+        customSize: paperSize === 'custom' && customSize ? customSize : undefined,
+        orientation,
+        paperColor: paperColorId,
+        lineSpacing,
+        ...patch,
+      },
+    });
+  };
   const handleSetPaper = (p: Paper) => {
     setPaper(p);
     persist(items, p, paperSize, paperColorId);
+    rememberSetup({ paper: p });
   };
   const handleSetSize = (s: PaperSize) => {
     setPaperSize(s);
     persist(items, paper, s, paperColorId);
+    rememberSetup({ paperSize: s });
   };
   const handleSetColor = (c: string) => {
     setPaperColorId(c);
     persist(items, paper, paperSize, c);
+    rememberSetup({ paperColor: c });
   };
   /**
    * Canvas colour, saved with the note.
@@ -1653,6 +1712,7 @@ export default function DrawScreen() {
   const handleSetLineSpacing = (val: number) => {
     setLineSpacing(val);
     persist(items, paper, paperSize, paperColorId);
+    rememberSetup({ lineSpacing: val });
   };
 
   const updateTitle = () => {
@@ -3880,7 +3940,7 @@ export default function DrawScreen() {
                   <Pressable
                     key={o}
                     testID={`sub-orientation-${o}`}
-                    onPress={() => { setOrientation(o); haptic.selection(); }}
+                    onPress={() => { setOrientation(o); rememberSetup({ orientation: o }); haptic.selection(); }}
                     style={{
                       flex: 1,
                       paddingVertical: spacing.sm,

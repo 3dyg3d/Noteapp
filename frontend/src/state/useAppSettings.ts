@@ -8,6 +8,20 @@ export type GestureAction = 'none' | 'undo' | 'redo' | 'eraser';
 export type SPenAction = 'none' | 'undo' | 'redo' | 'eraser';
 export type ToolbarPosition = 'top' | 'bottom' | 'left' | 'right';
 
+/**
+ * The page a new handwritten note starts with. Updated whenever the user picks
+ * paper in the setup dialog or changes it inside a note, so "+" gives them the
+ * page they actually use instead of asking every time.
+ */
+export interface PageSetup {
+  paper: string;
+  paperSize: string;
+  customSize?: { w: number; h: number };
+  orientation: 'portrait' | 'landscape';
+  paperColor: string;
+  lineSpacing?: number;
+}
+
 export interface AppSettings {
   hapticsEnabled: boolean;
   sPenButton: SPenAction;
@@ -33,6 +47,11 @@ export interface AppSettings {
    * that don't, so changing it doesn't rewrite existing work.
    */
   defaultCanvasColor: string;
+  /** Last page setup used; null until the user has chosen one. */
+  lastPageSetup: PageSetup | null;
+  /** Home list order, remembered across launches. */
+  homeSortBy: 'updated' | 'created' | 'title';
+  homeSortDir: 'desc' | 'asc';
 }
 
 const KEY = StorageKeys.appSettings;
@@ -48,6 +67,9 @@ const DEFAULTS: AppSettings = {
   statusBarHidden: false,
   autoAddPage: true,
   homeTileScale: 1.0,
+  lastPageSetup: null,
+  homeSortBy: 'updated',
+  homeSortDir: 'desc',
 };
 
 let cache: AppSettings | null = null;

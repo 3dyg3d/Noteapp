@@ -3,7 +3,8 @@
 export const lightColors = {
   surface: '#FFFFFF',
   onSurface: '#1A1A1C',
-  surfaceSecondary: '#F5F5F9',
+  // Was #F5F5F9: 4% off white, so sidebar, cards and page read as one sheet.
+  surfaceSecondary: '#EDEDF2',
   onSurfaceSecondary: '#2C2C2E',
   surfaceTertiary: '#EAEAEF',
   onSurfaceTertiary: '#3A3A3C',
@@ -18,10 +19,11 @@ export const lightColors = {
   warning: '#D4A352',
   error: '#B85C5C',
   info: '#6E7A8A',
-  border: '#E5E5EA',
+  border: '#D6D6DD',
   borderStrong: '#C7C7CC',
-  divider: '#E5E5EA',
-  muted: '#8E8E93',
+  divider: '#DEDEE4',
+  // 4.5:1 or better on both light surfaces (was #8E8E93, 3.3:1 on white).
+  muted: '#636368',
 };
 
 export const darkColors = {

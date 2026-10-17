@@ -34,7 +34,9 @@ import {
   ChecklistItem,
   NoteStatus,
 } from '@/src/api/client';
-import { haptic, useAppSettings } from '@/src/state/useAppSettings';
+import { haptic, useAppSettings, type PageSetup } from '@/src/state/useAppSettings';
+import { newHandwritingDoc } from '@/src/notes/newHandwriting';
+import { displayTitle, relativeDate } from '@/src/notes/display';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
 import { useToast } from '@/src/components/Toast';
@@ -42,7 +44,7 @@ import { useToast } from '@/src/components/Toast';
 type ViewMode = 'grid' | 'list';
 // A category may be one of the fixed views, a folder id, or a label id
 // prefixed with `label:` so we can distinguish them from folder ids.
-type CategoryKey = 'all' | 'pinned' | 'recent' | 'trash' | 'folders' | string;
+type CategoryKey = 'all' | 'favorites' | 'recent' | 'trash' | 'folders' | string;
 type SortBy = 'updated' | 'created' | 'title';
 
 interface Template {
@@ -55,6 +57,14 @@ interface Template {
 }
 
 const TEMPLATES: Template[] = [
+  {
+    key: 'drawing',
+    label: 'Handwritten — choose paper…',
+    icon: 'brush-outline',
+    description: 'Full canvas with pens, shapes, paper styles',
+    apply: () => ({ title: 'Handwritten note', content: '', note_type: 'handwriting' as const }),
+    mode: 'drawing',
+  },
   {
     key: 'blank',
     label: 'Blank note',
@@ -102,31 +112,12 @@ const TEMPLATES: Template[] = [
       content: 'How I feel today:\n\n\nWhat went well:\n• \n\nWhat I learned:\n• \n\nTomorrow I will:\n• \n',
     }),
   },
-  {
-    key: 'drawing',
-    label: 'Handwriting / S Pen',
-    icon: 'brush-outline',
-    description: 'Full canvas with pens, shapes, paper styles',
-    apply: () => ({ title: 'Handwritten note', content: '', note_type: 'handwriting' as const }),
-    mode: 'drawing',
-  },
 ];
 
 function rid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-function formatDate(iso: string) {
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    if (sameDay) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  } catch {
-    return '';
-  }
-}
 
 function previewText(note: NoteSummary): string {
   const parts: string[] = [];
@@ -167,49 +158,72 @@ export default function HomeScreen() {
   // Responsive column count: phones=2, tablets scale up
   // Base column count purely from viewport width — each breakpoint targets a
   // comfortable card size for typical readable text.
+  /**
+   * The width the grid actually has, and the header's real height, both
+   * measured from layout.
+   *
+   * The grid used the WINDOW width, but on a tablet the sidebar takes 300pt of
+   * it, so cards were sized for room they didn't have: the last column wrapped
+   * and left an empty strip down the right. The list's top padding was a
+   * hardcoded 180pt guess at the header height (~117pt in practice), which is
+   * the dead band above the first row and the jump when selection mode starts.
+   */
+  const [layout, setLayout] = useState<{ w: number; headerH: number }>({ w: 0, headerH: 0 });
+  const contentW = layout.w || winW;
+  const headerH = layout.headerH || 120;
+
+  // Aim for cards around 190pt wide, whatever the screen.
   const baseColumns = useMemo(() => {
-    if (winW >= 1400) return 6;
-    if (winW >= 1100) return 5;
-    if (winW >= 850) return 4;
-    if (winW >= 620) return 3;
-    return 2;
-  }, [winW]);
+    const avail = contentW - spacing.lg * 2;
+    return Math.max(2, Math.min(8, Math.round((avail + spacing.md) / (190 + spacing.md))));
+  }, [contentW]);
   // The user can zoom the home grid via pinch or the size cycle in the header.
   // `homeTileScale` is a persisted multiplier where <1 = smaller tiles (more per
   // row) and >1 = larger tiles (fewer per row). We convert it into a column count
   // relative to the base, then clamp to something legible on every viewport.
   const { settings, update: updateSettings } = useAppSettings();
   const tileScale = settings.homeTileScale ?? 1.0;
+  const sortBy: SortBy = settings.homeSortBy ?? 'updated';
+  const sortDir = settings.homeSortDir ?? 'desc';
+  /** Tile size as the user thinks of it, for the header button. */
+  const tileSizeLabel = tileScale < 0.88 ? 'S' : tileScale < 1.12 ? 'M' : tileScale < 1.42 ? 'L' : 'XL';
   const numColumns = useMemo(() => {
     const raw = Math.round(baseColumns / tileScale);
-    const maxCols = winW >= 620 ? 8 : 4;
+    const maxCols = contentW >= 620 ? 8 : 4;
     return Math.max(1, Math.min(maxCols, raw));
-  }, [baseColumns, tileScale, winW]);
+  }, [baseColumns, tileScale, contentW]);
   const cardPxWidth = useMemo(() => {
     const horizPad = spacing.lg * 2;
     const totalGap = spacing.md * (numColumns - 1);
-    return (winW - horizPad - totalGap) / numColumns;
-  }, [winW, numColumns]);
+    // floor: fractional widths can sum to a hair over the row and wrap a card.
+    return Math.floor((contentW - horizPad - totalGap) / numColumns);
+  }, [contentW, numColumns]);
   /**
    * Folder tiles are sized independently of note cards. They were reusing
    * `cardPxWidth`, which is sized to show a page preview — far more room than
    * an icon and a one-line caption need, so folders ended up marooned in
    * whitespace. Roughly 108pt each, packed to fill the row.
    */
-  const folderCols = useMemo(() => Math.max(3, Math.floor((winW - spacing.lg * 2) / 126)), [winW]);
+  const folderCols = useMemo(() => Math.max(3, Math.floor((contentW - spacing.lg * 2) / 126)), [contentW]);
   const folderPxWidth = useMemo(() => {
-    const avail = winW - spacing.lg * 2 - spacing.xs * (folderCols - 1);
-    return avail / folderCols;
-  }, [winW, folderCols]);
+    const avail = contentW - spacing.lg * 2 - spacing.xs * (folderCols - 1);
+    return Math.floor(avail / folderCols);
+  }, [contentW, folderCols]);
 
   // Uniform card height so every note tile in the grid lines up evenly, regardless
   // of preview length / labels / thumbnail. A portrait-ish 1.35 aspect ratio feels
   // like a real page peek without stretching. List mode ignores this — its rows
   // still auto-size.
-  const cardPxHeight = useMemo(() => Math.round(cardPxWidth * 1.35), [cardPxWidth]);
+  const cardPxHeight = useMemo(() => Math.round(cardPxWidth * 1.3), [cardPxWidth]);
+  /** As many preview lines as the card can hold, instead of a fixed 6. */
+  const previewLines = useMemo(
+    () => Math.max(3, Math.floor((cardPxHeight - spacing.md * 2) / 17)),
+    [cardPxHeight]
+  );
 
   // Summaries, not full notes: the list endpoint omits every blob field.
   const [notes, setNotes] = useState<NoteSummary[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [loading, setLoading] = useState(true);
@@ -217,7 +231,6 @@ export default function HomeScreen() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<CategoryKey>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [sortBy, setSortBy] = useState<SortBy>('updated');
   const [showSortMenu, setShowSortMenu] = useState(false);
   // Where the sort button is on screen, so the menu can open beside it. On a
   // tablet a bottom sheet is a long way from a control in the top bar.
@@ -281,12 +294,11 @@ export default function HomeScreen() {
   const load = useCallback(async () => {
     try {
       const [n, f, l] = await Promise.all([
-        NotesApi.list({
+        NotesApi.listAll({
           q: search.trim() || undefined,
           folderId: folderFilter,
           labelId: labelFilter,
           status,
-          pinned: category === 'pinned' ? true : undefined,
           favorite: category === 'favorites' ? true : undefined,
         }),
         FoldersApi.list(),
@@ -295,8 +307,13 @@ export default function HomeScreen() {
       setNotes(n);
       setFolders(f);
       setLabels(l);
+      setLoadError(null);
     } catch (e) {
+      // Shown, not just logged. A database failure used to render as an empty
+      // library ("No notes here"), which is how a broken migration looked like
+      // "folders don't save" instead of announcing itself.
       console.warn('load failed', e);
+      setLoadError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -304,7 +321,12 @@ export default function HomeScreen() {
   }, [search, folderFilter, labelFilter, status, category]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+  // Debounced reload while typing a search or switching category. Skips the
+  // first run: the focus effect above already loads on mount, and running both
+  // queried the whole library twice on every open.
+  const firstFilterRun = useRef(true);
   useEffect(() => {
+    if (firstFilterRun.current) { firstFilterRun.current = false; return; }
     const t = setTimeout(load, 250);
     return () => clearTimeout(t);
   }, [search, category, load]);
@@ -312,23 +334,33 @@ export default function HomeScreen() {
   // Sort & filter notes client-side based on chosen sort
   const sortedNotes = useMemo(() => {
     const arr = [...notes];
+    // Title sorts by what the tile shows, so untitled notes land where their
+    // first line puts them instead of all bunching under "U".
     if (sortBy === 'title') {
-      arr.sort((a, b) => (a.title || 'Untitled').localeCompare(b.title || 'Untitled'));
-    } else if (sortBy === 'created') {
-      arr.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      arr.sort((a, b) => displayTitle(a).localeCompare(displayTitle(b), undefined, { sensitivity: 'base', numeric: true }));
+      if (sortDir === 'desc') arr.reverse();
     } else {
-      arr.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      const key = sortBy === 'created' ? 'created_at' : 'updated_at';
+      arr.sort((a, b) => b[key].localeCompare(a[key]));
+      if (sortDir === 'asc') arr.reverse();
     }
-    if (category === 'recent') return arr.slice(0, 20);
+    // Recents is always "most recently edited", whatever the sort setting.
+    // It used to slice the user-sorted list, so with sort = Title it showed
+    // the first 20 notes alphabetically.
+    if (category === 'recent') {
+      return [...notes].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 20);
+    }
     return arr;
-  }, [notes, sortBy, category]);
+  }, [notes, sortBy, sortDir, category]);
 
-  const pinnedNotes = useMemo(
-    () => (category === 'all' ? sortedNotes.filter((n) => n.pinned) : []),
+  // Favorites float to the top of All notes. (Pinned used to do this, as a
+  // second star alongside Favorites; the two are one now.)
+  const favoriteNotes = useMemo(
+    () => (category === 'all' ? sortedNotes.filter((n) => n.favorite) : []),
     [sortedNotes, category]
   );
   const otherNotes = useMemo(
-    () => (category === 'all' ? sortedNotes.filter((n) => !n.pinned) : sortedNotes),
+    () => (category === 'all' ? sortedNotes.filter((n) => !n.favorite) : sortedNotes),
     [sortedNotes, category]
   );
 
@@ -366,7 +398,33 @@ export default function HomeScreen() {
   };
 
   // FAB
-  const onFabPress = () => {
+  // "+" opens a new handwritten page straight away, on the paper the user
+  // last chose. Handwriting is what this app is for; asking for paper size,
+  // template, colour, spacing, title and folder before every page was the
+  // slowest path to a pen stroke. The setup dialog and the text templates are
+  // one tap further, on the small button above "+" (or a long-press on "+").
+  const creatingRef = useRef(false);
+  const quickHandwriting = async () => {
+    if (creatingRef.current) return; // a double tap must not create two notes
+    creatingRef.current = true;
+    haptic.light();
+    try {
+      const note = await NotesApi.create({
+        title: '',
+        content: '',
+        note_type: 'handwriting',
+        drawing_data: newHandwritingDoc(settings.lastPageSetup, settings.defaultCanvasColor),
+        folder_id: folderFilter,
+      });
+      router.push(`/draw/${note.id}`);
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      setTimeout(() => { creatingRef.current = false; }, 600);
+    }
+  };
+  const onFabPress = () => { void quickHandwriting(); };
+  const openCreateMenu = () => {
     haptic.light();
     setShowTemplate(true);
   };
@@ -421,9 +479,18 @@ export default function HomeScreen() {
     setShowTemplate(false);
     if (tpl.mode === 'drawing') {
       // Reset the prep popup defaults from the current context
+      // Start the dialog from the last setup, not factory defaults.
+      const last = settings.lastPageSetup;
       setHwTitle('');
       setHwFolderId(folderFilter);
-      setHwPaperColor(favoriteHwColors[0] || '#FBFAF6');
+      setHwPaperColor(last?.paperColor || favoriteHwColors[0] || '#FBFAF6');
+      if (last) {
+        setHwTemplate(last.paper as typeof hwTemplate);
+        setHwSize(last.paperSize as typeof hwSize);
+        setHwOrientation(last.orientation);
+        if (last.lineSpacing) setHwLineSpacing(last.lineSpacing);
+        if (last.customSize) { setHwCustomW(String(last.customSize.w)); setHwCustomH(String(last.customSize.h)); }
+      }
       setShowHwPrep(true);
       return;
     }
@@ -451,23 +518,19 @@ export default function HomeScreen() {
             ? { w: h, h: w }
             : { w, h };
       }
-      const drawing_data = JSON.stringify({
+      const setup: PageSetup = {
         paper: hwTemplate,
         paperSize: hwSize,
         customSize,
         paperColor: hwPaperColor, // hex
         orientation: hwOrientation,
         lineSpacing: hwSupportsSpacing(hwTemplate) ? hwLineSpacing : undefined,
-        // Written explicitly so a new note is complete on its own: it used to
-        // omit these, and the drawing screen filled the gaps from whatever
-        // note had been open before.
-        canvasColor: settings.defaultCanvasColor || '#d4d4d4',
-        pageCount: 1,
-        docVersion: 3,
-        items: [],
-      });
+      };
+      // Remember it: the next "+" opens this page without the dialog.
+      updateSettings({ lastPageSetup: setup });
+      const drawing_data = newHandwritingDoc(setup, settings.defaultCanvasColor);
       const note = await NotesApi.create({
-        title: hwTitle.trim() || 'Handwritten note',
+        title: hwTitle.trim(),
         content: '',
         note_type: 'handwriting',
         drawing_data,
@@ -502,10 +565,6 @@ export default function HomeScreen() {
     await Promise.all(ids.map((id) => NotesApi.update(id, patch)));
     clearSelection();
     load();
-  };
-  const bulkPin = async () => {
-    const anyUnpinned = notes.some((n) => selectedIds.has(n.id) && !n.pinned);
-    await bulkUpdate({ pinned: anyUnpinned });
   };
   /** Favourite when any selected note isn't yet; otherwise unfavourite all. */
   const bulkFavorite = async () => {
@@ -740,7 +799,6 @@ export default function HomeScreen() {
   const categoryLabel = useMemo(() => {
     if (category === 'all') return 'All notes';
     if (category === 'favorites') return 'Favorites';
-    if (category === 'pinned') return 'Pinned';
     if (category === 'recent') return 'Recents';
     if (category === 'trash') return 'Trash';
     if (category === 'folders') return 'Folders';
@@ -975,15 +1033,23 @@ export default function HomeScreen() {
             )}
             {!note.locked && note.note_type !== 'handwriting' && (
               <Text
-                numberOfLines={6}
-                style={[styles.cardPreview, { color: colors.onSurfaceSecondary, marginTop: 0 }]}
+                numberOfLines={previewLines}
+                style={[
+                  styles.cardPreview,
+                  // Room for the selection circle so it doesn't sit on the text.
+                  { color: colors.onSurfaceSecondary, marginTop: 0, paddingRight: selectionMode ? 22 : 0 },
+                ]}
               >
                 {previewText(note) || 'No additional text'}
               </Text>
             )}
             {!note.locked && note.note_type === 'handwriting' && (
               <View style={{ flex: 1 }}>
-                {note.preview || note.has_drawing ? (
+                {/* Only render the page when there is ink to show. Every
+                    handwritten note counted as "has a drawing" by type alone, so
+                    an untouched one rendered as a blank full-brightness page —
+                    a white slab in the middle of a dark grid. */}
+                {note.preview ? (
                   <HandwritingThumbnail
                     preview={note.preview}
                     width={cardPxWidth}
@@ -991,11 +1057,9 @@ export default function HomeScreen() {
                     radius={radius.lg}
                   />
                 ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Ionicons name="brush" size={14} color={colors.brand} />
-                    <Text style={[styles.cardPreview, { color: colors.brand, marginLeft: 4, fontWeight: '600' }]}>
-                      Handwritten note
-                    </Text>
+                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <Ionicons name="create-outline" size={28} color={colors.muted} />
+                    <Text style={{ color: colors.muted, fontSize: typeScale.sm }}>Blank page</Text>
                   </View>
                 )}
               </View>
@@ -1021,7 +1085,6 @@ export default function HomeScreen() {
                 <View style={[styles.folderDot, { backgroundColor: folder.color, marginRight: 4, width: 8, height: 8, borderRadius: 4 }]} />
               )}
               {note.favorite && <Ionicons name="star" size={12} color={colors.brand} style={{ marginRight: 4 }} />}
-              {note.pinned && <Ionicons name="pin" size={12} color={colors.brand} style={{ marginRight: 4 }} />}
               {note.locked && <Ionicons name="lock-closed" size={12} color={colors.muted} style={{ marginRight: 4 }} />}
               <Text
                 numberOfLines={1}
@@ -1032,11 +1095,11 @@ export default function HomeScreen() {
                   color: colors.onSurface,
                 }}
               >
-                {note.title || 'Untitled note'}
+                {displayTitle(note)}
               </Text>
             </View>
             <Text style={{ fontSize: typeScale.sm, color: colors.muted, marginTop: 2 }}>
-              {formatDate(note.updated_at)}
+              {relativeDate(note.updated_at)}
             </Text>
             {noteLabels.length > 0 && (
               <View style={[styles.labelChipRow, { marginTop: 4 }]}>
@@ -1112,10 +1175,10 @@ export default function HomeScreen() {
         >
           {note.locked ? (
             <Ionicons name="lock-closed" size={20} color={colors.muted} />
-          ) : note.note_type === 'handwriting' && (note.preview || note.has_drawing) ? (
+          ) : note.note_type === 'handwriting' && note.preview ? (
             <HandwritingThumbnail preview={note.preview} width={THUMB_W} height={THUMB_H} radius={0} />
           ) : note.note_type === 'handwriting' ? (
-            <Ionicons name="brush" size={20} color={colors.brand} />
+            <Ionicons name="create-outline" size={20} color={colors.muted} />
           ) : (
             // Typed notes get a miniature of their own first lines, so the
             // column still reads as "pages" rather than as blank placeholders.
@@ -1132,14 +1195,13 @@ export default function HomeScreen() {
         <View style={{ flex: 1, marginLeft: spacing.md, justifyContent: 'center' }}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {note.favorite && <Ionicons name="star" size={13} color={colors.brand} style={{ marginRight: 4 }} />}
-            {note.pinned && <Ionicons name="pin" size={13} color={colors.brand} style={{ marginRight: 4 }} />}
             <Text numberOfLines={1} style={{ flex: 1, fontSize: typeScale.lg, fontWeight: '600', color: colors.onSurface }}>
-              {note.title || 'Untitled note'}
+              {displayTitle(note)}
             </Text>
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-            <Text style={[styles.cardDate, { color: colors.muted }]}>{formatDate(note.updated_at)}</Text>
+            <Text style={[styles.cardDate, { color: colors.muted }]}>{relativeDate(note.updated_at)}</Text>
             {folder && (
               <>
                 <Text style={{ color: colors.muted, marginHorizontal: 5 }}>·</Text>
@@ -1323,13 +1385,6 @@ export default function HomeScreen() {
         testID="drawer-favorites"
       />
       <DrawerRow
-        icon="pin-outline"
-        label="Pinned"
-        active={category === 'pinned'}
-        onPress={() => { setCategory('pinned'); closeDrawerIfPhone(); }}
-        testID="drawer-pinned"
-      />
-      <DrawerRow
         icon="time-outline"
         label="Recents"
         active={category === 'recent'}
@@ -1390,17 +1445,6 @@ export default function HomeScreen() {
           return (
             <View key={f.id} style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.md + depth * 18 }}>
               <Pressable
-                onPress={() => toggleExpand(f.id)}
-                style={styles.expandBtn}
-                testID={`drawer-expand-${f.id}`}
-              >
-                <Ionicons
-                  name={hasChildren ? (isOpen ? 'chevron-down' : 'chevron-forward') : 'remove'}
-                  size={14}
-                  color={hasChildren ? colors.onSurface : 'transparent'}
-                />
-              </Pressable>
-              <Pressable
                 testID={`drawer-folder-${f.id}`}
                 onPress={() => { setCategory(f.id); closeDrawerIfPhone(); }}
                 onLongPress={(e) => openFolderEdit(f, e)}
@@ -1417,9 +1461,6 @@ export default function HomeScreen() {
                   },
                 ]}
               >
-                {/* A folder icon rather than a colour dot: the dot said
-                    nothing about what the row was, and matched the label
-                    rows below it. The folder's colour still tints the icon. */}
                 <Ionicons
                   name={isOpen && hasChildren ? 'folder-open' : 'folder'}
                   size={20}
@@ -1438,22 +1479,27 @@ export default function HomeScreen() {
                   {f.name}
                 </Text>
               </Pressable>
+              {/* Expand control on the TRAILING edge, matching the Folders row
+                  above. It used to sit on the left for subfolders and on the
+                  right for Folders. The per-row "+" is gone: a subfolder is
+                  created from the folder's long-press menu, or from inside the
+                  folder in the Folders view. */}
               <Pressable
-                testID={`drawer-subfolder-${f.id}`}
-                onPress={(e) => openFolderCreate(f.id, e)}
+                onPress={() => toggleExpand(f.id)}
+                disabled={!hasChildren}
+                hitSlop={8}
                 style={styles.iconBtnSmall}
+                testID={`drawer-expand-${f.id}`}
+                accessibilityLabel={hasChildren ? (isOpen ? `Collapse ${f.name}` : `Expand ${f.name}`) : undefined}
               >
-                <Ionicons name="add" size={18} color={colors.muted} />
+                {hasChildren && (
+                  <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.muted} />
+                )}
               </Pressable>
             </View>
           );
         })}
 
-        {foldersExpanded && folders.length > 0 && (
-          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, marginBottom: spacing.sm, paddingHorizontal: spacing.xl }}>
-            Tip: long-press a folder to edit or delete.
-          </Text>
-        )}
 
         <DrawerRow
           icon="trash-outline"
@@ -1470,18 +1516,19 @@ export default function HomeScreen() {
           <Text style={[styles.drawerSection, { color: colors.muted }]}>LABELS</Text>
           <Pressable
             testID="drawer-new-label"
+            accessibilityRole="button"
+            accessibilityLabel="New label"
             onPress={(e) => openLabelCreate(e)}
-            style={[styles.smallAddBtn, { backgroundColor: colors.brandTertiary }]}
+            hitSlop={8}
+            style={styles.iconBtnSmall}
           >
-            <Ionicons name="add" size={16} color={colors.brand} />
-            <Text style={{ color: colors.brand, fontWeight: '700', marginLeft: 4, fontSize: typeScale.sm }}>
-              New
-            </Text>
+            {/* Same "+" as Folders; it used to be a green "+ New" pill. */}
+            <Ionicons name="add" size={18} color={colors.muted} />
           </Pressable>
         </View>
         {labels.length === 0 ? (
           <Text style={{ color: colors.muted, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
-            No labels yet. Tap &quot;New&quot; to create one.
+            No labels yet. Tap + to create one.
           </Text>
         ) : (
           labels.map((l) => {
@@ -1529,11 +1576,6 @@ export default function HomeScreen() {
             );
           })
         )}
-        {labels.length > 0 && (
-          <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2, paddingHorizontal: spacing.md }}>
-            Tip: long-press a label to edit or delete.
-          </Text>
-        )}
       </ScrollView>
 
       <View style={{ height: 1, backgroundColor: colors.divider, marginVertical: spacing.sm }} />
@@ -1575,6 +1617,16 @@ export default function HomeScreen() {
           matches the rest of the app chrome. A hairline divider at the bottom
           hints that content scrolls beneath it. */}
       <View
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          // Height is taken from the NORMAL header only. The selection header
+          // is shorter (no search bar); following it moved every card up when
+          // you long-pressed, so the note under your finger jumped away.
+          const h = selectionMode && layout.headerH ? layout.headerH : height;
+          if (Math.abs(width - layout.w) > 0.5 || Math.abs(h - layout.headerH) > 0.5) {
+            setLayout({ w: width, headerH: h });
+          }
+        }}
         style={[
           styles.header,
           {
@@ -1639,16 +1691,15 @@ export default function HomeScreen() {
                 updateSettings({ homeTileScale: 1.0 });
               }}
               delayLongPress={400}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+              accessibilityLabel={`Tile size ${tileSizeLabel}. Tap to change, long-press to reset.`}
+              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary, width: undefined, paddingHorizontal: 10, flexDirection: 'row', gap: 4 }]}
             >
-              <Ionicons name="expand-outline" size={20} color={colors.onSurface} />
-            </Pressable>
-            <Pressable
-              testID="settings-btn"
-              onPress={() => router.push('/settings')}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
-            >
-              <Ionicons name="settings-outline" size={20} color={colors.onSurface} />
+              {/* It was an "expand" icon, which looked like fullscreen. It now
+                  says what it does: the current tile size. */}
+              <Ionicons name="grid-outline" size={16} color={colors.onSurface} />
+              <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: typeScale.sm, minWidth: 18, textAlign: 'center' }}>
+                {tileSizeLabel}
+              </Text>
             </Pressable>
           </View>
         ) : (
@@ -1772,7 +1823,9 @@ export default function HomeScreen() {
               />
             }
             contentContainerStyle={{
-              paddingTop: selectionMode ? 200 : (category === 'trash' && notes.length > 0 ? 230 : 180),
+              // Measured header height, plus a breathing gap. Was a hardcoded
+              // 180/200/230 guess.
+              paddingTop: headerH + spacing.md,
               paddingBottom: insets.bottom + (selectionMode ? 160 : 140),
               paddingHorizontal: spacing.lg,
             }}
@@ -1783,7 +1836,26 @@ export default function HomeScreen() {
                     <ActivityIndicator color={colors.brand} />
                   </View>
                 )}
-                {isEmpty && !selectionMode && !isFileManagerView && (
+                {loadError && (
+                  <View
+                    testID="load-error"
+                    style={[styles.empty, { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.error }]}
+                  >
+                    <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
+                    <Text style={[styles.emptyTitle, { color: colors.onSurface }]}>Couldn&apos;t load your notes</Text>
+                    <Text style={[styles.emptySub, { color: colors.muted, textAlign: 'center' }]} numberOfLines={4}>
+                      {loadError}
+                    </Text>
+                    <Pressable
+                      testID="load-error-retry"
+                      onPress={() => { setLoading(true); load(); }}
+                      style={[styles.emptyBtn, { backgroundColor: colors.brand }]}
+                    >
+                      <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>Try again</Text>
+                    </Pressable>
+                  </View>
+                )}
+                {!loadError && isEmpty && !selectionMode && !isFileManagerView && (
                   <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
                     <Ionicons
                       name={category === 'trash' ? 'trash-outline' : 'document-text-outline'}
@@ -1796,7 +1868,7 @@ export default function HomeScreen() {
                     <Text style={[styles.emptySub, { color: colors.muted }]}>
                       {category === 'trash'
                         ? 'Deleted notes will show up here'
-                        : 'Tap + to create a new note'}
+                        : 'Tap the pen button for a new page'}
                     </Text>
                     {category !== 'trash' && (
                       <Pressable
@@ -1804,21 +1876,21 @@ export default function HomeScreen() {
                         onPress={onFabPress}
                         style={[styles.emptyBtn, { backgroundColor: colors.brand }]}
                       >
-                        <Text style={{ color: colors.onBrandPrimary, fontWeight: '600' }}>Create Note</Text>
+                        <Text style={{ color: colors.onBrandPrimary, fontWeight: '600' }}>New page</Text>
                       </Pressable>
                     )}
                   </View>
                 )}
                 {isFileManagerView && renderFileManager()}
-                {!isFileManagerView && !!pinnedNotes.length && (
+                {!isFileManagerView && !!favoriteNotes.length && (
                   <>
-                    <SectionLabel label="Pinned" color={colors.muted} />
-                    <View style={styles.grid}>{pinnedNotes.map(renderNoteCard)}</View>
+                    <SectionLabel label="Favorites" color={colors.muted} />
+                    <View style={styles.grid}>{favoriteNotes.map(renderNoteCard)}</View>
                   </>
                 )}
                 {!isFileManagerView && !!otherNotes.length && (
                   <>
-                    {!!pinnedNotes.length && <SectionLabel label="Others" color={colors.muted} />}
+                    {!!favoriteNotes.length && <SectionLabel label="Others" color={colors.muted} />}
                     <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
                   </>
                 )}
@@ -1853,7 +1925,6 @@ export default function HomeScreen() {
                 onPress={bulkFavorite}
                 testID="bulk-favorite"
               />
-              <TopBulkBtn icon="pin-outline" label="Pin" onPress={bulkPin} testID="bulk-pin" />
               <TopBulkBtn icon="folder-outline" label="Move" onPress={() => setShowMovePicker(true)} testID="bulk-move" />
               <TopBulkBtn icon="pricetag-outline" label="Label" onPress={() => setShowLabelPicker(true)} testID="bulk-label" />
               <TopBulkBtn icon="copy-outline" label="Duplicate" onPress={bulkDuplicate} testID="bulk-duplicate" />
@@ -1882,8 +1953,29 @@ export default function HomeScreen() {
 
       {!selectionMode && category !== 'trash' && (
         <Pressable
+          testID="fab-more"
+          accessibilityLabel="More ways to create: text notes, templates, paper setup"
+          onPress={openCreateMenu}
+          style={({ pressed }) => [
+            styles.fabMini,
+            {
+              backgroundColor: colors.surface,
+              bottom: insets.bottom + spacing.lg + 60 + spacing.sm,
+              borderColor: colors.border,
+              transform: [{ scale: pressed ? 0.94 : 1 }],
+            },
+          ]}
+        >
+          <Ionicons name="document-text-outline" size={20} color={colors.onSurface} />
+        </Pressable>
+      )}
+      {!selectionMode && category !== 'trash' && (
+        <Pressable
           testID="fab-create-note"
+          accessibilityLabel="New handwritten page"
           onPress={onFabPress}
+          onLongPress={openCreateMenu}
+          delayLongPress={350}
           style={({ pressed }) => [
             styles.fab,
             {
@@ -1893,7 +1985,7 @@ export default function HomeScreen() {
             },
           ]}
         >
-          <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
+          <Ionicons name="create-outline" size={26} color={colors.onBrandPrimary} />
         </Pressable>
       )}
 
@@ -1999,7 +2091,7 @@ export default function HomeScreen() {
               {
                 backgroundColor: colors.surface,
                 right: spacing.lg,
-                bottom: insets.bottom + spacing.lg + 70, // just above the FAB
+                bottom: insets.bottom + spacing.lg + 60 + spacing.sm + 48, // above both buttons
               },
             ]}
           >
@@ -2069,7 +2161,7 @@ export default function HomeScreen() {
                 <>
                   <Text style={[styles.sheetTitle, { color: colors.onSurface }]}>Note info</Text>
                   <ScrollView contentContainerStyle={{ paddingBottom: spacing.lg }} showsVerticalScrollIndicator={false}>
-                    <InfoRow label="Title" value={n.title || 'Untitled'} colors={colors} />
+                    <InfoRow label="Title" value={displayTitle(n)} colors={colors} />
                     <InfoRow label="Type" value={n.note_type === 'handwriting' ? 'Handwritten' : 'Text'} colors={colors} />
                     <InfoRow label="Created" value={fmtDate(n.created_at)} colors={colors} />
                     <InfoRow label="Modified" value={fmtDate(n.updated_at)} colors={colors} />
@@ -2116,7 +2208,7 @@ export default function HomeScreen() {
                         )}
                       </>
                     )}
-                    <InfoRow label="Pinned" value={n.pinned ? 'Yes' : 'No'} colors={colors} />
+                    <InfoRow label="Favorite" value={n.favorite ? 'Yes' : 'No'} colors={colors} />
                     <InfoRow label="Locked" value={n.locked ? 'Yes' : 'No'} colors={colors} />
                     {n.deleted_at ? <InfoRow label="Trashed" value={fmtDate(n.deleted_at)} colors={colors} /> : null}
                     <InfoRow label="ID" value={n.id} colors={colors} mono />
@@ -2753,13 +2845,17 @@ export default function HomeScreen() {
           >
             <Text style={[styles.sheetTitle, { color: colors.onSurface, fontSize: typeScale.lg }]}>Sort by</Text>
             {([
-              { id: 'updated', label: 'Recently updated' },
-              { id: 'created', label: 'Newest first' },
-              { id: 'title', label: 'Title (A → Z)' },
+              { id: 'updated', label: 'Date modified' },
+              { id: 'created', label: 'Date created' },
+              { id: 'title', label: 'Title' },
             ] as { id: SortBy; label: string }[]).map((o) => (
               <Pressable
                 key={o.id}
-                onPress={() => { setSortBy(o.id); setShowSortMenu(false); }}
+                onPress={() => {
+                  // Each field starts in its natural direction.
+                  updateSettings({ homeSortBy: o.id, homeSortDir: o.id === 'title' ? 'asc' : 'desc' });
+                  setShowSortMenu(false);
+                }}
                 testID={`sort-${o.id}`}
                 style={({ pressed }) => [
                   styles.tplRow,
@@ -2776,6 +2872,35 @@ export default function HomeScreen() {
                 </Text>
               </Pressable>
             ))}
+            {/* Direction. Labelled in the terms of the chosen field, not as an
+                abstract ascending/descending. */}
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+              {(sortBy === 'title' ? (['asc', 'desc'] as const) : (['desc', 'asc'] as const)).map((dir) => {
+                const label =
+                  sortBy === 'title'
+                    ? dir === 'asc' ? 'A → Z' : 'Z → A'
+                    : dir === 'desc' ? 'Newest first' : 'Oldest first';
+                const active = sortDir === dir;
+                return (
+                  <Pressable
+                    key={dir}
+                    testID={`sort-dir-${dir}`}
+                    onPress={() => { updateSettings({ homeSortDir: dir }); haptic.selection(); }}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      paddingVertical: spacing.sm,
+                      borderRadius: radius.md,
+                      alignItems: 'center',
+                      backgroundColor: active ? colors.brand : pressed ? colors.surfaceTertiary : colors.surfaceSecondary,
+                    })}
+                  >
+                    <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -2793,6 +2918,11 @@ export default function HomeScreen() {
           const f = folderModal.folder!;
           setFolderModal(null);
           setInfoTarget({ kind: 'folder', folder: f });
+        } : undefined}
+        onNewSubfolder={folderModal?.folder ? () => {
+          const parent = folderModal.folder!;
+          const anchor = folderModal.anchor ?? null;
+          setFolderModal({ folder: undefined, parentId: parent.id, anchor });
         } : undefined}
       />
 
@@ -2829,7 +2959,7 @@ export default function HomeScreen() {
             </View>
             {labels.length === 0 ? (
               <Text style={{ color: colors.muted, textAlign: 'center', marginTop: spacing.lg }}>
-                No labels yet. Tap &quot;New&quot; to create one.
+                No labels yet. Tap + to create one.
               </Text>
             ) : (
               <ScrollView>
@@ -2936,6 +3066,7 @@ function FolderModal({
   onSave,
   onDelete,
   onInfo,
+  onNewSubfolder,
 }: {
   visible: boolean;
   folder?: Folder;
@@ -2945,6 +3076,7 @@ function FolderModal({
   onSave: (name: string, color: string) => void;
   onDelete?: () => void;
   onInfo?: () => void;
+  onNewSubfolder?: () => void;
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -3046,6 +3178,16 @@ function FolderModal({
                 style={[styles.btn, { borderColor: colors.error, borderWidth: 1 }]}
               >
                 <Text style={{ color: colors.error, fontWeight: '700' }}>Delete</Text>
+              </Pressable>
+            )}
+            {folder && onNewSubfolder && (
+              <Pressable
+                testID="folder-new-sub"
+                accessibilityLabel="New subfolder"
+                onPress={onNewSubfolder}
+                style={[styles.btn, { borderColor: colors.brand, borderWidth: 1, paddingHorizontal: spacing.md }]}
+              >
+                <Ionicons name="folder-open-outline" size={20} color={colors.brand} />
               </Pressable>
             )}
             {folder && onInfo && (
@@ -3436,7 +3578,7 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
   cardDate: { fontSize: typeScale.sm },
   cardTitle: { fontSize: typeScale.lg, fontWeight: '700', marginBottom: spacing.xs },
-  cardPreview: { fontSize: typeScale.base, lineHeight: 18 },
+  cardPreview: { fontSize: 12.5, lineHeight: 17 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, gap: 4 },
   cardMetaText: { fontSize: typeScale.sm },
   labelChipRow: {
@@ -3539,6 +3681,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  fabMini: {
+    position: 'absolute',
+    right: spacing.lg + 8,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+  },
   fab: {
     position: 'absolute',
     right: spacing.lg,
@@ -3586,7 +3743,7 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 12,
   },
-  drawerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', flexDirection: 'row' },
+  drawerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', flexDirection: 'row' },
   drawerPanel: {
     width: '82%',
     maxWidth: 340,

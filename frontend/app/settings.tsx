@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Switch, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,6 +8,10 @@ import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, ACCENTS, AccentKey, CANVAS_COLORS } from '@/src/theme/tokens';
 import { useAppSettings, GestureAction, SPenAction } from '@/src/state/useAppSettings';
 import { lockStore } from '@/src/state/lockStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Directory, File } from 'expo-file-system';
+import { buildBackup, backupFileName, parseBackup, restoreBackup } from '@/src/db/backup';
+import { StorageKeys } from '@/src/state/storageKeys';
 
 export default function SettingsScreen() {
   const { mode, setMode, accent, setAccent, colors } = useTheme();
@@ -21,6 +25,78 @@ export default function SettingsScreen() {
   const [hasPasscode, setHasPasscode] = useState(false);
   const [editing, setEditing] = useState(false);
   const [passcodeError, setPasscodeError] = useState<string | null>(null);
+
+  // ---- Backup ----
+  const [backupBusy, setBackupBusy] = useState<null | 'export' | 'import'>(null);
+  const [backupMsg, setBackupMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(StorageKeys.lastBackupAt).then(setLastBackupAt).catch(() => {});
+  }, []);
+
+  /**
+   * Write a backup file into a folder the user picks. Android shows its own
+   * folder picker, so the file can go to Downloads, a USB stick, or a synced
+   * cloud folder — anywhere outside the app, which is the point: the app's own
+   * storage disappears on uninstall.
+   */
+  const exportBackup = useCallback(async () => {
+    setBackupMsg(null);
+    let dir: Awaited<ReturnType<typeof Directory.pickDirectoryAsync>>;
+    try {
+      dir = await Directory.pickDirectoryAsync();
+    } catch {
+      return; // picker dismissed: not an error
+    }
+    setBackupBusy('export');
+    try {
+      const backup = await buildBackup();
+      const file = dir.createFile(backupFileName(), 'application/json');
+      file.write(JSON.stringify(backup));
+      const at = new Date().toISOString();
+      await AsyncStorage.setItem(StorageKeys.lastBackupAt, at);
+      setLastBackupAt(at);
+      const c = backup.counts;
+      setBackupMsg({ tone: 'ok', text: `Saved ${c.notes} notes, ${c.folders} folders and ${c.labels} labels.` });
+    } catch (e) {
+      setBackupMsg({ tone: 'err', text: `Backup failed: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setBackupBusy(null);
+    }
+  }, []);
+
+  /** Merge a backup file into the library. Never deletes; newer edits win. */
+  const importBackup = useCallback(async () => {
+    setBackupMsg(null);
+    let picked: Awaited<ReturnType<typeof File.pickFileAsync>>;
+    try {
+      // No MIME filter: many Android file managers report .json as a generic
+      // binary type, so filtering on application/json can grey out the very
+      // backup the user just saved. A wrong file is rejected by parseBackup.
+      picked = await File.pickFileAsync();
+    } catch {
+      return; // picker dismissed
+    }
+    const file = Array.isArray(picked) ? picked[0] : picked;
+    if (!file) return;
+    setBackupBusy('import');
+    try {
+      const summary = await restoreBackup(parseBackup(await file.text()));
+      const parts = [
+        `${summary.notesAdded} notes added`,
+        summary.notesUpdated ? `${summary.notesUpdated} updated` : '',
+        summary.notesSkipped ? `${summary.notesSkipped} already up to date` : '',
+        summary.foldersAdded ? `${summary.foldersAdded} folders added` : '',
+        summary.labelsAdded + summary.labelsMerged ? `${summary.labelsAdded + summary.labelsMerged} labels` : '',
+      ].filter(Boolean);
+      setBackupMsg({ tone: 'ok', text: `Restored: ${parts.join(', ')}.` });
+    } catch (e) {
+      setBackupMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBackupBusy(null);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,7 +212,7 @@ export default function SettingsScreen() {
   const [activeTab, setActiveTab] = useState<TabKey>('general');
   const tabs: { key: TabKey; label: string; icon: any }[] = [
     { key: 'general', label: 'General', icon: 'options-outline' },
-    { key: 'pen', label: 'Pen & Gestures', icon: 'hand-left-outline' },
+    { key: 'pen', label: 'Pen', icon: 'hand-left-outline' },
     { key: 'security', label: 'Security', icon: 'lock-closed-outline' },
     { key: 'about', label: 'About', icon: 'information-circle-outline' },
   ];
@@ -176,18 +252,34 @@ export default function SettingsScreen() {
           borderRadius: wide ? 28 : 0,
         }}
       >
-      <View style={[styles.header, { paddingTop: (wide ? spacing.md : insets.top + spacing.sm), width: '100%' }]}>
-        <Text style={[styles.title, { color: colors.onSurface }]} testID="settings-title">
+      <View style={[styles.header, { paddingTop: (wide ? spacing.md : insets.top + spacing.sm), width: '100%', flexDirection: 'row', alignItems: 'center' }]}>
+        <Text style={[styles.title, { color: colors.onSurface, flex: 1 }]} testID="settings-title">
           Settings
         </Text>
+        {/* A visible way out. On a tablet the only exit was tapping outside
+            the panel, which nothing indicated. */}
+        <Pressable
+          testID="settings-close"
+          accessibilityRole="button"
+          accessibilityLabel="Close settings"
+          onPress={() => router.back()}
+          hitSlop={10}
+          style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface }}
+        >
+          <Ionicons name="close" size={20} color={colors.onSurface} />
+        </Pressable>
       </View>
 
-      {/* Tab bar */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.sm }}
-        style={{ width: '100%', flexGrow: 0, marginBottom: spacing.sm }}
+      {/* Tab bar: an equal-width segmented control. It was a horizontal
+          scroller that cut "About" off with no hint that it scrolled. */}
+      <View
+        style={{
+          width: '100%',
+          flexDirection: 'row',
+          paddingHorizontal: spacing.md,
+          gap: spacing.xs,
+          marginBottom: spacing.sm,
+        }}
       >
         {tabs.map((t) => {
           const active = activeTab === t.key;
@@ -199,6 +291,9 @@ export default function SettingsScreen() {
               style={({ pressed }) => [
                 styles.tab,
                 {
+                  flex: 1,
+                  justifyContent: 'center',
+                  paddingHorizontal: spacing.xs,
                   backgroundColor: active
                     ? colors.brand
                     : pressed
@@ -218,13 +313,14 @@ export default function SettingsScreen() {
                   fontWeight: active ? '700' : '500',
                   marginLeft: 6,
                 }}
+                numberOfLines={1}
               >
                 {t.label}
               </Text>
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
 
       <ScrollView
         style={{ width: '100%' }}
@@ -346,6 +442,50 @@ export default function SettingsScreen() {
             trackColor={{ false: colors.border, true: colors.brandTertiary }}
           />
         </View>
+        <Text style={[styles.section, { color: colors.muted, marginTop: spacing.xl }]}>BACKUP</Text>
+        <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginBottom: spacing.sm }}>
+          Your notes live only on this device, and uninstalling the app deletes
+          them. A backup is a single file you keep somewhere else.
+          {lastBackupAt
+            ? `  Last backup: ${new Date(lastBackupAt).toLocaleString()}.`
+            : '  No backup yet.'}
+        </Text>
+        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+          <Pressable
+            testID="backup-export"
+            accessibilityRole="button"
+            disabled={!!backupBusy}
+            onPress={exportBackup}
+            style={[styles.btn, { flex: 1, backgroundColor: colors.brand, opacity: backupBusy ? 0.5 : 1 }]}
+          >
+            <Text style={{ color: colors.onBrandPrimary, fontWeight: '700' }}>
+              {backupBusy === 'export' ? 'Saving…' : 'Back up now'}
+            </Text>
+          </Pressable>
+          <Pressable
+            testID="backup-import"
+            accessibilityRole="button"
+            disabled={!!backupBusy}
+            onPress={importBackup}
+            style={[styles.btn, { flex: 1, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, opacity: backupBusy ? 0.5 : 1 }]}
+          >
+            <Text style={{ color: colors.onSurface, fontWeight: '600' }}>
+              {backupBusy === 'import' ? 'Restoring…' : 'Restore from file'}
+            </Text>
+          </Pressable>
+        </View>
+        {backupMsg && (
+          <Text
+            testID="backup-message"
+            accessibilityLiveRegion="polite"
+            style={{ color: backupMsg.tone === 'ok' ? colors.success : colors.error, marginTop: spacing.sm, fontSize: typeScale.sm }}
+          >
+            {backupMsg.text}
+          </Text>
+        )}
+        <Text style={{ color: colors.muted, fontSize: typeScale.xs, marginTop: spacing.xs }}>
+          Restoring adds what&apos;s missing and keeps whichever copy of a note is newer. It never deletes anything.
+        </Text>
         </>)}
 
         {activeTab === 'pen' && (<>
@@ -533,7 +673,7 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   header: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
-  title: { fontSize: typeScale.xxxl, fontWeight: '700' },
+  title: { fontSize: typeScale.xxl, fontWeight: '700' },
   section: { fontSize: typeScale.sm, letterSpacing: 1.2, fontWeight: '600', marginBottom: spacing.sm },
   themeRow: { flexDirection: 'row', gap: spacing.sm },
   tab: {

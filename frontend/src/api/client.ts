@@ -308,6 +308,25 @@ export const NotesApi = {
     return (await NotesApi.page(opts)).items;
   },
 
+  /**
+   * Every matching note, paging until done.
+   *
+   * The home screen used `list()`, which returns one page (200 by default).
+   * Past 200 notes the rest silently didn't exist as far as the UI was
+   * concerned. Summaries are small, so reading them all is cheap; the home
+   * screen sorts client-side and needs the full set anyway.
+   */
+  async listAll(opts: Omit<ListOpts, 'limit' | 'offset'> = {}): Promise<NoteSummary[]> {
+    const out: NoteSummary[] = [];
+    const PAGE = 500;
+    for (let offset = 0; ; offset += PAGE) {
+      const pg = await NotesApi.page({ ...opts, limit: PAGE, offset });
+      out.push(...pg.items);
+      if (!pg.has_more || pg.items.length === 0) break;
+    }
+    return out;
+  },
+
   async get(id: string): Promise<Note> {
     return guard('open that note', async () => {
       const db = await getDb();
