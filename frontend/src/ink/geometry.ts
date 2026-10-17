@@ -200,6 +200,29 @@ export function commitPoints(points: InkPoint[], tool: InkTool, baseWidth: numbe
   return [...points.slice(0, a), ...simplify(points.slice(a, b + 1)), ...points.slice(b + 1)];
 }
 
+/**
+ * The points stored for a finished stroke: every captured sample, rounded.
+ *
+ * Strokes used to be simplified here (redundant samples dropped). The curve
+ * is drawn as a spline through the stored samples, and a spline through fewer
+ * samples bends differently, so the stroke visibly re-shaped itself a moment
+ * after the pen lifted, when the saved copy replaced the one drawn live.
+ * Keeping every sample makes the saved stroke identical to what was drawn.
+ * Rounding (0.01 px, 0.001 for pressure and width) keeps the stored size down
+ * without any visible change.
+ */
+export function storePoints(points: InkPoint[]): InkPoint[] {
+  if (points.length === 0) return [];
+  const t0 = points[0].t;
+  const r = (v: number, k: number) => Math.round(v * k) / k;
+  return points.map((p) => {
+    const out: InkPoint = { x: r(p.x, 100), y: r(p.y, 100), t: r(p.t - t0, 10) };
+    if (p.p !== undefined) out.p = r(p.p, 1000);
+    if (p.w !== undefined) out.w = r(p.w, 1000);
+    return out;
+  });
+}
+
 /** Ease-out from a thin tip to full width. */
 function taperEase(u: number): number {
   const v = clamp01(u);

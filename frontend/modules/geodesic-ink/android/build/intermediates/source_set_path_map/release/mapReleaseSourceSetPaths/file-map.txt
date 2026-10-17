@@ -1,0 +1,7 @@
+expo.modules.geodesicink.geodesic-ink-pngs-0 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/build/generated/res/pngs/release
+expo.modules.geodesicink.geodesic-ink-resValues-1 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/build/generated/res/resValues/release
+expo.modules.geodesicink.geodesic-ink-mergeReleaseResources-2 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
+expo.modules.geodesicink.geodesic-ink-mergeReleaseResources-3 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
+expo.modules.geodesicink.geodesic-ink-release-4 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/build/intermediates/merged_res/release/mergeReleaseResources
+expo.modules.geodesicink.geodesic-ink-main-5 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/src/main/res
+expo.modules.geodesicink.geodesic-ink-release-6 /home/ugchimdi/Noteapp/frontend/modules/geodesic-ink/android/src/release/res

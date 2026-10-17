@@ -3,9 +3,8 @@ package expo.modules.geodesicink
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
 import android.os.Build
+import android.util.Log
 import android.view.MotionEvent
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
@@ -21,12 +20,13 @@ import kotlin.math.min
  *  - Samples go straight from Android to this view. No hop to the JS thread,
  *    which is often busy with React work while you write.
  *  - Every sample is used. Android batches the S Pen's extra samples into each
- *    event as "historical" points; the JS gesture library only ever saw the
- *    latest one.
+ *    event as "historical" points; the JS gesture library only saw the latest.
  *  - Input is requested unbuffered (Android 11+), so samples arrive as the
  *    digitiser reports them rather than once per frame.
- *  - A short prediction is drawn ahead of the nib to hide the remaining
- *    display latency. It is replaced as real samples arrive and never stored.
+ *  - On Android 10+ the wet stroke is drawn into the buffer that is already on
+ *    screen (FrontBufferInk), skipping the frame queue entirely.
+ *  - A short prediction is drawn ahead of the nib to hide what latency is
+ *    left. It is replaced as real samples arrive and never stored.
  *
  * Only stylus input is handled here. Fingers pass through untouched, so
  * scrolling, zooming and finger drawing keep working exactly as before.
@@ -62,7 +62,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     val points = ArrayList<InkPt>(256)
     val filter = OneEuro2D()
     var lastRaw: InkPt? = null
-    var finishedPath: Path? = null
+    var finished: StrokeDraw? = null
   }
 
   private var current: WetStroke? = null
@@ -72,12 +72,15 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   private var prediction: List<InkPt> = emptyList()
   private val tmp = DoubleArray(2)
 
-  private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-  private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    style = Paint.Style.STROKE
-    strokeCap = Paint.Cap.ROUND
-    strokeJoin = Paint.Join.ROUND
-  }
+  private val fillPaint = newFillPaint()
+  private val strokePaint = newStrokePaint()
+
+  // Front-buffered rendering (Android 10+). Null when off, unsupported, or it
+  // failed to start; drawing then falls back to onDraw below.
+  private var wantFrontBuffer = true
+  private var front: FrontBufferInk? = null
+  /** Pending strokes changed while the pen was down; redraw them at pen-up. */
+  private var pendingDirty = false
 
   init {
     setWillNotDraw(false)
@@ -91,6 +94,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       current = null
       activePointerId = -1
       prediction = emptyList()
+      front?.cancel()
       invalidate()
     }
   }
@@ -108,6 +112,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     scale = v[0].toFloat().let { if (it <= 0f) 1f else it }
     tx = v[1].toFloat()
     ty = v[2].toFloat()
+    refreshPending()
     invalidate()
   }
 
@@ -120,7 +125,65 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   }
 
   fun releaseUpTo(id: Int) {
-    if (pending.removeAll { it.id <= id }) invalidate()
+    if (pending.removeAll { it.id <= id }) {
+      refreshPending()
+      invalidate()
+    }
+  }
+
+  fun setFrontBuffer(value: Boolean) {
+    if (value == wantFrontBuffer) return
+    wantFrontBuffer = value
+    if (isAttachedToWindow) {
+      if (value) startFrontBuffer() else stopFrontBuffer()
+    }
+  }
+
+  // ------------------------------------------------------------ lifecycle
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    if (wantFrontBuffer) startFrontBuffer()
+  }
+
+  override fun onDetachedFromWindow() {
+    stopFrontBuffer()
+    super.onDetachedFromWindow()
+  }
+
+  private fun startFrontBuffer() {
+    if (front != null || Build.VERSION.SDK_INT < 29) return
+    front = try {
+      FrontBufferInk(context, this)
+    } catch (t: Throwable) {
+      // Any failure here just means the slower path; never a crash.
+      Log.w(TAG, "Front-buffered ink unavailable, using normal drawing", t)
+      null
+    }
+    requestLayout()
+    invalidate()
+  }
+
+  private fun stopFrontBuffer() {
+    val f = front ?: return
+    front = null
+    try {
+      f.release()
+    } catch (t: Throwable) {
+      Log.w(TAG, "Front-buffered ink release failed", t)
+    }
+    invalidate()
+  }
+
+  // React Native lays this view out but not native children; size them here.
+  override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+    val w = r - l
+    val h = b - t
+    for (i in 0 until childCount) {
+      val c = getChildAt(i)
+      c.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
+      c.layout(0, 0, w, h)
+    }
   }
 
   // ---------------------------------------------------------------- input
@@ -170,7 +233,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         }
         addSample(s, ev.getX(idx), ev.getY(idx), ev.getPressure(idx), ev.eventTime.toDouble())
         prediction = predict(s)
-        invalidate()
+        showWet(s)
         return true
       }
       MotionEvent.ACTION_POINTER_UP -> {
@@ -189,6 +252,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         current = null
         activePointerId = -1
         prediction = emptyList()
+        front?.cancel()
+        if (pendingDirty) refreshPending()
         invalidate()
         return true
       }
@@ -210,7 +275,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     s.points.add(InkPt(tmp[0].toFloat(), tmp[1].toFloat(), t, p))
     InkGeometry.annotateWidth(s.points, 0, InkGeometry.profile(s.tool))
     s.lastRaw = InkPt(wx.toFloat(), wy.toFloat(), t, p)
-    invalidate()
+    showWet(s)
   }
 
   /** Same gate as the JS path: filtered position, 0.25 world-unit minimum step. */
@@ -248,9 +313,11 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
 
     // Keep drawing it (finished, with its exit taper, exactly as JS will) until
     // JavaScript reports it has drawn it, so there's no blank frame in between.
-    s.finishedPath = InkGeometry.buildPath(s.points, s.width, s.tool, true)
+    s.finished = drawFor(s, s.points, true)
     pending.add(s)
-    invalidate()
+    pendingDirty = false
+    val f = front
+    if (f != null) f.commit(pendingDraws(), transform()) else invalidate()
 
     val flat = ArrayList<Double>(s.points.size * 5)
     for (pt in s.points) {
@@ -291,42 +358,61 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
 
   // ---------------------------------------------------------------- drawing
 
+  private fun transform(): InkTransform {
+    val clipH = if (pageCount > 0) (pageCount - 1) * pageStride + pageH else 0f
+    return InkTransform(scale * density, tx * density, ty * density, pageW, clipH)
+  }
+
+  private fun drawFor(s: WetStroke, pts: List<InkPt>, finished: Boolean): StrokeDraw {
+    val alpha = (s.opacity * 255f).toInt().coerceIn(0, 255)
+    val stroked = InkGeometry.profile(s.tool).constantWidth && pts.size > 1
+    return StrokeDraw(InkGeometry.buildPath(pts, s.width, s.tool, finished), s.color, alpha, stroked, s.width)
+  }
+
+  private fun pendingDraws(): List<StrokeDraw> = pending.mapNotNull { it.finished }
+
+  private fun showWet(s: WetStroke) {
+    val f = front
+    if (f == null) {
+      invalidate()
+      return
+    }
+    val pts: List<InkPt> = if (prediction.isEmpty()) s.points else s.points + prediction
+    f.renderWet(drawFor(s, pts, false), transform())
+  }
+
+  /**
+   * Redraw the finished-but-not-yet-handed-over strokes. With front buffering,
+   * re-rendering that layer while the pen is down would hide the wet stroke
+   * for a frame, so it waits until pen-up (commit draws them then anyway).
+   */
+  private fun refreshPending() {
+    val f = front ?: return
+    if (current != null) {
+      pendingDirty = true
+      return
+    }
+    pendingDirty = false
+    f.showPending(pendingDraws(), transform())
+  }
+
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
+    if (front != null) return // the front-buffer layer draws everything
     val s = current
     if (pending.isEmpty() && s == null) return
     canvas.save()
-    canvas.translate(tx * density, ty * density)
-    canvas.scale(scale * density, scale * density)
-    if (pageCount > 0) {
-      canvas.clipRect(0f, 0f, pageW, (pageCount - 1) * pageStride + pageH)
-    }
-    for (p in pending) {
-      val path = p.finishedPath ?: continue
-      drawPath(canvas, path, p)
-    }
+    transform().apply(canvas)
+    for (p in pending) p.finished?.draw(canvas, fillPaint, strokePaint)
     if (s != null && s.points.isNotEmpty()) {
       val pts: List<InkPt> = if (prediction.isEmpty()) s.points else s.points + prediction
-      drawPath(canvas, InkGeometry.buildPath(pts, s.width, s.tool, false), s)
+      drawFor(s, pts, false).draw(canvas, fillPaint, strokePaint)
     }
     canvas.restore()
   }
 
-  private fun drawPath(canvas: Canvas, path: Path, s: WetStroke) {
-    val alpha = (s.opacity * 255f).toInt().coerceIn(0, 255)
-    if (InkGeometry.profile(s.tool).constantWidth && s.points.size > 1) {
-      strokePaint.color = s.color
-      strokePaint.alpha = min(alpha, Color.alpha(s.color))
-      strokePaint.strokeWidth = s.width
-      canvas.drawPath(path, strokePaint)
-    } else {
-      fillPaint.color = s.color
-      fillPaint.alpha = min(alpha, Color.alpha(s.color))
-      canvas.drawPath(path, fillPaint)
-    }
-  }
-
   companion object {
+    private const val TAG = "GeodesicInk"
     private const val MIN_SAMPLE_DISTANCE = 0.25f
     private const val PREDICT_WINDOW_MS = 24.0
     private const val PREDICT_AHEAD_MS = 14f

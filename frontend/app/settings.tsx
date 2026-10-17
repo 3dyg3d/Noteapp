@@ -527,6 +527,24 @@ export default function SettingsScreen() {
             />
           </View>
         )}
+        {NativeInkView && settings.nativeInk && (
+          <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md }]}>
+            <Ionicons name="speedometer-outline" size={22} color={colors.onSurface} />
+            <View style={{ flex: 1, marginLeft: spacing.md }}>
+              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Direct-to-screen ink</Text>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+                Draws the stroke being written straight to the display for the least delay. Turn off if ink flickers or tears.
+              </Text>
+            </View>
+            <Switch
+              testID="toggle-front-buffer"
+              value={settings.frontBufferInk}
+              onValueChange={(v) => update({ frontBufferInk: v })}
+              thumbColor={settings.frontBufferInk ? colors.brand : colors.muted}
+              trackColor={{ false: colors.border, true: colors.brandTertiary }}
+            />
+          </View>
+        )}
 
         <ActionPicker
           label="S Pen button"

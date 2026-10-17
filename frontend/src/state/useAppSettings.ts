@@ -57,6 +57,11 @@ export interface AppSettings {
    * latency; off falls back to the JavaScript path.
    */
   nativeInk: boolean;
+  /**
+   * With native ink on, draw the wet stroke straight into the on-screen
+   * buffer (Android 10+). Lowest latency; can tear briefly on some screens.
+   */
+  frontBufferInk: boolean;
 }
 
 const KEY = StorageKeys.appSettings;
@@ -76,6 +81,7 @@ const DEFAULTS: AppSettings = {
   homeSortBy: 'updated',
   homeSortDir: 'desc',
   nativeInk: true,
+  frontBufferInk: true,
 };
 
 let cache: AppSettings | null = null;

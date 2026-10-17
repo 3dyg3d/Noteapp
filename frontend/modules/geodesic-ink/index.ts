@@ -28,6 +28,8 @@ export interface NativeInkViewProps extends ViewProps {
   viewTransform: number[];
   /** [pageWidth, pageHeight, pageStride, pageCount]. */
   pages: number[];
+  /** Draw the wet stroke straight into the on-screen buffer (Android 10+). */
+  frontBuffer: boolean;
   /** Strokes with id <= this are drawn by JS now; the native layer drops them. */
   committedId: number;
   onStroke: (e: NativeStrokeEvent) => void;

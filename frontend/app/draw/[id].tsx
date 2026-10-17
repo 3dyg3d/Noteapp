@@ -24,7 +24,7 @@ import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
 import InkStroke from '@/src/ink/InkStroke';
 import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
 import { NativeInkView, toAndroidColor, type NativeStrokeEvent } from '@/modules/geodesic-ink';
-import { InkPoint, InkTool, inkNow, commitPoints, annotateWidth, OneEuro2D, effectiveWidth } from '@/src/ink/stroke';
+import { InkPoint, InkTool, inkNow, storePoints, annotateWidth, OneEuro2D } from '@/src/ink/stroke';
 import { buildPreview } from '@/src/ink/preview';
 import type { SaveStatus } from '@/src/hooks/usePatchQueue';
 import { onNoteRenamed } from '@/src/state/noteEvents';
@@ -955,11 +955,9 @@ export default function DrawScreen() {
   const finalizeStroke = (pts: InkPoint[]) => {
     if (pts.length < 2 || !isPenTool(tool)) return;
     const w = widths[tool];
-    // Simplify once, on commit. This is where redundant samples are removed,
-    // measured against real shape and pressure error rather than a fixed
-    // distance threshold, so corners and width modulation survive while the
-    // stored document shrinks by roughly an order of magnitude.
-    const points = commitPoints(pts, tool as InkTool, effectiveWidth(tool as InkTool, w));
+    // Every sample is kept: see storePoints. Simplifying here made the stroke
+    // re-shape itself just after the pen lifted.
+    const points = storePoints(pts);
     const stroke: StrokeData = {
       kind: 'stroke',
       tool,
@@ -2385,6 +2383,7 @@ export default function DrawScreen() {
                     baseWidth={isPenTool(tool) ? widths[tool] : 2}
                     viewTransform={[scale, tx, ty]}
                     pages={[pageDims.w, basePageH, pageStrideY, pageCount]}
+                    frontBuffer={settings.frontBufferInk !== false}
                     committedId={nativeCommittedId}
                     onStroke={onNativeStroke}
                   />

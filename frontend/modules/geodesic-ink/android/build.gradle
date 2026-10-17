@@ -13,3 +13,8 @@ android {
     versionName "0.1.0"
   }
 }
+
+dependencies {
+  // Front-buffered (low-latency) rendering: CanvasFrontBufferedRenderer.
+  implementation "androidx.graphics:graphics-core:1.0.4"
+}

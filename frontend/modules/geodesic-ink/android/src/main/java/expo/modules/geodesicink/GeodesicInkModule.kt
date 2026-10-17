@@ -38,6 +38,10 @@ class GeodesicInkModule : Module() {
       Prop("pages") { view: InkView, value: List<Double> ->
         view.setPages(value)
       }
+      // Draw the wet stroke into the on-screen buffer (Android 10+).
+      Prop("frontBuffer") { view: InkView, value: Boolean ->
+        view.setFrontBuffer(value)
+      }
       // Strokes with id <= this have been drawn by JavaScript; stop drawing them here.
       Prop("committedId") { view: InkView, value: Int ->
         view.releaseUpTo(value)

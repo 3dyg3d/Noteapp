@@ -21,7 +21,7 @@ import {
 } from './geometry';
 
 export type { InkPoint, InkTool } from './geometry';
-export { simplify, commitPoints, annotateWidth, OneEuro2D } from './geometry';
+export { simplify, commitPoints, storePoints, annotateWidth, OneEuro2D } from './geometry';
 
 /**
  * Monotonic, sub-millisecond clock. `Date.now()` has 1 ms resolution, so at
