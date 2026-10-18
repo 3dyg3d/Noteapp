@@ -47,6 +47,8 @@ export interface NativeInkViewProps extends ViewProps {
   pages: number[];
   /** Draw the wet stroke straight into the on-screen buffer (Android 10+). */
   frontBuffer: boolean;
+  /** Group of the NativeDryView that takes finished strokes directly. */
+  dryGroup?: string;
   /** Strokes with id <= this are drawn by JS now; the native layer drops them. */
   committedId: number;
   /** Hold the pen still at the end of a stroke to snap it to a clean shape. */
@@ -79,6 +81,40 @@ function load(): ComponentType<NativeInkViewProps> | null {
 }
 
 export const NativeInkView = load();
+
+export interface NativeDryViewProps extends ViewProps {
+  /** Matches the ink view's `dryGroup`; unique per screen. */
+  group: string;
+  viewTransform: number[];
+  pages: number[];
+  /** The view is (re)attached and empty: send it everything. */
+  onReady?: (e: { nativeEvent: { group: string } }) => void;
+}
+
+type DryModule = { sync(group: string, meta: string, data: Float32Array): void };
+
+function loadDry(): { View: ComponentType<NativeDryViewProps>; mod: DryModule } | null {
+  if (Platform.OS !== 'android') return null;
+  try {
+    const mod = requireOptionalNativeModule<DryModule>('GeodesicDry');
+    if (!mod?.sync) return null;
+    return { View: requireNativeViewManager('GeodesicDry') as ComponentType<NativeDryViewProps>, mod };
+  } catch {
+    return null;
+  }
+}
+
+const dry = loadDry();
+
+/**
+ * Stored ink drawn natively, by the same renderer as the wet ink, so a stroke
+ * doesn't change when the pen lifts. Null when not in this build.
+ */
+export const NativeDryView = dry?.View ?? null;
+
+export function syncDry(group: string, meta: string, data: Float32Array): void {
+  dry?.mod.sync(group, meta, data);
+}
 
 /**
  * Colours as Android's parser wants them. CSS #RRGGBBAA becomes #AARRGGBB;

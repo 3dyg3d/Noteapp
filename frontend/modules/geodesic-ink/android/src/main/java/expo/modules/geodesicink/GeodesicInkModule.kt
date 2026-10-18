@@ -80,6 +80,10 @@ class GeodesicInkModule : Module() {
       Prop("frontBuffer") { view: InkView, value: Boolean ->
         view.setFrontBuffer(value)
       }
+      // The DryInkView that takes finished strokes (same frame, same renderer).
+      Prop("dryGroup") { view: InkView, value: String ->
+        view.dryGroup = value
+      }
       // Strokes with id <= this have been drawn by JavaScript; stop drawing them here.
       Prop("committedId") { view: InkView, value: Int ->
         view.releaseUpTo(value)

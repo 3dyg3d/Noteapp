@@ -43,6 +43,7 @@ import InkStroke from '@/src/ink/InkStroke';
 import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
 import {
   NativeInkView,
+  NativeDryView,
   toAndroidColor,
   type NativeStrokeEvent,
   type NativeEraseEvent,
@@ -53,6 +54,7 @@ import {
 import * as Sharing from 'expo-sharing';
 import { InkPoint, InkTool, inkNow, storePoints, annotateWidth, OneEuro2D, effectiveWidth } from '@/src/ink/stroke';
 import { buildPreview } from '@/src/ink/preview';
+import { DrySync, adoptNativeId } from '@/src/ink/dryLayer';
 import type { SaveStatus } from '@/src/hooks/usePatchQueue';
 import { onNoteRenamed } from '@/src/state/noteEvents';
 import { StorageKeys } from '@/src/state/storageKeys';
@@ -1164,8 +1166,8 @@ export default function DrawScreen() {
     t === 'pen' || t === 'fountain' || t === 'marker' || t === 'highlighter' || t === 'pencil' ||
     t === 'fineliner' || t === 'calligraphy' || t === 'brush';
 
-  const finalizeStroke = (pts: InkPoint[], shape?: string) => {
-    if (pts.length < 2 || !isPenTool(tool)) return;
+  const finalizeStroke = (pts: InkPoint[], shape?: string): StrokeData | null => {
+    if (pts.length < 2 || !isPenTool(tool)) return null;
     const w = widths[tool];
     // Every sample is kept: see storePoints. Simplifying here made the stroke
     // re-shape itself just after the pen lifted.
@@ -1184,6 +1186,7 @@ export default function DrawScreen() {
       persist(next, paper, paperSize, paperColorId);
       return next;
     });
+    return stroke;
   };
 
   const finalizeShape = (start: Pt, end: Pt) => {
@@ -1858,6 +1861,9 @@ export default function DrawScreen() {
   // 'pen' tool internally, so the family must be checked first, or the stylus
   // would ink while you meant to select. The ruler is handled natively too.
   const nativeAvailable = !!NativeInkView && settings.nativeInk !== false;
+  // Stored strokes drawn natively too (same renderer as the wet ink), so
+  // Skia leaves them out.
+  const dryActive = nativeAvailable && !!NativeDryView;
   // With a selection showing, every touch may be a move / resize / rotate,
   // so JavaScript takes them all until the selection is dismissed.
   const nativeMode: 'ink' | 'erase' | 'lasso' | 'rect' | 'none' =
@@ -1903,17 +1909,57 @@ export default function DrawScreen() {
     if (a === 'undo' || a === 'redo') runGestureAction(a);
   };
 
-  const onNativeStroke = (e: NativeStrokeEvent) => handleNativeStroke(e, setNativeCommittedId);
+  const onNativeStroke = (e: NativeStrokeEvent) => handleNativeStroke(e, setNativeCommittedId, 'main');
   /** Strokes from the zoom pad: same commit, then move the pad along if the line is filling up. */
   const onPadStroke = (e: NativeStrokeEvent) => {
-    handleNativeStroke(e, setPadCommittedId);
+    handleNativeStroke(e, setPadCommittedId, 'pad');
     const flat = e.nativeEvent.points;
     const stride = e.nativeEvent.stride ?? 5;
     let maxX = -Infinity;
     for (let i = 0; i < flat.length; i += stride) maxX = Math.max(maxX, flat[i]);
     setZoomPad((zp) => (zp && maxX > zp.x + zp.w * 0.72 ? advancePad(zp, 1) : zp));
   };
-  function handleNativeStroke(e: NativeStrokeEvent, setCommitted: React.Dispatch<React.SetStateAction<number>>) {
+  // Stored-ink layers (see dryLayer.ts): one for the page, one for the zoom pad.
+  const dryKey = useRef(Math.random().toString(36).slice(2)).current;
+  const drySyncRef = useRef({
+    main: new DrySync(`main-${dryKey}`, toAndroidColor),
+    pad: new DrySync(`pad-${dryKey}`, toAndroidColor),
+  });
+  const [dryTick, setDryTick] = useState(0);
+  const onDryReady = (which: 'main' | 'pad') => () => {
+    drySyncRef.current[which].reset();
+    setDryTick((t) => t + 1);
+  };
+  const dragging = !!selXform;
+  const padOpen = !!zoomPad;
+  useEffect(() => {
+    if (!dryActive) return;
+    const strokes: StrokeData[] = [];
+    for (const it of items) if (it.kind === 'stroke') strokes.push(it);
+    // A selection being dragged is drawn by Skia through the drag matrix.
+    const hidden = new Set<object>();
+    if (dragging) for (const i of selectedIdx) if (items[i]) hidden.add(items[i]);
+    drySyncRef.current.main.sync(strokes, hidden);
+    if (padOpen) drySyncRef.current.pad.sync(strokes, new Set());
+  }, [items, dragging, selectedIdx, dryTick, dryActive, padOpen]);
+
+  // Native strokes waiting for their Skia copy. After the render that added
+  // them commits, one frame lets Skia draw it; the native side then drops its
+  // copy on the following vsync, so the swap lands on (nearly) the same frame.
+  const handoverRef = useRef<{ id: number; set: React.Dispatch<React.SetStateAction<number>> }[]>([]);
+  useEffect(() => {
+    const due = handoverRef.current;
+    if (!due.length) return;
+    handoverRef.current = [];
+    requestAnimationFrame(() => {
+      for (const d of due) d.set((c) => Math.max(c, d.id));
+    });
+  }, [items]);
+  function handleNativeStroke(
+    e: NativeStrokeEvent,
+    setCommitted: React.Dispatch<React.SetStateAction<number>>,
+    which: 'main' | 'pad'
+  ) {
     const { id, points: flat } = e.nativeEvent;
     // [x, y, t, p, w] per point, plus tilt when stride is 6.
     const stride = e.nativeEvent.stride ?? 5;
@@ -1929,12 +1975,24 @@ export default function DrawScreen() {
         setPageCount((c) => c + 1);
         setScrollY(pageCount * pageStrideY);
       }
-      finalizeStroke(pts, e.nativeEvent.shape);
+      const kept = finalizeStroke(pts, e.nativeEvent.shape);
+      // The native layer already holds this stroke under the pen's id.
+      if (kept) {
+        adoptNativeId(kept, id);
+        drySyncRef.current[which].holds(id);
+      } else {
+        drySyncRef.current[which].drop(id);
+        setDryTick((t) => t + 1);
+      }
+    } else {
+      drySyncRef.current[which].drop(id);
+      setDryTick((t) => t + 1);
     }
-    // Two frames for the committed stroke to reach the screen, plus margin.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => setTimeout(() => setCommitted((c) => Math.max(c, id)), 32))
-    );
+    // Handed back once React has committed the stroke (see the effect on items).
+    handoverRef.current.push({ id, set: setCommitted });
+    // Safety net for a stroke that added nothing (too short, wrong tool):
+    // no render follows, so release it anyway.
+    setTimeout(() => setCommitted((c) => Math.max(c, id)), 400);
   }
 
   // ----- Render strokes -----
@@ -2219,15 +2277,11 @@ export default function DrawScreen() {
     annotateWidth(pts, pts.length - 1, tool as InkTool);
     return true;
   }
-  /** The filter trails the pen slightly; end the line where the pen lifted. */
+  /**
+   * Pen up. No extra point at the exact lift position: the line ends where it
+   * was already drawn, so lifting can't make it jump forward.
+   */
   function closeInk() {
-    const pts = livePtsRef.current as InkPoint[];
-    const raw = lastRawRef.current;
-    const last = pts[pts.length - 1];
-    if (raw && last && Math.hypot(raw.x - last.x, raw.y - last.y) > MIN_SAMPLE_DISTANCE) {
-      pts.push({ x: raw.x, y: raw.y, t: Math.max(raw.t, last.t + 0.5), p: raw.p });
-      annotateWidth(pts, pts.length - 1, tool as InkTool);
-    }
     lastRawRef.current = null;
   }
 
@@ -2245,7 +2299,17 @@ export default function DrawScreen() {
   }
 
   function clearLive() {
-    liveStrokeRef.current?.set(null);
+    if (!dryActive) {
+      liveStrokeRef.current?.set(null);
+      return;
+    }
+    // The stored copy reaches the native layer a frame or two later; keep the
+    // live one until then (unless a new stroke has started meanwhile).
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (livePtsRef.current.length === 0) liveStrokeRef.current?.set(null);
+      })
+    );
   }
 
   // ----- Selection: bounds, handles, transforms, clipboard -----
@@ -3180,6 +3244,8 @@ export default function DrawScreen() {
                         if (selXform && selectedIdx.includes(i)) return null;
                         // The text box being edited is shown by the editor instead.
                         if (textEdit && textEdit.index === i) return null;
+                        // Stored strokes are on the native layer above.
+                        if (dryActive && it.kind === 'stroke') return null;
                         return renderItem(it, `i${i}`);
                       })}
                       {selXform && (
@@ -3191,6 +3257,25 @@ export default function DrawScreen() {
                           })}
                         </Group>
                       )}
+                    </Group>
+                  </Group>
+                </Canvas>
+                {/* Stored ink, drawn natively by the same renderer as the
+                    wet ink: a stroke doesn't change when the pen lifts. */}
+                {dryActive && NativeDryView && (
+                  <NativeDryView
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                    group={drySyncRef.current.main.group}
+                    viewTransform={[scale, tx, ty]}
+                    pages={[pageDims.w, basePageH, pageStrideY, pageCount]}
+                    onReady={onDryReady('main')}
+                  />
+                )}
+                {/* Overlays above the ink: live previews, selection, lasso. */}
+                <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+                  <Group transform={[{ translateX: tx }, { translateY: ty }, { scale }]}>
+                    <Group clip={{ x: 0, y: 0, width: pageDims.w, height: totalPageH }}>
                       {/* Wet ink. Repaints on its own, without re-rendering
                           this screen or any committed stroke. */}
                       <LiveStrokeLayer ref={liveStrokeRef} />
@@ -3306,6 +3391,7 @@ export default function DrawScreen() {
                     onErase={onNativeErase}
                     onPenButton={onNativePenButton}
                     committedId={nativeCommittedId}
+                    dryGroup={dryActive ? drySyncRef.current.main.group : ''}
                     onStroke={onNativeStroke}
                   />
                 )}
@@ -3357,11 +3443,22 @@ export default function DrawScreen() {
                         // Only what's near the window; the rest is off-screen anyway.
                         const hy = itemHomeY(it);
                         if (hy < zoomPad.y - pageStrideY || hy > zoomPad.y + padWindowH + pageStrideY) return null;
+                        if (dryActive && it.kind === 'stroke') return null;
                         return renderItem(it, `p${i}`);
                       })}
                     </Group>
                   </Group>
                 </Canvas>
+                {dryActive && NativeDryView && (
+                  <NativeDryView
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                    group={drySyncRef.current.pad.group}
+                    viewTransform={[padScale, -zoomPad.x * padScale, -zoomPad.y * padScale]}
+                    pages={[pageDims.w, basePageH, pageStrideY, pageCount]}
+                    onReady={onDryReady('pad')}
+                  />
+                )}
                 <NativeInkView
                   style={StyleSheet.absoluteFill}
                   inkEnabled={nativeInkActive}
@@ -3382,6 +3479,7 @@ export default function DrawScreen() {
                   onErase={onNativeErase}
                   onPenButton={onNativePenButton}
                   committedId={padCommittedId}
+                  dryGroup={dryActive ? drySyncRef.current.pad.group : ''}
                   onStroke={onPadStroke}
                 />
               </View>

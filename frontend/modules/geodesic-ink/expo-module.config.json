@@ -1,6 +1,6 @@
 {
   "platforms": ["android"],
   "android": {
-    "modules": ["expo.modules.geodesicink.GeodesicInkModule"]
+    "modules": ["expo.modules.geodesicink.GeodesicInkModule", "expo.modules.geodesicink.GeodesicDryModule"]
   }
 }

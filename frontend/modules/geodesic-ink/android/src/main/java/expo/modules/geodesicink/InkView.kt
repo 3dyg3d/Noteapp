@@ -122,6 +122,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     val patched = HashSet<Int>()
     /** Set once the stroke has been snapped to a shape ("circle", "rectangle", ...). */
     var shape: String? = null
+    /** Drawn on the front buffer (opaque ink) rather than in onDraw. */
+    var onFront = false
   }
 
   // ------------------------------------------------------------ shape snap
@@ -173,7 +175,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   private var current: WetStroke? = null
   private var activePointerId = -1
   private val pending = ArrayList<WetStroke>()
-  private var nextId = 1
+  /** Group of the [DryInkView] that takes finished strokes; empty = none. */
+  var dryGroup: String = ""
   private var prediction: List<InkPt> = emptyList()
   private val tmp = DoubleArray(2)
 
@@ -234,12 +237,26 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     pageCount = v[3].toInt()
   }
 
+  /**
+   * JavaScript has drawn strokes up to `id`. Its frame reaches the screen on
+   * the next vsync, so the copies here go on that same frame: earlier leaves
+   * a blank frame, later shows both copies at once.
+   */
   fun releaseUpTo(id: Int) {
-    if (pending.removeAll { it.id <= id }) {
-      refreshPending()
-      invalidate()
+    if (id <= releaseId) return
+    releaseId = id
+    if (releasePosted) return
+    releasePosted = true
+    android.view.Choreographer.getInstance().postFrameCallback {
+      releasePosted = false
+      if (pending.removeAll { it.id <= releaseId }) {
+        refreshPending()
+        invalidate()
+      }
     }
   }
+  private var releaseId = 0
+  private var releasePosted = false
 
   fun setFrontBuffer(value: Boolean) {
     if (value == wantFrontBuffer) return
@@ -645,7 +662,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
 
   private fun beginStroke(ev: MotionEvent, idx: Int) {
     val effective = InkGeometry.effectiveWidth(tool, baseWidth)
-    val s = WetStroke(nextId++, tool, colorInt, effective, InkGeometry.opacity(tool))
+    val s = WetStroke(STROKE_IDS.getAndIncrement(), tool, colorInt, effective, InkGeometry.opacity(tool))
     current = s
     prediction = emptyList()
     s.filter.reset()
@@ -691,26 +708,44 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     if (s.shape == null && idx >= 0 && idx < ev.pointerCount) {
       addSample(s, ev.getX(idx), ev.getY(idx), ev.getPressure(idx), ev.eventTime.toDouble(), ev.getAxisValue(MotionEvent.AXIS_TILT, idx))
     }
-    // The filter trails the pen slightly; end the line where the pen lifted.
-    val raw = s.lastRaw
-    val last = s.points[s.points.size - 1]
-    if (s.shape == null && raw != null && hypot(raw.x - last.x, raw.y - last.y) > MIN_SAMPLE_DISTANCE) {
-      s.points.add(InkPt(raw.x, raw.y, max(raw.t, last.t + 0.5), raw.p, 1f, raw.a))
-      InkGeometry.annotateWidth(s.points, s.points.size - 1, InkGeometry.profile(s.tool))
-    }
+    // No extra point at the exact lift position: the line ends where it was
+    // already drawn, so lifting the pen can't make it jump forward.
     current = null
     activePointerId = -1
     prediction = emptyList()
 
     // Keep drawing it (finished, with its exit taper, exactly as JS will) until
     // JavaScript reports it has drawn it, so there's no blank frame in between.
-    s.finished = drawFor(s, s.points, true)
-    pending.add(s)
-    pendingDirty = false
-    // The wet stroke was already drawn with its exit taper, so this redraw
-    // changes nothing visible: only the prediction tip goes.
-    val f = front
-    if (f != null) f.show(pendingDraws(), transform()) else invalidate()
+    val done = drawFor(s, s.points, true)
+    s.finished = done
+    val dry = DryInkView.find(dryGroup)
+    if (dry != null) {
+      // Same path, same canvas type: the stored copy looks exactly like the
+      // wet one. onDraw ink moves over within this frame (both views draw in
+      // the same traversal), so there is no swap to see.
+      dry.addProvisional(DryInkView.fromDraw(s.id, done))
+      if (s.onFront) {
+        // The front buffer is a separate surface and updates at once, so it
+        // keeps the stroke until the frame with the stored copy is on screen.
+        pending.add(s)
+        pendingDirty = false
+        front?.show(pendingDraws(), transform())
+        val ch = android.view.Choreographer.getInstance()
+        ch.postFrameCallback {
+          ch.postFrameCallback {
+            if (pending.remove(s)) refreshPending()
+          }
+        }
+      }
+      invalidate()
+    } else {
+      pending.add(s)
+      pendingDirty = false
+      // The wet stroke was already drawn with its exit taper, so this redraw
+      // changes nothing visible: only the prediction tip goes.
+      val f = front
+      if (s.onFront && f != null) f.show(pendingDraws(), transform()) else invalidate()
+    }
 
     val flat = ArrayList<Double>(s.points.size * 6)
     for (pt in s.points) {
@@ -748,7 +783,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     val vy = (last.y - ref.y) / dt
     val speed = hypot(vx, vy)
     if (speed < 0.05f) return emptyList()
-    val ahead = min(speed * PREDICT_AHEAD_MS, s.width * 4f)
+    val ahead = min(speed * PREDICT_AHEAD_MS, s.width * 2f)
     val ux = vx / speed
     val uy = vy / speed
     val mid = InkPt(last.x + ux * ahead * 0.5f, last.y + uy * ahead * 0.5f, last.t + PREDICT_AHEAD_MS / 2.0, last.p, last.w)
@@ -770,11 +805,14 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     return StrokeDraw(InkGeometry.buildPath(pts, s.width, s.tool, finished, s.shape != null), s.color, alpha, stroked, s.width, shader)
   }
 
-  private fun pendingDraws(): List<StrokeDraw> = pending.mapNotNull { it.finished }
+  private fun pendingDraws(): List<StrokeDraw> = pending.mapNotNull { if (it.onFront) it.finished else null }
 
   private fun showWet(s: WetStroke) {
     val f = front
-    if (f == null) {
+    // Only fully opaque ink goes on the front buffer. See-through ink would
+    // darken for a frame wherever the front copy overlaps the stored one.
+    s.onFront = f != null && s.opacity >= 1f && Color.alpha(s.color) == 255
+    if (f == null || !s.onFront) {
       invalidate()
       return
     }
@@ -907,12 +945,13 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   }
 
   private fun drawStrokes(canvas: Canvas) {
-    if (front != null) return // the front-buffer layer draws the ink
-    val s = current
-    if (pending.isEmpty() && s == null) return
+    // Front-buffer ink is drawn on that layer; everything else here.
+    val s = current?.takeIf { !it.onFront || front == null }
+    val waiting = pending.any { !it.onFront || front == null }
+    if (!waiting && s == null) return
     canvas.save()
     transform().apply(canvas)
-    for (p in pending) p.finished?.draw(canvas, fillPaint, strokePaint)
+    for (p in pending) if (!p.onFront || front == null) p.finished?.draw(canvas, fillPaint, strokePaint)
     if (s != null && s.points.isNotEmpty()) {
       val pts: List<InkPt> = if (prediction.isEmpty()) s.points else s.points + prediction
       // With the exit taper, as it will look once the pen lifts.
@@ -921,11 +960,14 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     canvas.restore()
   }
 
+
   companion object {
+    /** Shared by every ink view (main canvas and zoom pad), so ids never clash. */
+    private val STROKE_IDS = java.util.concurrent.atomic.AtomicInteger(1)
     private const val TAG = "GeodesicInk"
     private const val MIN_SAMPLE_DISTANCE = 0.25f
     private const val PREDICT_WINDOW_MS = 24.0
-    private const val PREDICT_AHEAD_MS = 14f
+    private const val PREDICT_AHEAD_MS = 8f
     private const val HOLD_MS = 450L
     private const val HOLD_SLOP_DP = 3f
   }
