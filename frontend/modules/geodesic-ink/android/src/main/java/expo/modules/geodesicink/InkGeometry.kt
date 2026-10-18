@@ -110,6 +110,13 @@ object InkGeometry {
     return 0.16f + 0.84f * (v * (2f - v))
   }
 
+  /** Length of the exit taper for a finished stroke with these points. */
+  fun endTaperLength(pts: List<InkPt>, baseWidth: Float, prof: ToolProfile): Float {
+    var total = 0f
+    for (i in 1 until pts.size) total += dist(pts[i - 1], pts[i])
+    return min(prof.taperEnd * baseWidth, total * 0.4f)
+  }
+
   internal fun taperFactors(pts: List<InkPt>, baseWidth: Float, prof: ToolProfile, finished: Boolean): FloatArray {
     val n = pts.size
     val s = FloatArray(n)

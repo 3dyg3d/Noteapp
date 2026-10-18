@@ -151,7 +151,10 @@ export function effectiveWidth(tool: InkTool, width: number): number {
   return tool === 'highlighter' ? width * 2.4 : width;
 }
 
-/** The wet stroke: same geometry, no exit taper, never simplified. */
+/**
+ * The wet stroke: exactly the finished geometry, exit taper included, so the
+ * stroke doesn't change shape when the pen lifts.
+ */
 export function buildLiveOutline(points: InkPoint[], baseWidth: number, tool: InkTool): SkPath {
-  return buildStrokeOutline(points, baseWidth, tool, false);
+  return buildStrokeOutline(points, baseWidth, tool, true);
 }

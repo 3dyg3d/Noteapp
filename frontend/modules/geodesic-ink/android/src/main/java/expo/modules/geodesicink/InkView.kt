@@ -199,7 +199,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       current = null
       activePointerId = -1
       prediction = emptyList()
-      front?.cancel()
+      front?.show(pendingDraws(), transform())
       invalidate()
     }
   }
@@ -214,10 +214,15 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
 
   fun setViewTransform(v: List<Double>) {
     if (v.size < 3) return
-    scale = v[0].toFloat().let { if (it <= 0f) 1f else it }
-    tx = v[1].toFloat()
-    ty = v[2].toFloat()
-    refreshPending()
+    val ns = v[0].toFloat().let { if (it <= 0f) 1f else it }
+    val nx = v[1].toFloat()
+    val ny = v[2].toFloat()
+    // JS sends a new array on every render; only a real move needs a redraw.
+    if (ns == scale && nx == tx && ny == ty) return
+    scale = ns
+    tx = nx
+    ty = ny
+    if (pending.isNotEmpty()) refreshPending()
     invalidate()
   }
 
@@ -476,8 +481,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         current = null
         activePointerId = -1
         prediction = emptyList()
-        front?.cancel()
-        if (pendingDirty) refreshPending()
+        refreshPending() // drops the wet stroke, keeps strokes still waiting
         invalidate()
         return true
       }
@@ -703,8 +707,10 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     s.finished = drawFor(s, s.points, true)
     pending.add(s)
     pendingDirty = false
+    // The wet stroke was already drawn with its exit taper, so this redraw
+    // changes nothing visible: only the prediction tip goes.
     val f = front
-    if (f != null) f.commit(pendingDraws(), transform()) else invalidate()
+    if (f != null) f.show(pendingDraws(), transform()) else invalidate()
 
     val flat = ArrayList<Double>(s.points.size * 6)
     for (pt in s.points) {
@@ -777,9 +783,10 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       f.renderWet(op)
       return
     }
-    // Full redraw: clear, then the whole wet stroke with its prediction.
+    // Full redraw: clear, then the strokes still waiting and the whole wet
+    // stroke with its prediction.
     val pts: List<InkPt> = if (prediction.isEmpty()) s.points else s.points + prediction
-    f.renderWet(WetOp(true, listOf(drawFor(s, pts, false)), transform()))
+    f.renderWet(WetOp(true, pendingDraws() + drawFor(s, pts, true), transform()))
   }
 
   /**
@@ -817,6 +824,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     }
     val alpha = 255
     val draws = ArrayList<StrokeDraw>(8)
+    if (clear) draws.addAll(pendingDraws()) // the clear wipes them too
     if (prof.constantWidth) {
       // Spine tools (fineliner): a segment's spline is final two samples on.
       val stableEnd = n - 3
@@ -832,15 +840,31 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       draws.add(StrokeDraw(tail, s.color, alpha, true, s.width))
       return WetOp(clear, draws, transform())
     }
-    val d = InkGeometry.computeOutline(s.points, s.width, s.tool, false) ?: return null
-    val stableEnd = n - 4
+    // Drawn with the exit taper at the nib, as if the pen lifted now, so
+    // lifting it changes nothing. A segment is final once it is three samples
+    // back AND clear of that taper (which moves on as the stroke grows).
+    val d = InkGeometry.computeOutline(s.points, s.width, s.tool, true) ?: return null
+    val endLen = InkGeometry.endTaperLength(s.points, s.width, prof)
+    var stableEnd = n - 4
+    if (endLen > 0f) {
+      var tipDist = 0f
+      var j = n - 1
+      // Walk back from the tip until the taper has ended; points before that are untapered.
+      while (j > 0 && tipDist < endLen) {
+        tipDist += hypot(s.points[j].x - s.points[j - 1].x, s.points[j].y - s.points[j - 1].y)
+        j--
+      }
+      // Point j is the first one (from the tip) at or beyond the taper; segments
+      // up to j - 4 use only untapered outline points.
+      stableEnd = min(stableEnd, j - 4)
+    }
     if (clear) {
       // Round start, as the full outline has (the forward half lies inside).
       val cap = android.graphics.Path()
       cap.addCircle(d.xs[0], d.ys[0], d.hw[0], android.graphics.Path.Direction.CW)
       draws.add(StrokeDraw(cap, s.color, alpha, false, s.width))
     }
-    if (stableEnd >= s.drawnTo) {
+    if (stableEnd >= 0 && stableEnd >= s.drawnTo) {
       val a = max(0, s.drawnTo - 1)
       draws.add(StrokeDraw(InkGeometry.piecePath(d, a, stableEnd), s.color, alpha, false, s.width))
       s.drawnTo = stableEnd + 1
@@ -872,7 +896,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       return
     }
     pendingDirty = false
-    f.showPending(pendingDraws(), transform())
+    f.show(pendingDraws(), transform())
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -891,7 +915,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     for (p in pending) p.finished?.draw(canvas, fillPaint, strokePaint)
     if (s != null && s.points.isNotEmpty()) {
       val pts: List<InkPt> = if (prediction.isEmpty()) s.points else s.points + prediction
-      drawFor(s, pts, false).draw(canvas, fillPaint, strokePaint)
+      // With the exit taper, as it will look once the pen lifts.
+      drawFor(s, pts, true).draw(canvas, fillPaint, strokePaint)
     }
     canvas.restore()
   }
