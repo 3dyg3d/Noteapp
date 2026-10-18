@@ -20,19 +20,24 @@ class StrokeDraw(
   @JvmField val alpha: Int,
   /** Constant-width tools (highlighter) are a stroked spine; others a filled outline. */
   @JvmField val stroked: Boolean,
-  @JvmField val width: Float
+  @JvmField val width: Float,
+  /** Texture (pencil grain) carrying the colour; null for plain ink. */
+  @JvmField val shader: android.graphics.Shader? = null
 ) {
   fun draw(canvas: Canvas, fill: Paint, stroke: Paint) {
-    if (stroked) {
-      stroke.color = color
-      stroke.alpha = min(alpha, Color.alpha(color))
-      stroke.strokeWidth = width
-      canvas.drawPath(path, stroke)
+    val p = if (stroked) stroke else fill
+    if (shader != null) {
+      p.shader = shader
+      p.color = Color.BLACK // colour comes from the shader
+      p.alpha = alpha
     } else {
-      fill.color = color
-      fill.alpha = min(alpha, Color.alpha(color))
-      canvas.drawPath(path, fill)
+      p.shader = null
+      p.color = color
+      p.alpha = min(alpha, Color.alpha(color))
     }
+    if (stroked) p.strokeWidth = width
+    canvas.drawPath(path, p)
+    p.shader = null
   }
 }
 
@@ -50,6 +55,17 @@ class InkTransform(
     if (clipW > 0f && clipH > 0f) canvas.clipRect(0f, 0f, clipW, clipH)
   }
 }
+
+/**
+ * One update to the wet stroke on the front buffer. `clear` wipes the buffer
+ * first (used while the whole stroke is redrawn); otherwise `draws` are added
+ * on top of what is already there, which is how long strokes stay cheap.
+ */
+class WetOp(
+  @JvmField val clear: Boolean,
+  @JvmField val draws: List<StrokeDraw>,
+  @JvmField val transform: InkTransform
+)
 
 fun newFillPaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 fun newStrokePaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -83,8 +99,6 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
     holder.setFormat(PixelFormat.TRANSLUCENT)
   }
 
-  @Volatile private var wet: StrokeDraw? = null
-  @Volatile private var wetTransform: InkTransform? = null
   @Volatile private var pending: List<StrokeDraw> = emptyList()
   @Volatile private var pendingTransform: InkTransform? = null
 
@@ -92,8 +106,7 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
   private val fill = newFillPaint()
   private val stroke = newStrokePaint()
 
-  private var seq = 0
-  private val renderer: CanvasFrontBufferedRenderer<Int>
+  private val renderer: CanvasFrontBufferedRenderer<WetOp>
 
   init {
     host.addView(
@@ -102,16 +115,15 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
     )
     renderer = CanvasFrontBufferedRenderer(
       surfaceView,
-      object : CanvasFrontBufferedRenderer.Callback<Int> {
-        override fun onDrawFrontBufferedLayer(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: Int) {
-          // Redraw the whole wet stroke each time: the prediction at its tip
-          // must disappear when real samples replace it.
-          canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-          val s = wet ?: return
-          val t = wetTransform ?: return
+      object : CanvasFrontBufferedRenderer.Callback<WetOp> {
+        override fun onDrawFrontBufferedLayer(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: WetOp) {
+          // Every queued op is drawn, in order, onto a buffer that keeps its
+          // contents, so an op only needs to add the newest piece.
+          if (param.clear) canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+          if (param.draws.isEmpty()) return
           canvas.save()
-          t.apply(canvas)
-          s.draw(canvas, fill, stroke)
+          param.transform.apply(canvas)
+          for (d in param.draws) d.draw(canvas, fill, stroke)
           canvas.restore()
         }
 
@@ -119,7 +131,7 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
           canvas: Canvas,
           bufferWidth: Int,
           bufferHeight: Int,
-          params: Collection<Int>
+          params: Collection<WetOp>
         ) {
           canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
           val list = pending
@@ -134,11 +146,9 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
     )
   }
 
-  /** Show the stroke being written (UI thread). */
-  fun renderWet(stroke: StrokeDraw, transform: InkTransform) {
-    wet = stroke
-    wetTransform = transform
-    renderer.renderFrontBufferedLayer(++seq)
+  /** Update the stroke being written (UI thread). */
+  fun renderWet(op: WetOp) {
+    renderer.renderFrontBufferedLayer(op)
   }
 
   /**
@@ -148,7 +158,6 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
   fun commit(finished: List<StrokeDraw>, transform: InkTransform) {
     pending = finished
     pendingTransform = transform
-    wet = null
     renderer.commit()
   }
 
@@ -161,7 +170,6 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
 
   /** Touch cancelled (palm, system gesture): drop the wet stroke. */
   fun cancel() {
-    wet = null
     renderer.cancel()
   }
 

@@ -9,7 +9,9 @@ export type PaperType =
   | 'dotted'
   | 'cornell'
   | 'planner'
-  | 'todo';
+  | 'todo'
+  | 'engineering'
+  | 'graph';
 
 interface Props {
   type: PaperType;
@@ -112,6 +114,21 @@ function PaperPreviewInner({
             />
           );
         }
+      }
+      return arr;
+    }
+
+    if (type === 'engineering' || type === 'graph') {
+      const step = Math.max(4, lineSpacing ?? (type === 'graph' ? 6 : 8));
+      let k = 0;
+      for (let y = 0; y < height; y += step, k++) {
+        const heavy = type === 'graph' ? k % 5 === 0 : k === 3;
+        arr.push(<View key={`ph-${y}`} style={[styles.hLine, { top: y, backgroundColor: lineColor, opacity: heavy ? 1 : 0.45, height: heavy ? 1.2 : 0.6 }]} />);
+      }
+      k = 0;
+      for (let x = 0; x < width; x += step, k++) {
+        const heavy = type === 'graph' ? k % 5 === 0 : k === 2;
+        arr.push(<View key={`pv-${x}`} style={[styles.vLine, { left: x, top: 0, height, backgroundColor: lineColor, opacity: heavy ? 1 : 0.45, width: heavy ? 1.2 : 0.6 }]} />);
       }
       return arr;
     }

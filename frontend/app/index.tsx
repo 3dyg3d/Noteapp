@@ -36,6 +36,8 @@ import {
 } from '@/src/api/client';
 import { haptic, useAppSettings, type PageSetup } from '@/src/state/useAppSettings';
 import { newHandwritingDoc } from '@/src/notes/newHandwriting';
+import { renderPdf } from '@/modules/geodesic-ink';
+import { File as FsFile } from 'expo-file-system';
 import { displayTitle, relativeDate } from '@/src/notes/display';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
@@ -424,6 +426,59 @@ export default function HomeScreen() {
     }
   };
   const onFabPress = () => { void quickHandwriting(); };
+
+  /**
+   * Import a PDF as a handwritten note: one page per PDF page, each page's
+   * image as that page's background, ready to write on. Rendering happens on
+   * the device (Android's PdfRenderer); nothing is uploaded.
+   */
+  const [importing, setImporting] = useState<string | null>(null);
+  const importPdf = async () => {
+    setShowTemplate(false);
+    try {
+      const picked = await FsFile.pickFileAsync(undefined, 'application/pdf');
+      const file = Array.isArray(picked) ? picked[0] : picked;
+      if (!file) return;
+      setImporting('Importing PDF…');
+      const res = await renderPdf(file.uri, 1600, 82);
+      if (!res || res.pages.length === 0) {
+        setImporting(null);
+        toast.show({ message: res ? 'That PDF has no pages.' : 'PDF import needs the latest app build.' });
+        return;
+      }
+      const first = res.pages[0];
+      // A readable title from the file's URI when it has one (content:// URIs
+      // often end in an encoded path); otherwise a dated default.
+      const given = (file as unknown as { name?: string }).name;
+      const tail = given || decodeURIComponent(file.uri.split('/').pop() || '').split(/[:/]/).pop() || '';
+      const name = /\.pdf$/i.test(tail)
+        ? tail.replace(/\.pdf$/i, '')
+        : `PDF ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+      const doc = JSON.parse(newHandwritingDoc(
+        { paper: 'blank', paperSize: 'custom', customSize: { w: first.width, h: first.height }, orientation: first.width > first.height ? 'landscape' : 'portrait', paperColor: '#FFFFFF' },
+        settings.defaultCanvasColor
+      ));
+      doc.pageCount = res.pages.length;
+      doc.pageBackgrounds = res.pages.map((_, i) => i);
+      const note = await NotesApi.create({
+        title: name,
+        content: '',
+        note_type: 'handwriting',
+        images: res.pages.map((p) => p.data),
+        drawing_data: JSON.stringify(doc),
+        folder_id: folderFilter,
+      });
+      setImporting(null);
+      if (res.truncatedFrom) {
+        toast.show({ message: `Imported the first ${res.pages.length} of ${res.truncatedFrom} pages.` });
+      }
+      router.push(`/draw/${note.id}`);
+    } catch (e) {
+      setImporting(null);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/cancel/i.test(msg)) toast.show({ message: `Couldn't import that PDF: ${msg}` });
+    }
+  };
   const openCreateMenu = () => {
     haptic.light();
     setShowTemplate(true);
@@ -433,7 +488,7 @@ export default function HomeScreen() {
   const [hwSize, setHwSize] = useState<'a4' | 'a5' | 'letter' | 'index' | 'custom'>('a4');
   const [hwCustomW, setHwCustomW] = useState<string>('1024');
   const [hwCustomH, setHwCustomH] = useState<string>('1366');
-  const [hwTemplate, setHwTemplate] = useState<'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo'>('blank');
+  const [hwTemplate, setHwTemplate] = useState<'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo' | 'engineering' | 'graph'>('blank');
   const [hwPaperColor, setHwPaperColor] = useState<string>('#FBFAF6'); // hex, defaults to White
   const [hwLineSpacing, setHwLineSpacing] = useState<number>(32);
   const [hwTitle, setHwTitle] = useState<string>('');
@@ -473,7 +528,7 @@ export default function HomeScreen() {
   };
 
   const hwSupportsSpacing = (t: typeof hwTemplate) =>
-    t === 'ruled' || t === 'narrow' || t === 'grid' || t === 'dotted' || t === 'cornell' || t === 'planner' || t === 'todo';
+    t === 'ruled' || t === 'narrow' || t === 'grid' || t === 'dotted' || t === 'cornell' || t === 'planner' || t === 'todo' || t === 'engineering' || t === 'graph';
 
   const createFromTemplate = async (tpl: Template) => {
     setShowTemplate(false);
@@ -1989,6 +2044,17 @@ export default function HomeScreen() {
         </Pressable>
       )}
 
+      {importing && (
+        <View
+          pointerEvents="auto"
+          style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <View style={{ backgroundColor: colors.surface, borderRadius: 16, padding: spacing.lg, alignItems: 'center', minWidth: 200 }}>
+            <ActivityIndicator color={colors.brand} />
+            <Text style={{ color: colors.onSurface, marginTop: spacing.sm, fontWeight: '600' }}>{importing}</Text>
+          </View>
+        </View>
+      )}
       {/* Exit-hint toast pill — floats near the bottom on all platforms.
           Auto-hides after ~1.8s. Only visible after the first back press. */}
       {exitHintVisible && (
@@ -2113,6 +2179,20 @@ export default function HomeScreen() {
                 </Text>
               </Pressable>
             ))}
+            {Platform.OS === 'android' && (
+              <Pressable
+                testID="tpl-import-pdf"
+                onPress={importPdf}
+                style={({ pressed }) => [styles.tplPopupRow, { backgroundColor: pressed ? colors.surfaceTertiary : 'transparent' }]}
+              >
+                <View style={[styles.tplIconSmall, { backgroundColor: colors.brandTertiary }]}>
+                  <Ionicons name="document-attach-outline" size={18} color={colors.brand} />
+                </View>
+                <Text style={{ color: colors.onSurface, fontSize: typeScale.base, fontWeight: '600', marginLeft: spacing.sm }}>
+                  Import PDF to annotate…
+                </Text>
+              </Pressable>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -2489,7 +2569,7 @@ export default function HomeScreen() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={{ gap: spacing.md, paddingVertical: spacing.xs, paddingRight: spacing.md }}
               >
-                {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
+                {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo', 'engineering', 'graph'] as const).map((t) => {
                   const active = hwTemplate === t;
                   const previewW = hwOrientation === 'landscape' ? 130 : 80;
                   const previewH = hwOrientation === 'landscape' ? 80 : 104;

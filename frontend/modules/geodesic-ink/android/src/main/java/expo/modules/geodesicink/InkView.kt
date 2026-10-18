@@ -34,6 +34,55 @@ import kotlin.math.min
 class InkView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
 
   private val onStroke by EventDispatcher()
+  private val onErase by EventDispatcher()
+  private val onPenButton by EventDispatcher()
+  private val onSelect by EventDispatcher()
+
+  /**
+   * What a stylus touch does: "ink" (pen tools), "erase" (eraser tool),
+   * "lasso" / "rect" (selection), or "none" (left to JavaScript).
+   */
+  var mode: String = "ink"
+  private var accentInt: Int = Color.rgb(123, 140, 115)
+
+  fun setAccentHex(hex: String) {
+    accentInt = try { Color.parseColor(hex) } catch (e: IllegalArgumentException) { accentInt }
+  }
+
+  // Selection outline being drawn, in view px.
+  private var selecting = false
+  private var selKind = "lasso"
+  private val selPx = ArrayList<Float>(256)
+  private val selPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    style = android.graphics.Paint.Style.STROKE
+    strokeJoin = android.graphics.Paint.Join.ROUND
+    strokeCap = android.graphics.Paint.Cap.ROUND
+  }
+  private val selFill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    style = android.graphics.Paint.Style.FILL
+  }
+
+  /** What the S Pen side button does: "none", "eraser", "undo" or "redo". */
+  var buttonAction: String = "eraser"
+  /** Hover cursor diameter in world units; 0 hides it. */
+  var cursorWidth: Float = 0f
+  /** Eraser diameter in world units, for the cursor while button-erasing. */
+  var eraserWidth: Float = 24f
+
+  // Hover cursor (pen near the screen, not touching), in view pixels.
+  private var hovering = false
+  private var hoverX = 0f
+  private var hoverY = 0f
+  private var hoverButton = false
+  // Erasing with the side button held: the pen position, in view pixels.
+  private var erasing = false
+  private var eraseX = 0f
+  private var eraseY = 0f
+  /** The current touch is being swallowed (button click mapped to undo/redo). */
+  private var swallowing = false
+  private val cursorPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    style = android.graphics.Paint.Style.STROKE
+  }
 
   var tool: String = "pen"
   var baseWidth: Float = 2f
@@ -63,6 +112,62 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     val filter = OneEuro2D()
     var lastRaw: InkPt? = null
     var finished: StrokeDraw? = null
+    /** Arc length so far, world units. */
+    var length = 0f
+    /** Front buffer: drawing only new pieces now (vs. redrawing everything). */
+    var incremental = false
+    /** Segments below this index are drawn exactly on the front buffer. */
+    var drawnTo = 0
+    /** Fold patches already drawn. */
+    val patched = HashSet<Int>()
+    /** Set once the stroke has been snapped to a shape ("circle", "rectangle", ...). */
+    var shape: String? = null
+  }
+
+  // ------------------------------------------------------------ shape snap
+
+  /** Hold the pen still at the end of a stroke to turn it into a clean shape. */
+  var shapeSnap: Boolean = true
+  private val holdHandler = android.os.Handler(android.os.Looper.getMainLooper())
+  private var holdX = 0f
+  private var holdY = 0f
+  private val holdRunnable = Runnable { trySnap() }
+
+  /** Restart the hold timer whenever the pen has moved more than a few dp. */
+  private fun trackHold(px: Float, py: Float, force: Boolean) {
+    if (!shapeSnap) return
+    if (force || hypot(px - holdX, py - holdY) > HOLD_SLOP_DP * density) {
+      holdX = px
+      holdY = py
+      holdHandler.removeCallbacks(holdRunnable)
+      holdHandler.postDelayed(holdRunnable, HOLD_MS)
+    }
+  }
+
+  private fun cancelHold() {
+    holdHandler.removeCallbacks(holdRunnable)
+  }
+
+  private fun trySnap() {
+    val s = current ?: return
+    if (s.shape != null || s.points.size < 8) return
+    val n = s.points.size
+    val xs = FloatArray(n) { s.points[it].x }
+    val ys = FloatArray(n) { s.points[it].y }
+    val shape = ShapeRecognizer.recognize(xs, ys) ?: return
+    // Even width from the median of what was drawn; pressure likewise.
+    val ws = s.points.map { it.w }.sorted()
+    val ps = s.points.map { it.p }.sorted()
+    val w = ws[ws.size / 2]
+    val p = ps[ps.size / 2]
+    val t0 = s.points[0].t
+    s.points.clear()
+    for (i in shape.xs.indices) s.points.add(InkPt(shape.xs[i], shape.ys[i], t0 + i * 4.0, p, w, 0f))
+    s.shape = shape.kind
+    s.incremental = false
+    prediction = emptyList()
+    performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+    showWet(s)
   }
 
   private var current: WetStroke? = null
@@ -147,6 +252,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   }
 
   override fun onDetachedFromWindow() {
+    cancelHold()
     stopFrontBuffer()
     super.onDetachedFromWindow()
   }
@@ -191,6 +297,80 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   private fun worldX(px: Float): Float = (px / density - tx) / scale
   private fun worldY(px: Float): Float = (px / density - ty) / scale
 
+  // ----------------------------------------------------------------- ruler
+  // Port of rulerProject / rulerContains / rulerEdgeSign in src/components/Ruler.tsx.
+  // All in screen dp, the ruler component's own coordinate space.
+
+  private var rulerOn = false
+  private var rulerX = 0f
+  private var rulerY = 0f
+  private var rulerDx = 1f
+  private var rulerDy = 0f
+  private var rulerHalf = 77.5f
+  /** The current stroke is locked to a ruler edge: +1 bottom, -1 top, 0 free. */
+  private var rulerEdge = 0
+  private val snapped = FloatArray(2)
+
+  /** [enabled, centreX, centreY, angleDegrees, halfThickness] in dp. */
+  fun setRuler(v: List<Double>) {
+    if (v.size < 5) return
+    rulerOn = v[0] > 0.5
+    rulerX = v[1].toFloat()
+    rulerY = v[2].toFloat()
+    val rad = Math.toRadians(v[3])
+    rulerDx = Math.cos(rad).toFloat()
+    rulerDy = Math.sin(rad).toFloat()
+    rulerHalf = v[4].toFloat()
+  }
+
+  /** Signed distance from the ruler's centre line (positive = bottom side). */
+  private fun rulerPerp(xDp: Float, yDp: Float): Float =
+    (xDp - rulerX) * -rulerDy + (yDp - rulerY) * rulerDx
+
+  /** Project onto the edge on side `edge`; result in snapped[0..1] (dp). */
+  private fun rulerProjectTo(xDp: Float, yDp: Float, edge: Int) {
+    val t = (xDp - rulerX) * rulerDx + (yDp - rulerY) * rulerDy
+    val off = edge * rulerHalf
+    snapped[0] = rulerX + t * rulerDx + off * -rulerDy
+    snapped[1] = rulerY + t * rulerDy + off * rulerDx
+  }
+
+  /**
+   * Same rules as the JS path: a stroke that starts within 40 dp of an edge
+   * locks to it; one that runs into the ruler's body (6 dp tolerance) locks to
+   * the side it came from. Once locked, every sample is projected onto that
+   * edge, so the line is perfectly straight.
+   */
+  private fun rulerStart(xDp: Float, yDp: Float) {
+    rulerEdge = 0
+    if (!rulerOn) return
+    val perp = rulerPerp(xDp, yDp)
+    val edge = if (perp >= 0f) 1 else -1
+    rulerProjectTo(xDp, yDp, edge)
+    if (hypot(xDp - snapped[0], yDp - snapped[1]) <= 40f) rulerEdge = edge
+  }
+
+  /** Map a pen position (view px) to world units, applying the ruler. */
+  private fun mapPen(px: Float, py: Float, out: FloatArray) {
+    var xDp = px / density
+    var yDp = py / density
+    if (rulerOn) {
+      if (rulerEdge == 0) {
+        val perp = rulerPerp(xDp, yDp)
+        if (kotlin.math.abs(perp) <= rulerHalf + 6f) rulerEdge = if (perp >= 0f) 1 else -1
+      }
+      if (rulerEdge != 0) {
+        rulerProjectTo(xDp, yDp, rulerEdge)
+        xDp = snapped[0]
+        yDp = snapped[1]
+      }
+    }
+    out[0] = (xDp - tx) / scale
+    out[1] = (yDp - ty) / scale
+  }
+
+  private val mapped = FloatArray(2)
+
   private fun insidePages(wx: Float, wy: Float): Boolean {
     if (pageCount <= 0 || pageW <= 0f) return false
     if (wx < 0f || wx > pageW || wy < 0f) return false
@@ -206,7 +386,16 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     when (ev.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
         val idx = ev.actionIndex
-        if (!inkEnabled || !isStylus(ev, idx)) return false
+        if (!isStylus(ev, idx)) return false
+        if (mode == "erase" || mode == "lasso" || mode == "rect") {
+          activePointerId = ev.getPointerId(idx)
+          parent?.requestDisallowInterceptTouchEvent(true)
+          if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(ev)
+          hovering = false
+          if (mode == "erase") beginErase(ev, idx) else beginSelect(ev, idx)
+          return true
+        }
+        if (mode != "ink" || !inkEnabled) return false
         val wx = worldX(ev.getX(idx))
         val wy = worldY(ev.getY(idx))
         if (!insidePages(wx, wy)) return false
@@ -215,10 +404,29 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         // native child asks this), so the pen can't also scroll or draw twice.
         parent?.requestDisallowInterceptTouchEvent(true)
         if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(ev)
-        beginStroke(ev, idx)
+        val button = (ev.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+        if (button && buttonAction == "eraser") {
+          beginErase(ev, idx)
+        } else if (button && (buttonAction == "undo" || buttonAction == "redo")) {
+          // Button held as the pen lands: run the action once, draw nothing.
+          swallowing = true
+          onPenButton(mapOf("action" to buttonAction))
+        } else {
+          beginStroke(ev, idx)
+        }
+        hovering = false
         return true
       }
       MotionEvent.ACTION_MOVE -> {
+        if (erasing) {
+          moveErase(ev)
+          return true
+        }
+        if (selecting) {
+          moveSelect(ev)
+          return true
+        }
+        if (swallowing) return true
         val s = current ?: return activePointerId != -1
         val idx = ev.findPointerIndex(activePointerId)
         if (idx < 0) return true
@@ -228,10 +436,13 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
             ev.getHistoricalX(idx, h),
             ev.getHistoricalY(idx, h),
             ev.getHistoricalPressure(idx, h),
-            ev.getHistoricalEventTime(h).toDouble()
+            ev.getHistoricalEventTime(h).toDouble(),
+            ev.getHistoricalAxisValue(MotionEvent.AXIS_TILT, idx, h)
           )
         }
-        addSample(s, ev.getX(idx), ev.getY(idx), ev.getPressure(idx), ev.eventTime.toDouble())
+        addSample(s, ev.getX(idx), ev.getY(idx), ev.getPressure(idx), ev.eventTime.toDouble(), ev.getAxisValue(MotionEvent.AXIS_TILT, idx))
+        if (s.shape != null) return true
+        trackHold(ev.getX(idx), ev.getY(idx), false)
         prediction = predict(s)
         showWet(s)
         return true
@@ -241,6 +452,16 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         return true
       }
       MotionEvent.ACTION_UP -> {
+        if (selecting) {
+          endSelect(true)
+          activePointerId = -1
+          return true
+        }
+        if (erasing || swallowing) {
+          endErase()
+          activePointerId = -1
+          return true
+        }
         if (current != null) {
           val idx = ev.findPointerIndex(activePointerId)
           finishStroke(ev, if (idx >= 0) idx else ev.actionIndex)
@@ -249,6 +470,9 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         return true
       }
       MotionEvent.ACTION_CANCEL -> {
+        cancelHold()
+        endErase()
+        endSelect(false)
         current = null
         activePointerId = -1
         prediction = emptyList()
@@ -261,6 +485,160 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     }
   }
 
+  // ---------------------------------------------------------------- erasing
+
+  private fun beginErase(ev: MotionEvent, idx: Int) {
+    erasing = true
+    eraseX = ev.getX(idx)
+    eraseY = ev.getY(idx)
+    onErase(mapOf("points" to arrayListOf(worldX(eraseX).toDouble(), worldY(eraseY).toDouble()), "start" to true))
+    invalidate()
+  }
+
+  private fun moveErase(ev: MotionEvent) {
+    val idx = ev.findPointerIndex(activePointerId)
+    if (idx < 0) return
+    val pts = ArrayList<Double>((ev.historySize + 1) * 2)
+    for (h in 0 until ev.historySize) {
+      pts.add(worldX(ev.getHistoricalX(idx, h)).toDouble())
+      pts.add(worldY(ev.getHistoricalY(idx, h)).toDouble())
+    }
+    eraseX = ev.getX(idx)
+    eraseY = ev.getY(idx)
+    pts.add(worldX(eraseX).toDouble())
+    pts.add(worldY(eraseY).toDouble())
+    onErase(mapOf("points" to pts, "start" to false))
+    invalidate()
+  }
+
+  private fun endErase() {
+    if (erasing) invalidate()
+    erasing = false
+    swallowing = false
+  }
+
+  // ------------------------------------------------------------- selection
+
+  private fun beginSelect(ev: MotionEvent, idx: Int) {
+    selecting = true
+    selKind = mode
+    selPx.clear()
+    selPx.add(ev.getX(idx))
+    selPx.add(ev.getY(idx))
+    invalidate()
+  }
+
+  private fun moveSelect(ev: MotionEvent) {
+    val idx = ev.findPointerIndex(activePointerId)
+    if (idx < 0) return
+    if (selKind == "rect") {
+      // Only the far corner matters.
+      while (selPx.size > 2) selPx.removeAt(selPx.size - 1)
+      selPx.add(ev.getX(idx))
+      selPx.add(ev.getY(idx))
+    } else {
+      for (h in 0 until ev.historySize) {
+        selPx.add(ev.getHistoricalX(idx, h))
+        selPx.add(ev.getHistoricalY(idx, h))
+      }
+      selPx.add(ev.getX(idx))
+      selPx.add(ev.getY(idx))
+    }
+    invalidate()
+  }
+
+  /** Pen lifted: hand the outline (world units) to JavaScript, which picks the items. */
+  private fun endSelect(emit: Boolean) {
+    if (!selecting) return
+    selecting = false
+    if (emit && selPx.size >= 4) {
+      val world = ArrayList<Double>(selPx.size)
+      var i = 0
+      while (i + 1 < selPx.size) {
+        world.add(worldX(selPx[i]).toDouble())
+        world.add(worldY(selPx[i + 1]).toDouble())
+        i += 2
+      }
+      onSelect(mapOf("kind" to selKind, "points" to world))
+    }
+    selPx.clear()
+    invalidate()
+  }
+
+  private fun drawSelection(canvas: Canvas) {
+    if (!selecting || selPx.size < 4) return
+    val path = android.graphics.Path()
+    if (selKind == "rect") {
+      val l = min(selPx[0], selPx[2]); val r = max(selPx[0], selPx[2])
+      val t = min(selPx[1], selPx[3]); val b = max(selPx[1], selPx[3])
+      path.addRect(l, t, r, b, android.graphics.Path.Direction.CW)
+    } else {
+      path.moveTo(selPx[0], selPx[1])
+      var i = 2
+      while (i + 1 < selPx.size) {
+        path.lineTo(selPx[i], selPx[i + 1])
+        i += 2
+      }
+    }
+    selFill.color = Color.argb(28, Color.red(accentInt), Color.green(accentInt), Color.blue(accentInt))
+    canvas.drawPath(path, selFill)
+    selPaint.color = accentInt
+    selPaint.strokeWidth = 1.6f * density
+    selPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(7f * density, 5f * density), 0f)
+    canvas.drawPath(path, selPaint)
+  }
+
+  // ----------------------------------------------------------------- hover
+
+  /**
+   * Pen hovering above the screen: show where the nib will land, and treat a
+   * side-button click as undo/redo when the button is set to one of those.
+   */
+  override fun dispatchHoverEvent(ev: MotionEvent): Boolean {
+    if (ev.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+    when (ev.actionMasked) {
+      MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+        hovering = true
+        hoverX = ev.x
+        hoverY = ev.y
+        val pressed = (ev.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+        if (pressed && !hoverButton && (buttonAction == "undo" || buttonAction == "redo")) {
+          onPenButton(mapOf("action" to buttonAction))
+        }
+        hoverButton = pressed
+        invalidate()
+      }
+      MotionEvent.ACTION_HOVER_EXIT -> {
+        hovering = false
+        hoverButton = false
+        invalidate()
+      }
+    }
+    return true
+  }
+
+  private fun drawCursor(canvas: Canvas) {
+    val x: Float
+    val y: Float
+    val worldDiameter: Float
+    if (erasing) {
+      x = eraseX; y = eraseY; worldDiameter = eraserWidth
+    } else if (hovering && cursorWidth > 0f) {
+      x = hoverX; y = hoverY
+      worldDiameter = if (hoverButton && buttonAction == "eraser") eraserWidth else cursorWidth
+    } else {
+      return
+    }
+    val r = max(3f * density, worldDiameter / 2f * scale * density)
+    // Light halo under a dark ring: visible on white, black and coloured paper.
+    cursorPaint.strokeWidth = 3f * density
+    cursorPaint.color = Color.argb(150, 255, 255, 255)
+    canvas.drawCircle(x, y, r, cursorPaint)
+    cursorPaint.strokeWidth = 1.2f * density
+    cursorPaint.color = Color.argb(200, 40, 40, 44)
+    canvas.drawCircle(x, y, r, cursorPaint)
+  }
+
   private fun beginStroke(ev: MotionEvent, idx: Int) {
     val effective = InkGeometry.effectiveWidth(tool, baseWidth)
     val s = WetStroke(nextId++, tool, colorInt, effective, InkGeometry.opacity(tool))
@@ -268,43 +646,52 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     prediction = emptyList()
     s.filter.reset()
     val t = ev.eventTime.toDouble()
-    val wx = worldX(ev.getX(idx)).toDouble()
-    val wy = worldY(ev.getY(idx)).toDouble()
+    rulerStart(ev.getX(idx) / density, ev.getY(idx) / density)
+    mapPen(ev.getX(idx), ev.getY(idx), mapped)
+    val wx = mapped[0].toDouble()
+    val wy = mapped[1].toDouble()
     s.filter.filter(wx, wy, t, tmp)
     val p = ev.getPressure(idx).coerceIn(0f, 1f)
-    s.points.add(InkPt(tmp[0].toFloat(), tmp[1].toFloat(), t, p))
+    val tilt = ev.getAxisValue(MotionEvent.AXIS_TILT, idx)
+    s.points.add(InkPt(tmp[0].toFloat(), tmp[1].toFloat(), t, p, 1f, tilt))
     InkGeometry.annotateWidth(s.points, 0, InkGeometry.profile(s.tool))
-    s.lastRaw = InkPt(wx.toFloat(), wy.toFloat(), t, p)
+    s.lastRaw = InkPt(wx.toFloat(), wy.toFloat(), t, p, 1f, tilt)
+    trackHold(ev.getX(idx), ev.getY(idx), true)
     showWet(s)
   }
 
   /** Same gate as the JS path: filtered position, 0.25 world-unit minimum step. */
-  private fun addSample(s: WetStroke, px: Float, pyPx: Float, pressure: Float, t: Double) {
-    val wx = worldX(px).toDouble()
-    val wy = worldY(pyPx).toDouble()
+  private fun addSample(s: WetStroke, px: Float, pyPx: Float, pressure: Float, t: Double, tilt: Float = 0f) {
+    if (s.shape != null) return // snapped: the shape stays put until the pen lifts
+    mapPen(px, pyPx, mapped)
+    val wx = mapped[0].toDouble()
+    val wy = mapped[1].toDouble()
     val p = pressure.coerceIn(0f, 1f)
-    s.lastRaw = InkPt(wx.toFloat(), wy.toFloat(), t, p)
+    s.lastRaw = InkPt(wx.toFloat(), wy.toFloat(), t, p, 1f, tilt)
     val last = s.points[s.points.size - 1]
     // Historical samples can repeat the previous timestamp; keep time monotonic.
     val tt = max(t, last.t + 0.01)
     s.filter.filter(wx, wy, tt, tmp)
     val fx = tmp[0].toFloat()
     val fy = tmp[1].toFloat()
-    if (hypot(fx - last.x, fy - last.y) < MIN_SAMPLE_DISTANCE) return
-    s.points.add(InkPt(fx, fy, tt, p))
+    val step = hypot(fx - last.x, fy - last.y)
+    if (step < MIN_SAMPLE_DISTANCE) return
+    s.length += step
+    s.points.add(InkPt(fx, fy, tt, p, 1f, tilt))
     InkGeometry.annotateWidth(s.points, s.points.size - 1, InkGeometry.profile(s.tool))
   }
 
   private fun finishStroke(ev: MotionEvent, idx: Int) {
     val s = current ?: return
-    if (idx >= 0 && idx < ev.pointerCount) {
-      addSample(s, ev.getX(idx), ev.getY(idx), ev.getPressure(idx), ev.eventTime.toDouble())
+    cancelHold()
+    if (s.shape == null && idx >= 0 && idx < ev.pointerCount) {
+      addSample(s, ev.getX(idx), ev.getY(idx), ev.getPressure(idx), ev.eventTime.toDouble(), ev.getAxisValue(MotionEvent.AXIS_TILT, idx))
     }
     // The filter trails the pen slightly; end the line where the pen lifted.
     val raw = s.lastRaw
     val last = s.points[s.points.size - 1]
-    if (raw != null && hypot(raw.x - last.x, raw.y - last.y) > MIN_SAMPLE_DISTANCE) {
-      s.points.add(InkPt(raw.x, raw.y, max(raw.t, last.t + 0.5), raw.p))
+    if (s.shape == null && raw != null && hypot(raw.x - last.x, raw.y - last.y) > MIN_SAMPLE_DISTANCE) {
+      s.points.add(InkPt(raw.x, raw.y, max(raw.t, last.t + 0.5), raw.p, 1f, raw.a))
       InkGeometry.annotateWidth(s.points, s.points.size - 1, InkGeometry.profile(s.tool))
     }
     current = null
@@ -319,15 +706,22 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     val f = front
     if (f != null) f.commit(pendingDraws(), transform()) else invalidate()
 
-    val flat = ArrayList<Double>(s.points.size * 5)
+    val flat = ArrayList<Double>(s.points.size * 6)
     for (pt in s.points) {
       flat.add(pt.x.toDouble())
       flat.add(pt.y.toDouble())
       flat.add(pt.t)
       flat.add(pt.p.toDouble())
       flat.add(pt.w.toDouble())
+      flat.add(pt.a.toDouble())
     }
-    onStroke(mapOf("id" to s.id, "tool" to s.tool, "points" to flat))
+    val event = HashMap<String, Any>()
+    event["id"] = s.id
+    event["tool"] = s.tool
+    event["points"] = flat
+    event["stride"] = 6
+    s.shape?.let { event["shape"] = it }
+    onStroke(event)
   }
 
   /**
@@ -366,7 +760,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   private fun drawFor(s: WetStroke, pts: List<InkPt>, finished: Boolean): StrokeDraw {
     val alpha = (s.opacity * 255f).toInt().coerceIn(0, 255)
     val stroked = InkGeometry.profile(s.tool).constantWidth && pts.size > 1
-    return StrokeDraw(InkGeometry.buildPath(pts, s.width, s.tool, finished), s.color, alpha, stroked, s.width)
+    val shader = if (s.tool == "pencil") InkGrain.shader(s.color) else null
+    return StrokeDraw(InkGeometry.buildPath(pts, s.width, s.tool, finished, s.shape != null), s.color, alpha, stroked, s.width, shader)
   }
 
   private fun pendingDraws(): List<StrokeDraw> = pending.mapNotNull { it.finished }
@@ -377,8 +772,92 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       invalidate()
       return
     }
+    val op = incrementalOp(s)
+    if (op != null) {
+      f.renderWet(op)
+      return
+    }
+    // Full redraw: clear, then the whole wet stroke with its prediction.
     val pts: List<InkPt> = if (prediction.isEmpty()) s.points else s.points + prediction
-    f.renderWet(drawFor(s, pts, false), transform())
+    f.renderWet(WetOp(true, listOf(drawFor(s, pts, false)), transform()))
+  }
+
+  /**
+   * Redrawing the whole wet stroke on every sample costs time in proportion
+   * to the screen area it covers, so it grew with stroke length and with zoom
+   * (3x zoom: 9x the pixels), and ink fell behind the pen. For opaque ink the
+   * front buffer can instead keep what's drawn and take only the new piece:
+   *
+   *  - A segment's exact outline depends on its neighbours, so it's final
+   *    once three more samples exist. Final segments are drawn once, exactly
+   *    as the finished stroke will be, overlapping the previous piece by one
+   *    segment so no seam shows.
+   *  - The newest few segments are drawn as plain straight pieces, which lie
+   *    inside the final outline, and are overdrawn when they become final.
+   *  - The start taper depends on the stroke's total length until the stroke
+   *    is long enough, so until then the whole (short, cheap) stroke is
+   *    redrawn as before.
+   *
+   * See-through ink can't be layered like this (overlaps would darken), so
+   * it returns null and keeps the full redraw. No prediction is drawn here:
+   * nothing added to the buffer can be taken back until the pen lifts.
+   */
+  private fun incrementalOp(s: WetStroke): WetOp? {
+    if (s.shape != null) return null // a snapped shape replaces everything: full redraw
+    if (s.opacity < 1f || Color.alpha(s.color) != 255) return null
+    val prof = InkGeometry.profile(s.tool)
+    val n = s.points.size
+    var clear = false
+    if (!s.incremental) {
+      if (n < 6 || s.length < 2.5f * prof.taperStart * s.width + 0.5f) return null
+      s.incremental = true
+      s.drawnTo = 0
+      s.patched.clear()
+      clear = true // this op lays down everything so far
+    }
+    val alpha = 255
+    val draws = ArrayList<StrokeDraw>(8)
+    if (prof.constantWidth) {
+      // Spine tools (fineliner): a segment's spline is final two samples on.
+      val stableEnd = n - 3
+      if (stableEnd >= s.drawnTo) {
+        val a = max(0, s.drawnTo - 1)
+        draws.add(StrokeDraw(InkGeometry.spinePiecePath(s.points, a, stableEnd), s.color, alpha, true, s.width))
+        s.drawnTo = stableEnd + 1
+      }
+      val tail = android.graphics.Path()
+      val from = max(0, s.drawnTo - 1)
+      tail.moveTo(s.points[from].x, s.points[from].y)
+      for (k in from + 1 until n) tail.lineTo(s.points[k].x, s.points[k].y)
+      draws.add(StrokeDraw(tail, s.color, alpha, true, s.width))
+      return WetOp(clear, draws, transform())
+    }
+    val d = InkGeometry.computeOutline(s.points, s.width, s.tool, false) ?: return null
+    val stableEnd = n - 4
+    if (clear) {
+      // Round start, as the full outline has (the forward half lies inside).
+      val cap = android.graphics.Path()
+      cap.addCircle(d.xs[0], d.ys[0], d.hw[0], android.graphics.Path.Direction.CW)
+      draws.add(StrokeDraw(cap, s.color, alpha, false, s.width))
+    }
+    if (stableEnd >= s.drawnTo) {
+      val a = max(0, s.drawnTo - 1)
+      draws.add(StrokeDraw(InkGeometry.piecePath(d, a, stableEnd), s.color, alpha, false, s.width))
+      s.drawnTo = stableEnd + 1
+    }
+    // Fold patches can be decided a little after a segment is drawn.
+    val flags = InkGeometry.patchFlags(d)
+    val lastFinal = min(stableEnd, flags.size - 1)
+    for (k in 0..lastFinal) {
+      if (flags[k] && s.patched.add(k)) {
+        draws.add(StrokeDraw(InkGeometry.segmentQuadPath(d, k), s.color, alpha, false, s.width))
+      }
+    }
+    // Provisional tail up to the nib.
+    for (k in max(0, s.drawnTo - 1)..n - 2) {
+      draws.add(StrokeDraw(InkGeometry.segmentQuadPath(d, k), s.color, alpha, false, s.width))
+    }
+    return WetOp(clear, draws, transform())
   }
 
   /**
@@ -398,7 +877,13 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    if (front != null) return // the front-buffer layer draws everything
+    drawStrokes(canvas)
+    drawSelection(canvas)
+    drawCursor(canvas)
+  }
+
+  private fun drawStrokes(canvas: Canvas) {
+    if (front != null) return // the front-buffer layer draws the ink
     val s = current
     if (pending.isEmpty() && s == null) return
     canvas.save()
@@ -416,5 +901,7 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     private const val MIN_SAMPLE_DISTANCE = 0.25f
     private const val PREDICT_WINDOW_MS = 24.0
     private const val PREDICT_AHEAD_MS = 14f
+    private const val HOLD_MS = 450L
+    private const val HOLD_SLOP_DP = 3f
   }
 }

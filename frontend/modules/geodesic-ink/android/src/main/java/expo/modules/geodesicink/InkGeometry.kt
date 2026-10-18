@@ -24,7 +24,9 @@ class InkPt(
   @JvmField var y: Float,
   @JvmField val t: Double,
   @JvmField val p: Float,
-  @JvmField var w: Float = 1f
+  @JvmField var w: Float = 1f,
+  /** Tilt from upright, radians; 0 when the digitiser doesn't report it. */
+  @JvmField val a: Float = 0f
 )
 
 class ToolProfile(
@@ -35,7 +37,10 @@ class ToolProfile(
   val taperStart: Float,
   val taperEnd: Float,
   val smoothing: Float,
-  val pressureGamma: Float
+  val pressureGamma: Float,
+  val nibWeight: Float = 0f,
+  val nibAngle: Float = 0f,
+  val tiltGain: Float = 0f
 ) {
   val constantWidth: Boolean
     get() = minScale == 1f && maxScale == 1f && taperStart == 0f && taperEnd == 0f
@@ -48,10 +53,14 @@ object InkGeometry {
     "fountain" to ToolProfile(0.3f, 1.8f, 0.7f, 0.3f, 4.5f, 3.5f, 0.45f, 0.8f),
     "marker" to ToolProfile(0.95f, 1.05f, 0.4f, 0f, 0.4f, 0.4f, 0.8f, 1f),
     "highlighter" to ToolProfile(1f, 1f, 0f, 0f, 0f, 0f, 1f, 1f),
-    "pencil" to ToolProfile(0.65f, 1.15f, 0.85f, 0.15f, 2f, 1.5f, 0.5f, 0.75f)
+    "pencil" to ToolProfile(0.65f, 1.15f, 0.85f, 0.15f, 2f, 1.5f, 0.5f, 0.75f, tiltGain = 1.2f),
+    "fineliner" to ToolProfile(1f, 1f, 0f, 0f, 0f, 0f, 1f, 1f),
+    "calligraphy" to ToolProfile(0.15f, 1.7f, 0.25f, 0f, 0.6f, 0.6f, 0.3f, 1f, 0.75f, (PI / 4).toFloat()),
+    "brush" to ToolProfile(0.12f, 2.6f, 1f, 0f, 6f, 5f, 0.3f, 1.15f)
   )
   private val OPACITY: Map<String, Float> = mapOf(
-    "pen" to 1f, "fountain" to 1f, "marker" to 0.92f, "highlighter" to 0.35f, "pencil" to 0.78f
+    "pen" to 1f, "fountain" to 1f, "marker" to 0.92f, "highlighter" to 0.35f, "pencil" to 0.78f,
+    "fineliner" to 1f, "calligraphy" to 1f, "brush" to 0.96f
   )
 
   private const val FAST_SPEED = 2.2f
@@ -79,9 +88,19 @@ object InkGeometry {
       speedTerm = 1f - clamp01(len / dt / FAST_SPEED)
     }
     val pressureTerm = clamp01(cur.p).toDouble().pow(prof.pressureGamma.toDouble()).toFloat()
-    val total = (prof.pressureWeight + prof.speedWeight).let { if (it == 0f) 1f else it }
-    val mix = (pressureTerm * prof.pressureWeight + speedTerm * prof.speedWeight) / total
-    val target = prof.minScale + range * mix
+    var nibTerm = 0.5f
+    if (prof.nibWeight > 0f && i > 0) {
+      val a = pts[max(0, i - SPEED_WINDOW)]
+      val dx = cur.x - a.x
+      val dy = cur.y - a.y
+      if (abs(dx) + abs(dy) > 1e-6f) {
+        nibTerm = abs(sin(atan2(dy.toDouble(), dx.toDouble()) - prof.nibAngle.toDouble())).toFloat()
+      }
+    }
+    val total = (prof.pressureWeight + prof.speedWeight + prof.nibWeight).let { if (it == 0f) 1f else it }
+    val mix = (pressureTerm * prof.pressureWeight + speedTerm * prof.speedWeight + nibTerm * prof.nibWeight) / total
+    val tiltTerm = 1f + prof.tiltGain * clamp01(cur.a / (PI / 3).toFloat())
+    val target = (prof.minScale + range * mix) * tiltTerm
     val w = if (i == 0) target else pts[i - 1].w + (target - pts[i - 1].w) * (1f - prof.smoothing)
     cur.w = (w * 1000f).roundToInt() / 1000f
   }
@@ -189,23 +208,24 @@ object InkGeometry {
    * Build the stroke path in world units. For constant-width tools it is a
    * spine to be STROKED; otherwise a closed outline to be FILLED.
    */
-  fun buildPath(pts: List<InkPt>, baseWidth: Float, tool: String, finished: Boolean): Path {
-    val path = Path()
+  /** Everything needed to draw a variable-width stroke, or any piece of it. */
+  class OutlineData(
+    @JvmField val n: Int,
+    @JvmField val xs: FloatArray, @JvmField val ys: FloatArray,
+    @JvmField val hw: FloatArray, @JvmField val nrm: FloatArray, @JvmField val cr: BooleanArray,
+    @JvmField val rx: FloatArray, @JvmField val ry: FloatArray,
+    @JvmField val lx: FloatArray, @JvmField val ly: FloatArray
+  )
+
+  /** Null for fewer than two points or constant-width tools (those are stroked spines). */
+  fun computeOutline(pts: List<InkPt>, baseWidth: Float, tool: String, finished: Boolean, noTaper: Boolean = false): OutlineData? {
     val n = pts.size
-    if (n == 0) return path
     val prof = profile(tool)
-    if (n == 1) {
-      path.addCircle(pts[0].x, pts[0].y, max(0.4f, (baseWidth / 2f) * pts[0].w), Path.Direction.CW)
-      return path
-    }
+    if (n < 2 || prof.constantWidth) return null
     val xs = FloatArray(n) { pts[it].x }
     val ys = FloatArray(n) { pts[it].y }
-    if (prof.constantWidth) {
-      appendSpine(path, xs, ys, corners(xs, ys), true)
-      return path
-    }
-
-    val taper = taperFactors(pts, baseWidth, prof, finished)
+    // Snapped shapes are drawn at an even width: no entry or exit taper.
+    val taper = if (noTaper) FloatArray(n) { 1f } else taperFactors(pts, baseWidth, prof, finished)
     val nrm = normals(xs, ys)
     val cr = corners(xs, ys)
     val half = baseWidth / 2f
@@ -217,13 +237,198 @@ object InkGeometry {
       rx[i] = xs[i] + nx * hw[i]; ry[i] = ys[i] + ny * hw[i]
       lx[i] = xs[i] - nx * hw[i]; ly[i] = ys[i] - ny * hw[i]
     }
+    return OutlineData(n, xs, ys, hw, nrm, cr, rx, ry, lx, ly)
+  }
 
-    appendSpine(path, rx, ry, cr, true)
-    capInto(path, xs[n - 1], ys[n - 1], nrm[(n - 1) * 2], nrm[(n - 1) * 2 + 1], hw[n - 1], 1f)
-    appendSpine(path, reversed(lx), reversed(ly), reversed(cr), false)
-    capInto(path, xs[0], ys[0], nrm[0], nrm[1], hw[0], -1f)
+  /**
+   * Build the stroke path in world units. For constant-width tools it is a
+   * spine to be STROKED; otherwise a closed outline to be FILLED.
+   */
+  fun buildPath(pts: List<InkPt>, baseWidth: Float, tool: String, finished: Boolean, noTaper: Boolean = false): Path {
+    val path = Path()
+    val n = pts.size
+    if (n == 0) return path
+    val prof = profile(tool)
+    if (n == 1) {
+      path.addCircle(pts[0].x, pts[0].y, max(0.4f, (baseWidth / 2f) * pts[0].w), Path.Direction.CW)
+      return path
+    }
+    if (prof.constantWidth) {
+      val xs = FloatArray(n) { pts[it].x }
+      val ys = FloatArray(n) { pts[it].y }
+      appendSpine(path, xs, ys, corners(xs, ys), true)
+      return path
+    }
+    val d = computeOutline(pts, baseWidth, tool, finished, noTaper) ?: return path
+    appendSpine(path, d.rx, d.ry, d.cr, true)
+    capInto(path, d.xs[n - 1], d.ys[n - 1], d.nrm[(n - 1) * 2], d.nrm[(n - 1) * 2 + 1], d.hw[n - 1], 1f)
+    appendSpine(path, reversed(d.lx), reversed(d.ly), reversed(d.cr), false)
+    capInto(path, d.xs[0], d.ys[0], d.nrm[0], d.nrm[1], d.hw[0], -1f)
+    path.close()
+    addFoldPatches(path, d.xs, d.ys, d.hw, d.cr, d.rx, d.ry, d.lx, d.ly)
+    return path
+  }
+
+  /**
+   * The exact outline of segments a..b (a segment k runs from point k to k+1),
+   * using the same spline as the full outline, so pieces drawn one after another
+   * add up to exactly the full stroke. Closed across both ends with straight
+   * lines, which lie inside the stroke.
+   */
+  fun piecePath(d: OutlineData, a: Int, b: Int): Path {
+    val path = Path()
+    val n = d.n
+    if (a > b || a < 0 || b > n - 2) return path
+    path.moveTo(d.rx[a], d.ry[a])
+    for (k in a..b) splineSeg(path, d.rx, d.ry, d.cr, k, k + 1, if (k - 1 >= 0) k - 1 else k, if (k + 2 < n) k + 2 else k + 1)
+    path.lineTo(d.lx[b + 1], d.ly[b + 1])
+    // Back along the left side: from point k+1 to k; the reversed spline's
+    // neighbours are k+2 (before) and k-1 (after).
+    for (k in b downTo a) splineSeg(path, d.lx, d.ly, d.cr, k + 1, k, if (k + 2 < n) k + 2 else k + 1, if (k - 1 >= 0) k - 1 else k)
     path.close()
     return path
+  }
+
+  /** One Catmull-Rom segment p1 -> p2 with neighbours p0, p3 (indices); straight if at a corner. */
+  private fun splineSeg(path: Path, x: FloatArray, y: FloatArray, cr: BooleanArray, i1: Int, i2: Int, i0: Int, i3: Int) {
+    if (cr[i1] || cr[i2]) {
+      path.lineTo(x[i2], y[i2])
+      return
+    }
+    path.cubicTo(
+      x[i1] + (x[i2] - x[i0]) / 6f, y[i1] + (y[i2] - y[i0]) / 6f,
+      x[i2] - (x[i3] - x[i1]) / 6f, y[i2] - (y[i3] - y[i1]) / 6f,
+      x[i2], y[i2]
+    )
+  }
+
+  /** The straight piece of segment k along its own normal. Lies inside the final outline. */
+  fun segmentQuadPath(d: OutlineData, k: Int): Path {
+    val path = Path()
+    if (k < 0 || k > d.n - 2) return path
+    val dx = d.xs[k + 1] - d.xs[k]
+    val dy = d.ys[k + 1] - d.ys[k]
+    var len = hypot(dx, dy)
+    if (len == 0f) len = 1f
+    val nx = -dy / len
+    val ny = dx / len
+    path.moveTo(d.xs[k] + nx * d.hw[k], d.ys[k] + ny * d.hw[k])
+    path.lineTo(d.xs[k + 1] + nx * d.hw[k + 1], d.ys[k + 1] + ny * d.hw[k + 1])
+    path.lineTo(d.xs[k + 1] - nx * d.hw[k + 1], d.ys[k + 1] - ny * d.hw[k + 1])
+    path.lineTo(d.xs[k] - nx * d.hw[k], d.ys[k] - ny * d.hw[k])
+    path.close()
+    return path
+  }
+
+  /** Spine segments a..b (constant-width tools), same spline as the full spine. */
+  fun spinePiecePath(pts: List<InkPt>, a: Int, b: Int): Path {
+    val path = Path()
+    val n = pts.size
+    if (a > b || a < 0 || b > n - 2) return path
+    val xs = FloatArray(n) { pts[it].x }
+    val ys = FloatArray(n) { pts[it].y }
+    val cr = corners(xs, ys)
+    path.moveTo(xs[a], ys[a])
+    if (n == 2) {
+      path.lineTo(xs[1], ys[1])
+      return path
+    }
+    for (k in a..b) splineSeg(path, xs, ys, cr, k, k + 1, if (k - 1 >= 0) k - 1 else k, if (k + 2 < n) k + 2 else k + 1)
+    return path
+  }
+
+  /** Which segments get a fold patch (see addFoldPatches). */
+  fun patchFlags(d: OutlineData): BooleanArray = foldFlags(d.xs, d.ys, d.hw, d.cr) ?: BooleanArray(max(0, d.n - 1))
+
+  /** Segments to patch, or null when the stroke has no folds. */
+  private fun foldFlags(xs: FloatArray, ys: FloatArray, hw: FloatArray, cr: BooleanArray): BooleanArray? {
+    val n = xs.size
+    if (n < 3) return null
+    val patchSeg = BooleanArray(n - 1)
+    var any = false
+    for (i in 1 until n - 1) {
+      val l1 = hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
+      val l2 = hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i])
+      if (l1 == 0f || l2 == 0f) continue
+      val cosv = ((xs[i] - xs[i - 1]) * (xs[i + 1] - xs[i]) + (ys[i] - ys[i - 1]) * (ys[i + 1] - ys[i])) / (l1 * l2)
+      val theta = kotlin.math.acos(cosv.coerceIn(-1f, 1f).toDouble()).toFloat()
+      val widthJump = max(abs(hw[i] - hw[i - 1]) / l1, abs(hw[i + 1] - hw[i]) / l2)
+      if (cr[i] || hw[i] * 2f * sin(theta / 2f) > min(l1, l2) * 0.5f || widthJump > 0.5f) {
+        any = true
+        val reach = 2f * hw[i]
+        patchSeg[i - 1] = true
+        patchSeg[i] = true
+        var k = i - 1
+        var d = l1
+        while (k > 0 && d < reach) {
+          patchSeg[k - 1] = true
+          d += hypot(xs[k] - xs[k - 1], ys[k] - ys[k - 1])
+          k--
+        }
+        k = i + 1
+        d = l2
+        while (k < n - 1 && d < reach) {
+          patchSeg[k] = true
+          d += hypot(xs[k + 1] - xs[k], ys[k + 1] - ys[k])
+          k++
+        }
+      }
+    }
+    return if (any) patchSeg else null
+  }
+
+  /**
+   * Same as Outline.patches in geometry.ts: where the stroke turns more tightly
+   * than it is wide, or its width changes faster than it advances, the inner
+   * edge folds back and the fold cancels under the fill rule. Cover those
+   * spans with the straight segment pieces, wound like the ring.
+   */
+  private fun addFoldPatches(
+    path: Path, xs: FloatArray, ys: FloatArray, hw: FloatArray, cr: BooleanArray,
+    rx: FloatArray, ry: FloatArray, lx: FloatArray, ly: FloatArray
+  ) {
+    val n = xs.size
+    val patchSeg = foldFlags(xs, ys, hw, cr) ?: return
+    // Ring orientation: shoelace over right side forward, left side back.
+    var area = 0.0
+    val m = n * 2
+    for (idx in 0 until m) {
+      val px = if (idx < n) rx[idx] else lx[m - 1 - idx]
+      val py = if (idx < n) ry[idx] else ly[m - 1 - idx]
+      val j = (idx + 1) % m
+      val qx = if (j < n) rx[j] else lx[m - 1 - j]
+      val qy = if (j < n) ry[j] else ly[m - 1 - j]
+      area += (px * qy - qx * py).toDouble()
+    }
+    val clockwise = area > 0
+    val qxArr = FloatArray(4)
+    val qyArr = FloatArray(4)
+    for (k in 0 until n - 1) {
+      if (!patchSeg[k]) continue
+      val dx = xs[k + 1] - xs[k]
+      val dy = ys[k + 1] - ys[k]
+      var len = hypot(dx, dy)
+      if (len == 0f) len = 1f
+      val nx = -dy / len
+      val ny = dx / len
+      qxArr[0] = xs[k] + nx * hw[k]; qyArr[0] = ys[k] + ny * hw[k]
+      qxArr[1] = xs[k + 1] + nx * hw[k + 1]; qyArr[1] = ys[k + 1] + ny * hw[k + 1]
+      qxArr[2] = xs[k + 1] - nx * hw[k + 1]; qyArr[2] = ys[k + 1] - ny * hw[k + 1]
+      qxArr[3] = xs[k] - nx * hw[k]; qyArr[3] = ys[k] - ny * hw[k]
+      var qa = 0f
+      for (t in 0 until 4) {
+        val u = (t + 1) % 4
+        qa += qxArr[t] * qyArr[u] - qxArr[u] * qyArr[t]
+      }
+      if ((qa > 0f) == clockwise) {
+        path.moveTo(qxArr[0], qyArr[0])
+        for (t in 1 until 4) path.lineTo(qxArr[t], qyArr[t])
+      } else {
+        path.moveTo(qxArr[3], qyArr[3])
+        for (t in 2 downTo 0) path.lineTo(qxArr[t], qyArr[t])
+      }
+      path.close()
+    }
   }
 
   /** Semicircle from +n (sign 1) or -n (sign -1) around the end, excluding both ends. */

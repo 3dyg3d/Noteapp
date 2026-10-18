@@ -21,7 +21,7 @@ import {
 } from './geometry';
 
 export type { InkPoint, InkTool } from './geometry';
-export { simplify, commitPoints, storePoints, annotateWidth, OneEuro2D } from './geometry';
+export { simplify, commitPoints, storePoints, annotateWidth, OneEuro2D, isConstantWidth } from './geometry';
 
 /**
  * Monotonic, sub-millisecond clock. `Date.now()` has 1 ms resolution, so at
@@ -74,7 +74,8 @@ export function buildStrokeOutline(
   rawPoints: InkPoint[],
   baseWidth: number,
   tool: InkTool,
-  finished = true
+  finished = true,
+  noTaper = false
 ): SkPath {
   const path = Skia.Path.Make();
   const n = rawPoints.length;
@@ -91,13 +92,20 @@ export function buildStrokeOutline(
   }
 
   const points = withWidths(rawPoints, tool);
-  const o = outline(points, baseWidth, tool, finished);
+  const o = outline(points, baseWidth, tool, finished, noTaper);
 
   appendSpine(path, o.right, o.corners, true);
   for (const p of o.endCap) path.lineTo(p.x, p.y);
   appendSpine(path, o.left.slice().reverse(), o.corners.slice().reverse(), false);
   for (const p of o.startCap) path.lineTo(p.x, p.y);
   path.close();
+  // Fill folds at tight turns (see Outline.patches); they are wound the same
+  // way as the ring, so they add to it instead of cancelling.
+  for (const q of o.patches) {
+    path.moveTo(q[0].x, q[0].y);
+    for (let k = 1; k < q.length; k++) path.lineTo(q[k].x, q[k].y);
+    path.close();
+  }
   return path;
 }
 
@@ -108,10 +116,16 @@ export function buildStrokeOutline(
  */
 const outlineCache = new WeakMap<object, SkPath>();
 
-export function cachedOutline(stroke: object, points: InkPoint[], baseWidth: number, tool: InkTool): SkPath {
+export function cachedOutline(
+  stroke: object,
+  points: InkPoint[],
+  baseWidth: number,
+  tool: InkTool,
+  noTaper = false
+): SkPath {
   const hit = outlineCache.get(stroke);
   if (hit) return hit;
-  const built = buildStrokeOutline(points, baseWidth, tool, true);
+  const built = buildStrokeOutline(points, baseWidth, tool, true, noTaper);
   outlineCache.set(stroke, built);
   return built;
 }
@@ -127,6 +141,9 @@ export const TOOL_OPACITY: Record<InkTool, number> = {
   marker: 0.92,
   highlighter: 0.35,
   pencil: 0.78,
+  fineliner: 1,
+  calligraphy: 1,
+  brush: 0.96,
 };
 
 /** Highlighters read as noticeably broader than the nominal nib width. */

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Group, Rect, Line, Circle, vec } from '@shopify/react-native-skia';
 
-export type PaperType = 'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo';
+export type PaperType = 'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo' | 'engineering' | 'graph';
 
 interface Props {
   type: PaperType;
@@ -64,6 +64,36 @@ export default function SkiaPaper({ type, color, lineColor, width, height, lineS
       }
     }
     return <Group>{fill}{dots}</Group>;
+  }
+
+  if (type === 'engineering') {
+    // Engineering computation pad: fine grid, a header band and a left margin.
+    const step = Math.max(8, lineSpacing ?? 20);
+    const els = [];
+    for (let y = 0; y < height; y += step) {
+      els.push(<Line key={`eh-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={0.6} />);
+    }
+    for (let x = 0; x < width; x += step) {
+      els.push(<Line key={`ev-${x}`} p1={vec(x, 0)} p2={vec(x, height)} color={lineColor} strokeWidth={0.6} />);
+    }
+    els.push(<Line key="ehd" p1={vec(0, step * 3)} p2={vec(width, step * 3)} color={lineColor} strokeWidth={1.6} />);
+    els.push(<Line key="emg" p1={vec(step * 2, step * 3)} p2={vec(step * 2, height)} color={lineColor} strokeWidth={1.6} />);
+    return <Group>{fill}{els}</Group>;
+  }
+
+  if (type === 'graph') {
+    // Graph paper: minor squares with a heavier line every fifth.
+    const step = Math.max(6, lineSpacing ?? 12);
+    const els = [];
+    let k = 0;
+    for (let y = 0; y < height; y += step, k++) {
+      els.push(<Line key={`gh-${y}`} p1={vec(0, y)} p2={vec(width, y)} color={lineColor} strokeWidth={k % 5 === 0 ? 1.3 : 0.5} />);
+    }
+    k = 0;
+    for (let x = 0; x < width; x += step, k++) {
+      els.push(<Line key={`gv-${x}`} p1={vec(x, 0)} p2={vec(x, height)} color={lineColor} strokeWidth={k % 5 === 0 ? 1.3 : 0.5} />);
+    }
+    return <Group>{fill}{els}</Group>;
   }
 
   if (type === 'cornell') {

@@ -57,7 +57,7 @@ interface Props {
 // "close-enough" ruler for both platforms without native DPI code.
 const POINTS_PER_CM = 38;
 const POINTS_PER_INCH = POINTS_PER_CM * 2.54;
-const RULER_H = 155;                    // thick, easy to read
+export const RULER_H = 155;                    // thick, easy to read
 const INFINITE_MULTIPLIER = 3.2;        // 3.2× diagonal so the ends never enter the viewport at any rotation
 const ROTATION_DAMP = 0.75;             // ruler rotates at 75 % of finger twist — deliberate but not stiff
 const ROTATION_START_THRESHOLD_RAD = 0.035; // ~2° before rotation starts (cuts incidental jitter)

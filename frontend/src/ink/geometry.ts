@@ -42,9 +42,16 @@ export interface InkPoint {
    * Absent on strokes written before it existed; those are annotated on load.
    */
   w?: number;
+  /**
+   * Pen tilt from upright, radians (0 = vertical), where the digitiser
+   * reports it. Widens the pencil like shading with the side of the lead.
+   */
+  a?: number;
 }
 
-export type InkTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil';
+export type InkTool =
+  | 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil'
+  | 'fineliner' | 'calligraphy' | 'brush';
 
 export interface ToolProfile {
   /** Width multiplier at minimum pressure / maximum speed. */
@@ -63,6 +70,15 @@ export interface ToolProfile {
   smoothing: number;
   /** Pressure curve exponent. Below 1 lifts light pressure. */
   pressureGamma: number;
+  /**
+   * Calligraphy nib. `nibWeight` (0..1) is how much stroke direction drives
+   * width; `nibAngle` (radians) is the angle of the nib's edge. A stroke across
+   * the edge is full width, one along it is a hairline.
+   */
+  nibWeight?: number;
+  nibAngle?: number;
+  /** Extra width at full tilt (60° or more): 1.2 means up to 2.2x as wide. */
+  tiltGain?: number;
 }
 
 export const PROFILES: Record<InkTool, ToolProfile> = {
@@ -73,7 +89,15 @@ export const PROFILES: Record<InkTool, ToolProfile> = {
   marker: { minScale: 0.95, maxScale: 1.05, pressureWeight: 0.4, speedWeight: 0, taperStart: 0.4, taperEnd: 0.4, smoothing: 0.8, pressureGamma: 1 },
   // Flat and constant, or overlapping passes look blotchy.
   highlighter: { minScale: 1, maxScale: 1, pressureWeight: 0, speedWeight: 0, taperStart: 0, taperEnd: 0, smoothing: 1, pressureGamma: 1 },
-  pencil: { minScale: 0.65, maxScale: 1.15, pressureWeight: 0.85, speedWeight: 0.15, taperStart: 2, taperEnd: 1.5, smoothing: 0.5, pressureGamma: 0.75 },
+  pencil: { minScale: 0.65, maxScale: 1.15, pressureWeight: 0.85, speedWeight: 0.15, taperStart: 2, taperEnd: 1.5, smoothing: 0.5, pressureGamma: 0.75, tiltGain: 1.2 },
+  // Even width, no taper: for diagrams, labels and neat print. Drawn as a
+  // stroked line like the highlighter, but opaque.
+  fineliner: { minScale: 1, maxScale: 1, pressureWeight: 0, speedWeight: 0, taperStart: 0, taperEnd: 0, smoothing: 1, pressureGamma: 1 },
+  // Broad-edge nib held at 45°: width comes mostly from direction, a little
+  // from pressure. Short crisp ends, as a cut nib leaves.
+  calligraphy: { minScale: 0.15, maxScale: 1.7, pressureWeight: 0.25, speedWeight: 0, taperStart: 0.6, taperEnd: 0.6, smoothing: 0.3, pressureGamma: 1, nibWeight: 0.75, nibAngle: Math.PI / 4 },
+  // Soft brush: pressure is everything, huge range, long entry and exit.
+  brush: { minScale: 0.12, maxScale: 2.6, pressureWeight: 1, speedWeight: 0, taperStart: 6, taperEnd: 5, smoothing: 0.3, pressureGamma: 1.15 },
 };
 
 export function profileFor(tool: InkTool): ToolProfile {
@@ -116,9 +140,22 @@ export function annotateWidth(points: InkPoint[], i: number, tool: InkTool): voi
   }
   // No reported pressure means finger or mouse: a neutral mid weight.
   const pressureTerm = cur.p === undefined ? 0.55 : Math.pow(clamp01(cur.p), prof.pressureGamma);
-  const total = prof.pressureWeight + prof.speedWeight || 1;
-  const mix = (pressureTerm * prof.pressureWeight + speedTerm * prof.speedWeight) / total;
-  const target = prof.minScale + range * mix;
+  // Direction against the nib edge, over the same short window as speed.
+  const nibWeight = prof.nibWeight ?? 0;
+  let nibTerm = 0.5;
+  if (nibWeight > 0 && i > 0) {
+    const a = points[Math.max(0, i - SPEED_WINDOW)];
+    const dx = cur.x - a.x;
+    const dy = cur.y - a.y;
+    if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+      nibTerm = Math.abs(Math.sin(Math.atan2(dy, dx) - (prof.nibAngle ?? 0)));
+    }
+  }
+  const total = prof.pressureWeight + prof.speedWeight + nibWeight || 1;
+  const mix =
+    (pressureTerm * prof.pressureWeight + speedTerm * prof.speedWeight + nibTerm * nibWeight) / total;
+  const tiltTerm = 1 + (prof.tiltGain ?? 0) * clamp01((cur.a ?? 0) / (Math.PI / 3));
+  const target = (prof.minScale + range * mix) * tiltTerm;
 
   const prev = i > 0 ? points[i - 1].w : undefined;
   const w = prev === undefined ? target : prev + (target - prev) * (1 - prof.smoothing);
@@ -219,6 +256,7 @@ export function storePoints(points: InkPoint[]): InkPoint[] {
     const out: InkPoint = { x: r(p.x, 100), y: r(p.y, 100), t: r(p.t - t0, 10) };
     if (p.p !== undefined) out.p = r(p.p, 1000);
     if (p.w !== undefined) out.w = r(p.w, 1000);
+    if (p.a) out.a = r(p.a, 100);
     return out;
   });
 }
@@ -299,17 +337,60 @@ export interface Outline {
   startCap: XY[];
   corners: boolean[];
   halfWidths: number[];
+  /**
+   * Patches for vertices where the stroke turns more tightly than it is wide.
+   * There the inner edge folds back over itself and the fold cancels out under
+   * the fill rule, leaving a notch or hole. Each patch is the straight piece of
+   * stroke on one side of the corner (its own normal, its own end widths); the
+   * two pieces cover the fold and meet in a crisp bevel at the outer edge.
+   * Already wound the same way as the ring.
+   */
+  patches: XY[][];
+  /** Orientation of the outline ring (shoelace sign, y-down), so joints are added with the same winding. */
+  clockwise: boolean;
 }
 
 const CAP_STEPS = 6;
+
+function shoelace(poly: XY[]): number {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a;
+}
+
+/** The straight piece of stroke from a to b, offset along that segment's own normal. */
+function segmentQuad(a: XY, b: XY, ha: number, hb: number): XY[] {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  return [
+    { x: a.x + nx * ha, y: a.y + ny * ha },
+    { x: b.x + nx * hb, y: b.y + ny * hb },
+    { x: b.x - nx * hb, y: b.y - ny * hb },
+    { x: a.x - nx * ha, y: a.y - ny * ha },
+  ];
+}
 
 /**
  * Both sides of a variable-width stroke plus round caps. `points` must already
  * carry width factors (see annotateWidth / withWidths).
  */
-export function outline(points: InkPoint[], baseWidth: number, tool: InkTool, finished: boolean): Outline {
+export function outline(
+  points: InkPoint[],
+  baseWidth: number,
+  tool: InkTool,
+  finished: boolean,
+  /** Snapped shapes are drawn at an even width: no entry or exit taper. */
+  noTaper = false
+): Outline {
   const n = points.length;
-  const taper = taperFactors(points, baseWidth, tool, finished);
+  const taper = noTaper ? points.map(() => 1) : taperFactors(points, baseWidth, tool, finished);
   const nrm = normals(points);
   const half = baseWidth / 2;
   const hw = points.map((p, i) => Math.max(0.15, half * (p.w ?? 1) * taper[i]));
@@ -337,7 +418,53 @@ export function outline(points: InkPoint[], baseWidth: number, tool: InkTool, fi
   };
   const endCap = cap(points[n - 1], nrm[n - 1].nx, nrm[n - 1].ny, hw[n - 1], 1);
   const startCap = cap(points[0], nrm[0].nx, nrm[0].ny, hw[0], -1);
-  return { right, left, endCap, startCap, corners: corners(points), halfWidths: hw };
+  const cr = corners(points);
+  const patches: XY[][] = [];
+  const patchSeg = new Array<boolean>(Math.max(0, n - 1)).fill(false);
+  for (let i = 1; i < n - 1; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const c = points[i + 1];
+    const l1 = Math.hypot(b.x - a.x, b.y - a.y);
+    const l2 = Math.hypot(c.x - b.x, c.y - b.y);
+    if (l1 === 0 || l2 === 0) continue;
+    // Turn angle at b, via the dot product of the two segment directions.
+    const cos = ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y)) / (l1 * l2);
+    const theta = Math.acos(Math.max(-1, Math.min(1, cos)));
+    // The inner edge folds when the half-width exceeds the local radius of turn.
+    // The edge also folds where the width changes faster than the stroke
+    // advances (a calligraphy nib turning, a brush pressed hard).
+    const widthJump = Math.max(Math.abs(hw[i] - hw[i - 1]) / l1, Math.abs(hw[i + 1] - hw[i]) / l2);
+    if (cr[i] || hw[i] * 2 * Math.sin(theta / 2) > Math.min(l1, l2) * 0.5 || widthJump > 0.5) {
+      // A fold reaches back and forward along the stroke by up to about twice
+      // the half-width, however many samples that spans.
+      const reach = 2 * hw[i];
+      patchSeg[i - 1] = true;
+      patchSeg[i] = true;
+      for (let k = i - 1, d = l1; k > 0 && d < reach; k--) {
+        patchSeg[k - 1] = true;
+        d += Math.hypot(points[k].x - points[k - 1].x, points[k].y - points[k - 1].y);
+      }
+      for (let k = i + 1, d = l2; k < n - 1 && d < reach; k++) {
+        patchSeg[k] = true;
+        d += Math.hypot(points[k + 1].x - points[k].x, points[k + 1].y - points[k].y);
+      }
+    }
+  }
+  for (let k = 0; k < n - 1; k++) {
+    if (patchSeg[k]) patches.push(segmentQuad(points[k], points[k + 1], hw[k], hw[k + 1]));
+  }
+  // Shoelace over the ring: right side forward, left side back.
+  let area = 0;
+  const ring = [...right, ...left.slice().reverse()];
+  for (let i = 0; i < ring.length; i++) {
+    const p = ring[i];
+    const q = ring[(i + 1) % ring.length];
+    area += p.x * q.y - q.x * p.y;
+  }
+  const clockwise = area > 0;
+  for (const q of patches) if (shoelace(q) > 0 !== clockwise) q.reverse();
+  return { right, left, endCap, startCap, corners: cr, halfWidths: hw, patches, clockwise };
 }
 
 /**

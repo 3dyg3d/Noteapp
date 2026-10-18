@@ -63,7 +63,9 @@ export function buildPreview(
   if (!items?.length || pageWidth <= 0 || pageHeight <= 0) return null;
 
   // Only the first page appears on a card, so anything below it is dead weight.
+  // Thumbnails show ink only; pictures and text boxes are skipped.
   const onFirstPage = items.filter((it) => {
+    if (it.kind && it.kind !== 'stroke' && it.kind !== 'shape') return false;
     const ys =
       it.kind === 'shape'
         ? [it.start?.y ?? 0, it.end?.y ?? 0]

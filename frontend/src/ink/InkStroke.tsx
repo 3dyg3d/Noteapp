@@ -1,7 +1,9 @@
 import React, { memo } from 'react';
-import { Group, Path } from '@shopify/react-native-skia';
+import { Group, ImageShader, Path } from '@shopify/react-native-skia';
 
-import { InkPoint, InkTool, TOOL_OPACITY, cachedOutline, effectiveWidth } from './stroke';
+import { GRAIN_SCALE, GRAIN_SIZE, grainImage } from './grain';
+
+import { InkPoint, InkTool, TOOL_OPACITY, cachedOutline, effectiveWidth, isConstantWidth } from './stroke';
 
 export interface InkStrokeProps {
   /** The stroke record itself. Used as the identity key for the path cache. */
@@ -10,6 +12,8 @@ export interface InkStrokeProps {
   tool: InkTool;
   color: string;
   width: number;
+  /** Set when the stroke was snapped to a shape: drawn at an even width. */
+  shape?: string;
 }
 
 /**
@@ -24,10 +28,10 @@ export interface InkStrokeProps {
  * render for every stroke, and the fountain pen emitted a separate `<Path>` per
  * segment, so a 300-sample stroke cost 300 elements and 300 draw calls.
  */
-function InkStrokeImpl({ stroke, points, tool, color, width }: InkStrokeProps) {
+function InkStrokeImpl({ stroke, points, tool, color, width, shape }: InkStrokeProps) {
   const w = effectiveWidth(tool, width);
-  const path = cachedOutline(stroke, points, w, tool);
-  const isOutline = tool !== 'highlighter';
+  const path = cachedOutline(stroke, points, w, tool, !!shape);
+  const isOutline = !isConstantWidth(tool);
 
   return (
     <Group opacity={TOOL_OPACITY[tool] ?? 1}>
@@ -38,7 +42,19 @@ function InkStrokeImpl({ stroke, points, tool, color, width }: InkStrokeProps) {
         strokeWidth={isOutline ? undefined : w}
         strokeCap="round"
         strokeJoin="round"
-      />
+      >
+        {/* Pencil grain, fixed to the paper (world units), so it doesn't
+            crawl as the stroke grows. Same tile as the native layer. */}
+        {tool === 'pencil' && (
+          <ImageShader
+            image={grainImage(color)}
+            tx="repeat"
+            ty="repeat"
+            fit="fill"
+            rect={{ x: 0, y: 0, width: GRAIN_SIZE * GRAIN_SCALE, height: GRAIN_SIZE * GRAIN_SCALE }}
+          />
+        )}
+      </Path>
     </Group>
   );
 }

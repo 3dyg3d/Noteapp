@@ -1,9 +1,12 @@
 <dependencies>
   <compile
-      roots=":@@:expo-modules-core::release,androidx.core:core-ktx:1.13.1@aar,org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.7.3@jar,androidx.core:core:1.13.1@aar,androidx.lifecycle:lifecycle-runtime:2.6.2@aar,androidx.lifecycle:lifecycle-common:2.6.2@jar,org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20@jar,androidx.annotation:annotation-experimental:1.4.0@aar,androidx.versionedparcelable:versionedparcelable:1.1.1@aar,androidx.arch.core:core-common:2.2.0@jar,androidx.collection:collection:1.0.0@jar,androidx.annotation:annotation-jvm:1.6.0@jar,org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar,org.jetbrains:annotations:13.0@jar">
+      roots=":@@:expo-modules-core::release,androidx.graphics:graphics-core:1.0.4@aar,androidx.core:core-ktx:1.13.1@aar,org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.7.3@jar,org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20@jar,androidx.core:core:1.8.0@aar,androidx.annotation:annotation-experimental:1.4.0@aar,org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar,org.jetbrains:annotations:23.0.0@jar,androidx.lifecycle:lifecycle-runtime:2.3.1@aar,androidx.versionedparcelable:versionedparcelable:1.1.1@aar,androidx.lifecycle:lifecycle-common:2.3.1@jar,androidx.arch.core:core-common:2.1.0@jar,androidx.collection:collection:1.0.0@jar,androidx.annotation:annotation:1.2.0@jar">
     <dependency
         name=":@@:expo-modules-core::release"
         simpleName="host.exp.exponent:expo-modules-core"/>
+    <dependency
+        name="androidx.graphics:graphics-core:1.0.4@aar"
+        simpleName="androidx.graphics:graphics-core"/>
     <dependency
         name="androidx.core:core-ktx:1.13.1@aar"
         simpleName="androidx.core:core-ktx"/>
@@ -11,14 +14,59 @@
         name="org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.7.3@jar"
         simpleName="org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"/>
     <dependency
-        name="androidx.core:core:1.13.1@aar"
+        name="org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3@jar"
+        simpleName="org.jetbrains.kotlinx:kotlinx-coroutines-android"/>
+    <dependency
+        name="org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20@jar"
+        simpleName="org.jetbrains.kotlin:kotlin-stdlib-jdk8"/>
+    <dependency
+        name="androidx.core:core:1.8.0@aar"
         simpleName="androidx.core:core"/>
     <dependency
-        name="androidx.lifecycle:lifecycle-runtime:2.6.2@aar"
+        name="androidx.annotation:annotation-experimental:1.4.0@aar"
+        simpleName="androidx.annotation:annotation-experimental"/>
+    <dependency
+        name="org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar"
+        simpleName="org.jetbrains.kotlin:kotlin-stdlib"/>
+    <dependency
+        name="org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar"
+        simpleName="org.jetbrains.kotlin:kotlin-stdlib-jdk7"/>
+    <dependency
+        name="org.jetbrains:annotations:23.0.0@jar"
+        simpleName="org.jetbrains:annotations"/>
+    <dependency
+        name="androidx.lifecycle:lifecycle-runtime:2.3.1@aar"
         simpleName="androidx.lifecycle:lifecycle-runtime"/>
     <dependency
-        name="androidx.lifecycle:lifecycle-common:2.6.2@jar"
+        name="androidx.versionedparcelable:versionedparcelable:1.1.1@aar"
+        simpleName="androidx.versionedparcelable:versionedparcelable"/>
+    <dependency
+        name="androidx.lifecycle:lifecycle-common:2.3.1@jar"
         simpleName="androidx.lifecycle:lifecycle-common"/>
+    <dependency
+        name="androidx.arch.core:core-common:2.1.0@jar"
+        simpleName="androidx.arch.core:core-common"/>
+    <dependency
+        name="androidx.collection:collection:1.0.0@jar"
+        simpleName="androidx.collection:collection"/>
+    <dependency
+        name="androidx.annotation:annotation:1.2.0@jar"
+        simpleName="androidx.annotation:annotation"/>
+  </compile>
+  <package
+      roots="androidx.graphics:graphics-core:1.0.4@aar,androidx.core:core:1.8.0@aar,androidx.annotation:annotation-experimental:1.4.0@aar,org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.7.3@jar,org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20@jar,org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar,org.jetbrains:annotations:23.0.0@jar,androidx.versionedparcelable:versionedparcelable:1.1.1@aar,androidx.collection:collection:1.0.0@jar,androidx.concurrent:concurrent-futures:1.0.0@jar,androidx.lifecycle:lifecycle-runtime:2.3.1@aar,androidx.arch.core:core-runtime:2.1.0@aar,androidx.lifecycle:lifecycle-common:2.3.1@jar,androidx.arch.core:core-common:2.1.0@jar,androidx.annotation:annotation:1.2.0@jar,com.google.guava:listenablefuture:1.0@jar">
+    <dependency
+        name="androidx.graphics:graphics-core:1.0.4@aar"
+        simpleName="androidx.graphics:graphics-core"/>
+    <dependency
+        name="androidx.core:core:1.8.0@aar"
+        simpleName="androidx.core:core"/>
+    <dependency
+        name="androidx.annotation:annotation-experimental:1.4.0@aar"
+        simpleName="androidx.annotation:annotation-experimental"/>
+    <dependency
+        name="org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.7.3@jar"
+        simpleName="org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"/>
     <dependency
         name="org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3@jar"
         simpleName="org.jetbrains.kotlinx:kotlinx-coroutines-android"/>
@@ -26,40 +74,40 @@
         name="org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20@jar"
         simpleName="org.jetbrains.kotlin:kotlin-stdlib-jdk8"/>
     <dependency
-        name="androidx.annotation:annotation-experimental:1.4.0@aar"
-        simpleName="androidx.annotation:annotation-experimental"/>
+        name="org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar"
+        simpleName="org.jetbrains.kotlin:kotlin-stdlib"/>
+    <dependency
+        name="org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar"
+        simpleName="org.jetbrains.kotlin:kotlin-stdlib-jdk7"/>
+    <dependency
+        name="org.jetbrains:annotations:23.0.0@jar"
+        simpleName="org.jetbrains:annotations"/>
     <dependency
         name="androidx.versionedparcelable:versionedparcelable:1.1.1@aar"
         simpleName="androidx.versionedparcelable:versionedparcelable"/>
     <dependency
-        name="androidx.arch.core:core-common:2.2.0@jar"
-        simpleName="androidx.arch.core:core-common"/>
-    <dependency
         name="androidx.collection:collection:1.0.0@jar"
         simpleName="androidx.collection:collection"/>
     <dependency
-        name="androidx.annotation:annotation-jvm:1.6.0@jar"
-        simpleName="androidx.annotation:annotation-jvm"/>
+        name="androidx.concurrent:concurrent-futures:1.0.0@jar"
+        simpleName="androidx.concurrent:concurrent-futures"/>
     <dependency
-        name="org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar"
-        simpleName="org.jetbrains.kotlin:kotlin-stdlib"/>
+        name="androidx.lifecycle:lifecycle-runtime:2.3.1@aar"
+        simpleName="androidx.lifecycle:lifecycle-runtime"/>
     <dependency
-        name="org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar"
-        simpleName="org.jetbrains.kotlin:kotlin-stdlib-jdk7"/>
+        name="androidx.arch.core:core-runtime:2.1.0@aar"
+        simpleName="androidx.arch.core:core-runtime"/>
     <dependency
-        name="org.jetbrains:annotations:13.0@jar"
-        simpleName="org.jetbrains:annotations"/>
-  </compile>
-  <package
-      roots="org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar,org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar,org.jetbrains:annotations:13.0@jar">
+        name="androidx.lifecycle:lifecycle-common:2.3.1@jar"
+        simpleName="androidx.lifecycle:lifecycle-common"/>
     <dependency
-        name="org.jetbrains.kotlin:kotlin-stdlib:2.1.20@jar"
-        simpleName="org.jetbrains.kotlin:kotlin-stdlib"/>
+        name="androidx.arch.core:core-common:2.1.0@jar"
+        simpleName="androidx.arch.core:core-common"/>
     <dependency
-        name="org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.20@jar"
-        simpleName="org.jetbrains.kotlin:kotlin-stdlib-jdk7"/>
+        name="androidx.annotation:annotation:1.2.0@jar"
+        simpleName="androidx.annotation:annotation"/>
     <dependency
-        name="org.jetbrains:annotations:13.0@jar"
-        simpleName="org.jetbrains:annotations"/>
+        name="com.google.guava:listenablefuture:1.0@jar"
+        simpleName="com.google.guava:listenablefuture"/>
   </package>
 </dependencies>

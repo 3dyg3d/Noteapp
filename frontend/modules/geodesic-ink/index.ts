@@ -13,9 +13,26 @@ export interface NativeStrokeEvent {
   nativeEvent: {
     id: number;
     tool: string;
-    /** Flat [x, y, t, p, w, x, y, t, p, w, ...] in world units. */
+    /** Flat per-point values in world units: [x, y, t, p, w] or, with stride 6, [x, y, t, p, w, tilt]. */
     points: number[];
+    stride?: number;
+    /** Present when the stroke was snapped to a shape. */
+    shape?: string;
   };
+}
+
+export interface NativeEraseEvent {
+  /** Flat [x, y, x, y, ...] in world units, along the pen's path. */
+  nativeEvent: { points: number[]; start?: boolean };
+}
+
+export interface NativeSelectEvent {
+  /** 'rect' gives the two corners; 'lasso' the outline. Flat [x, y, ...] in world units. */
+  nativeEvent: { kind: 'rect' | 'lasso' | string; points: number[] };
+}
+
+export interface NativePenButtonEvent {
+  nativeEvent: { action: 'undo' | 'redo' | string };
 }
 
 export interface NativeInkViewProps extends ViewProps {
@@ -32,7 +49,23 @@ export interface NativeInkViewProps extends ViewProps {
   frontBuffer: boolean;
   /** Strokes with id <= this are drawn by JS now; the native layer drops them. */
   committedId: number;
+  /** Hold the pen still at the end of a stroke to snap it to a clean shape. */
+  shapeSnap: boolean;
+  /** What a stylus touch does: 'ink' | 'erase' | 'lasso' | 'rect' | 'none'. */
+  mode: string;
+  /** Colour of the selection outline. */
+  accentColor: string;
+  /** [enabled 0/1, centreX, centreY, angleDegrees, halfThickness] in screen dp. */
+  ruler: number[];
+  /** S Pen side button: 'none' | 'eraser' | 'undo' | 'redo'. */
+  buttonAction: string;
+  /** Hover cursor diameter in world units; 0 hides it. */
+  cursorWidth: number;
+  eraserWidth: number;
   onStroke: (e: NativeStrokeEvent) => void;
+  onErase: (e: NativeEraseEvent) => void;
+  onPenButton: (e: NativePenButtonEvent) => void;
+  onSelect: (e: NativeSelectEvent) => void;
 }
 
 function load(): ComponentType<NativeInkViewProps> | null {
@@ -65,4 +98,37 @@ export function toAndroidColor(c: string): string {
     return `#${h(a * 255)}${h(Number(m[1]))}${h(Number(m[2]))}${h(Number(m[3]))}`;
   }
   return '#1A1A1C';
+}
+
+export interface PdfPage {
+  /** Page size in PDF points. */
+  width: number;
+  height: number;
+  /** JPEG data URI. */
+  data: string;
+}
+
+/**
+ * Render a PDF (content:// or file:// URI) to page images, on the device.
+ * Null when the native module isn't in this build.
+ */
+export async function renderPdf(uri: string, maxWidth = 1600, quality = 82): Promise<{ pages: PdfPage[]; truncatedFrom?: number } | null> {
+  if (Platform.OS !== 'android') return null;
+  const mod = requireOptionalNativeModule<{ renderPdf(u: string, w: number, q: number): Promise<any[]> }>('GeodesicInk');
+  if (!mod?.renderPdf) return null;
+  const raw = await mod.renderPdf(uri, maxWidth, quality);
+  const pages = raw.filter((p) => typeof p?.data === 'string') as PdfPage[];
+  const t = raw.find((p) => typeof p?.truncated === 'number');
+  return { pages, truncatedFrom: t?.truncated };
+}
+
+/**
+ * Export a note (PDF) or one page (PNG) on the device. Returns the file path,
+ * or null when the native module isn't in this build.
+ */
+export async function exportDoc(doc: object): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+  const mod = requireOptionalNativeModule<{ exportDoc(json: string): Promise<string> }>('GeodesicInk');
+  if (!mod?.exportDoc) return null;
+  return mod.exportDoc(JSON.stringify(doc));
 }

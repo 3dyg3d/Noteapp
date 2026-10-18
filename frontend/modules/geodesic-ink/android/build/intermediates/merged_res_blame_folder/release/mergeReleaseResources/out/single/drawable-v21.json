@@ -1,0 +1,6 @@
+[
+    {
+        "merged": "expo.modules.geodesicink.geodesic-ink-release-7:/drawable-v21/notification_action_background.xml",
+        "source": "expo.modules.geodesicink.geodesic-ink-core-1.8.0-2:/drawable-v21/notification_action_background.xml"
+    }
+]

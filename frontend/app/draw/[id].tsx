@@ -8,6 +8,7 @@ import {
   Platform,
   TextInput,
   ActivityIndicator,
+  Alert,
   Modal,
   useWindowDimensions,
   StatusBar,
@@ -17,14 +18,40 @@ import type { DimensionValue, ViewStyle } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Ruler, { RulerState, rulerProject, rulerEdgeDistance, rulerEdgeSign, rulerContains } from '@/src/components/Ruler';
+import Ruler, { RulerState, rulerProject, rulerEdgeDistance, rulerEdgeSign, rulerContains, RULER_H } from '@/src/components/Ruler';
 import RulerSettingsMenu from '@/src/components/RulerSettingsMenu';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Canvas, Path, Skia, SkPath, Group } from '@shopify/react-native-skia';
+import { Canvas, Path, Skia, SkPath, Group, Circle, DashPathEffect, Paragraph, Image as SkiaImage, type SkImage, type SkParagraph } from '@shopify/react-native-skia';
+import {
+  type Mat,
+  type Rect as SelRect,
+  bakeItem,
+  boxCorners,
+  boxContains,
+  cloneItem,
+  handles as selHandles,
+  itemBounds,
+  lengthScale,
+  rotateAbout,
+  scaleAbout,
+  snapAngle,
+  toSkia,
+  translate,
+  unionBounds,
+} from '@/src/ink/selection';
 import InkStroke from '@/src/ink/InkStroke';
 import LiveStrokeLayer, { LiveStrokeHandle } from '@/src/ink/LiveStrokeLayer';
-import { NativeInkView, toAndroidColor, type NativeStrokeEvent } from '@/modules/geodesic-ink';
-import { InkPoint, InkTool, inkNow, storePoints, annotateWidth, OneEuro2D } from '@/src/ink/stroke';
+import {
+  NativeInkView,
+  toAndroidColor,
+  type NativeStrokeEvent,
+  type NativeEraseEvent,
+  type NativePenButtonEvent,
+  type NativeSelectEvent,
+  exportDoc,
+} from '@/modules/geodesic-ink';
+import * as Sharing from 'expo-sharing';
+import { InkPoint, InkTool, inkNow, storePoints, annotateWidth, OneEuro2D, effectiveWidth } from '@/src/ink/stroke';
 import { buildPreview } from '@/src/ink/preview';
 import type { SaveStatus } from '@/src/hooks/usePatchQueue';
 import { onNoteRenamed } from '@/src/state/noteEvents';
@@ -35,6 +62,7 @@ import { useSharedValue } from 'react-native-reanimated';
 import { useTheme } from '@/src/theme/ThemeContext';
 import { spacing, radius, typeScale, withAlpha, CANVAS_COLORS } from '@/src/theme/tokens';
 import { NotesApi, LabelsApi, FoldersApi, Note, Label, Folder } from '@/src/api/client';
+import * as ImagePicker from 'expo-image-picker';
 import { displayTitle } from '@/src/notes/display';
 import { useAppSettings, haptic, GestureAction, ToolbarPosition, type PageSetup } from '@/src/state/useAppSettings';
 import { useOpenTabs } from '@/src/state/useOpenTabs';
@@ -45,7 +73,7 @@ import SaveIndicator from '@/src/components/SaveIndicator';
 import { labelColors } from '@/src/theme/tokens';
 
 // ---------- Types ----------
-type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil';
+type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil' | 'fineliner' | 'calligraphy' | 'brush';
 type ShapeTool = 'line' | 'rect' | 'ellipse';
 type Tool = PenTool | ShapeTool | 'eraser';
 
@@ -62,6 +90,8 @@ interface StrokeData {
    * render exactly as they did.
    */
   points: InkPoint[];
+  /** Set when the stroke was snapped to a clean shape ("circle", "rectangle", ...). */
+  shape?: string;
 }
 interface ShapeData {
   kind: 'shape';
@@ -71,15 +101,123 @@ interface ShapeData {
   start: { x: number; y: number };
   end: { x: number; y: number };
 }
-type Item = StrokeData | ShapeData;
+/** A picture on the page. `ref` indexes the note's `images` (JPEG data URIs). */
+interface ImageItem {
+  kind: 'image';
+  ref: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  angle: number;
+}
+/** A typed text box on the page; `h` is the laid-out height, kept for hit tests. */
+interface TextItem {
+  kind: 'text';
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fontSize: number;
+  color: string;
+  angle: number;
+}
+type Item = StrokeData | ShapeData | ImageItem | TextItem;
 
-type Paper = 'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo';
+/** The y used to decide which page an item belongs to. */
+function itemHomeY(it: Item): number {
+  if (it.kind === 'stroke') return it.points[0]?.y ?? 0;
+  if (it.kind === 'shape') return it.start.y;
+  return it.y + it.h / 2;
+}
+
+/** Move an item vertically (page reordering, deleting, inserting). */
+function shiftItem(it: Item, dy: number): Item {
+  if (it.kind === 'stroke') return { ...it, points: it.points.map((p) => ({ ...p, y: p.y + dy })) };
+  if (it.kind === 'shape') return { ...it, start: { ...it.start, y: it.start.y + dy }, end: { ...it.end, y: it.end.y + dy } };
+  return { ...it, y: it.y + dy };
+}
+
+/** Push down everything at or below `boundary` (inserting a page). */
+function shiftBelow(it: Item, boundary: number, dy: number): Item {
+  if (it.kind === 'stroke') return { ...it, points: it.points.map((p) => (p.y >= boundary ? { ...p, y: p.y + dy } : p)) };
+  if (it.kind === 'shape') {
+    return {
+      ...it,
+      start: { x: it.start.x, y: it.start.y >= boundary ? it.start.y + dy : it.start.y },
+      end: { x: it.end.x, y: it.end.y >= boundary ? it.end.y + dy : it.end.y },
+    };
+  }
+  return it.y >= boundary ? { ...it, y: it.y + dy } : it;
+}
+
+/** Cached text layout: one paragraph per (text, size, colour, width). */
+const paragraphCache = new Map<string, SkParagraph>();
+function textParagraph(text: string, fontSize: number, color: string, width: number): SkParagraph {
+  const key = `${fontSize}|${color}|${Math.round(width)}|${text}`;
+  const hit = paragraphCache.get(key);
+  if (hit) return hit;
+  const b = Skia.ParagraphBuilder.Make();
+  b.pushStyle({ color: Skia.Color(color), fontSize, fontFamilies: ['sans-serif'] });
+  b.addText(text.length ? text : ' ');
+  const para = b.build();
+  para.layout(Math.max(10, width));
+  if (paragraphCache.size > 300) paragraphCache.clear();
+  paragraphCache.set(key, para);
+  return para;
+}
+
+/**
+ * Copied ink. Module-level so it survives switching notes: copy on one page,
+ * paste on another. Cleared only by the next copy.
+ */
+let inkClipboard: Item[] = [];
+
+/** Indices of items with any point inside a rectangle (two corners) or lasso polygon. */
+function selectionHits(items: Item[], kind: 'rect' | 'lasso', outline: { x: number; y: number }[]): number[] {
+  let inside: (x: number, y: number) => boolean;
+  if (kind === 'rect') {
+    if (outline.length < 2) return [];
+    const [a, b] = [outline[0], outline[outline.length - 1]];
+    const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+    const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+    inside = (x, y) => x >= minX && x <= maxX && y >= minY && y <= maxY;
+  } else {
+    if (outline.length < 3) return [];
+    inside = (x, y) => {
+      let inPoly = false;
+      for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+        const xi = outline[i].x, yi = outline[i].y, xj = outline[j].x, yj = outline[j].y;
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inPoly = !inPoly;
+      }
+      return inPoly;
+    };
+  }
+  const hit: number[] = [];
+  items.forEach((it, idx) => {
+    const pts =
+      it.kind === 'stroke'
+        ? it.points
+        : it.kind === 'shape'
+        ? [it.start, it.end, { x: it.start.x, y: it.end.y }, { x: it.end.x, y: it.start.y }]
+        : [...boxCorners(it), { x: it.x + it.w / 2, y: it.y + it.h / 2 }];
+    if (pts.some((p) => inside(p.x, p.y))) hit.push(idx);
+  });
+  return hit;
+}
+
+type Paper = 'blank' | 'ruled' | 'narrow' | 'grid' | 'dotted' | 'cornell' | 'planner' | 'todo' | 'engineering' | 'graph';
 type PaperSize = 'a4' | 'a5' | 'letter' | 'index' | 'custom';
 
 interface DrawingDoc {
   paper: Paper;
   paperSize?: PaperSize;
   customSize?: { w: number; h: number }; // pixel dimensions used when paperSize === 'custom'
+  /** Per page: index into the note's images used as that page's background (an imported PDF page), or null. */
+  pageBackgrounds?: (number | null)[];
+  pageTemplates?: (string | null)[];
+  pageBookmarks?: boolean[];
   orientation?: 'portrait' | 'landscape';
   paperColor?: string;
   canvasColor?: string;
@@ -135,6 +273,9 @@ const WIDTH_RANGE: Record<Tool, { min: number; max: number }> = {
   marker:      { min: 2,   max: 22 },
   highlighter: { min: 4,   max: 36 },
   pencil:      { min: 0.5, max: 8  },
+  fineliner:   { min: 0.3, max: 6  },
+  calligraphy: { min: 2,   max: 20 },
+  brush:       { min: 2,   max: 30 },
   eraser:      { min: 4,   max: 60 },
   line:        { min: 1,   max: 12 },
   rect:        { min: 1,   max: 12 },
@@ -143,6 +284,7 @@ const WIDTH_RANGE: Record<Tool, { min: number; max: number }> = {
 
 const DEFAULT_WIDTHS: Record<Tool, number> = {
   pen: 3, fountain: 5, marker: 10, highlighter: 20, pencil: 2, eraser: 24,
+  fineliner: 1.2, calligraphy: 7, brush: 8,
   line: 3, rect: 3, ellipse: 3,
 };
 
@@ -166,8 +308,11 @@ const FAMILY_META: Record<ToolFamily, { label: string; icon: any; lib?: 'ion' | 
 };
 
 const FAMILY_VARIANTS: Record<ToolFamily, { key: string; label: string; icon: any; lib?: 'ion' | 'mci' }[]> = {
-  pen:    [ { key: 'fountain',  label: 'Fountain',  icon: 'fountain-pen', lib: 'mci' },
-            { key: 'ballpoint', label: 'Ballpoint', icon: 'pen',          lib: 'mci' } ],
+  pen:    [ { key: 'fountain',    label: 'Fountain',    icon: 'fountain-pen', lib: 'mci' },
+            { key: 'ballpoint',   label: 'Ballpoint',   icon: 'pen',          lib: 'mci' },
+            { key: 'fineliner',   label: 'Fineliner',   icon: 'draw-pen',     lib: 'mci' },
+            { key: 'calligraphy', label: 'Calligraphy', icon: 'feather',      lib: 'mci' },
+            { key: 'brush',       label: 'Brush',       icon: 'brush',        lib: 'mci' } ],
   pencil: [ { key: 'pencil', label: 'Pencil', icon: 'pencil-outline', lib: 'mci' } ],
   marker: [ { key: 'flat',  label: 'Flat tip',  icon: 'marker',        lib: 'mci' },
             { key: 'round', label: 'Round tip', icon: 'brush-variant', lib: 'mci' } ],
@@ -185,7 +330,10 @@ const FAMILY_VARIANTS: Record<ToolFamily, { key: string; label: string; icon: an
 // their drawing behavior is stubbed — the family+variant is still stored so the UI
 // reflects the choice.
 function familyVariantToTool(f: ToolFamily, v: string): Tool {
-  if (f === 'pen')    return v === 'fountain' ? 'fountain' : 'pen';
+  if (f === 'pen') {
+    if (v === 'fountain' || v === 'fineliner' || v === 'calligraphy' || v === 'brush') return v;
+    return 'pen';
+  }
   if (f === 'pencil') return 'pencil';
   if (f === 'marker') return 'marker';
   if (f === 'tape')   return 'highlighter';
@@ -285,6 +433,18 @@ export default function DrawScreen() {
   const [paper, setPaper] = useState<Paper>('blank');
   const [paperSize, setPaperSize] = useState<PaperSize>('a4');
   const [customSize, setCustomSize] = useState<{ w: number; h: number } | null>(null);
+  // Imported PDF pages, one per page (index into the note's images), or null.
+  const [pageBackgrounds, setPageBackgrounds] = useState<(number | null)[]>([]);
+  // Per page: a paper template that overrides the note's (null = same as note),
+  // and whether the page is bookmarked.
+  const [pageTemplates, setPageTemplates] = useState<(Paper | null)[]>([]);
+  const [pageBookmarks, setPageBookmarks] = useState<boolean[]>([]);
+  /** Apply the same reshaping (delete / move / insert a page) to every per-page list. */
+  const remapPageMeta = (fn: <T>(arr: T[], blank: T) => T[]) => {
+    setPageBackgrounds((a) => fn(a, null));
+    setPageTemplates((a) => fn(a, null));
+    setPageBookmarks((a) => fn(a, false));
+  };
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [paperColorId, setPaperColorId] = useState<string>('white');
   const [lineSpacing, setLineSpacing] = useState<number | undefined>(undefined);
@@ -359,6 +519,27 @@ export default function DrawScreen() {
   const [laserSpot, setLaserSpot] = useState<{ x: number; y: number } | null>(null);
   // Selection: indices of items currently selected + active marquee/lasso path.
   const [selectedIdx, setSelectedIdx] = useState<number[]>([]);
+  // Live move / resize / rotate of the selection. While dragging, the selected
+  // items are only drawn through this matrix; it is applied to their points
+  // once, on release.
+  const [selXform, setSelXform] = useState<Mat | null>(null);
+  const selXformRef = useRef<Mat | null>(null);
+  const selDragRef = useRef<
+    | null
+    | { kind: 'move' | 'scale' | 'rotate'; start: { x: number; y: number }; anchor: { x: number; y: number } }
+  >(null);
+  const [clipCount, setClipCount] = useState(inkClipboard.length);
+  // Zoom pad: a magnified strip at the bottom for writing small text neatly.
+  // (x, y) is the top-left of the window it shows, in world units; w its width.
+  const [zoomPad, setZoomPad] = useState<null | { x: number; y: number; w: number }>(null);
+  const [padCommittedId, setPadCommittedId] = useState(0);
+  const padOpenRef = useRef(false);
+  padOpenRef.current = !!zoomPad;
+  // Text tool: tap the page to add a text box, tap one to edit it.
+  const [textMode, setTextMode] = useState(false);
+  const [textEdit, setTextEdit] = useState<
+    null | { index: number | null; x: number; y: number; w: number; fontSize: number; color: string; text: string; angle: number }
+  >(null);
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [lassoPath, setLassoPath] = useState<Pt[] | null>(null);
 
@@ -616,7 +797,9 @@ export default function DrawScreen() {
   // pan below stands aside for them. Fingers, other tools and the ruler still
   // go through JS.
   const [nativeCommittedId, setNativeCommittedId] = useState(0);
-  const nativeInkActiveRef = useRef(false);
+  const nativeModeRef = useRef<'ink' | 'erase' | 'lasso' | 'rect' | 'none'>('none');
+  /** The current JS pan gesture is being handled natively; ignore it. */
+  const jsSkipRef = useRef(false);
   const lastRawRef = useRef<InkPoint | null>(null);
   // Imperative handle to the wet-ink layer; see src/ink/LiveStrokeLayer.tsx.
   const liveStrokeRef = useRef<LiveStrokeHandle | null>(null);
@@ -642,6 +825,9 @@ export default function DrawScreen() {
     // screen, so anything the next note doesn't specify used to carry over from
     // the previous one: page count, line spacing, orientation, canvas colour.
     setPaper('blank');
+    setPageBackgrounds([]);
+    setPageTemplates([]);
+    setPageBookmarks([]);
     setPaperSize('a4');
     setCustomSize(null);
     setOrientation('portrait');
@@ -658,6 +844,8 @@ export default function DrawScreen() {
         ]);
         if (cancelled) return;
         setNote(n);
+        imagesRef.current = Array.isArray(n.images) ? n.images : [];
+        decodedRef.current.clear();
         setLabels(ls);
         setFolders(fs);
         openTab({ id: n.id, title: displayTitle(n), type: 'handwriting' });
@@ -684,6 +872,7 @@ export default function DrawScreen() {
                     })),
                   } as Item;
                 }
+                if (it.kind !== 'shape') return it;
                 const sIdx = Math.floor(it.start.y / Math.max(1, legacyBaseH));
                 const eIdx = Math.floor(it.end.y / Math.max(1, legacyBaseH));
                 return {
@@ -705,6 +894,7 @@ export default function DrawScreen() {
                 if (it.kind === 'stroke') {
                   return { ...it, points: it.points.map((p) => ({ ...p, y: remap(p.y) })) } as Item;
                 }
+                if (it.kind !== 'shape') return it;
                 return {
                   ...it,
                   start: { x: it.start.x, y: remap(it.start.y) },
@@ -723,6 +913,9 @@ export default function DrawScreen() {
               setPaperSize(s);
             }
             if (doc.customSize) setCustomSize(doc.customSize);
+            setPageBackgrounds(Array.isArray(doc.pageBackgrounds) ? doc.pageBackgrounds : []);
+            setPageTemplates(Array.isArray(doc.pageTemplates) ? (doc.pageTemplates as (Paper | null)[]) : []);
+            setPageBookmarks(Array.isArray(doc.pageBookmarks) ? doc.pageBookmarks : []);
             if (doc.orientation) setOrientation(doc.orientation);
             if (doc.paperColor) setPaperColorId(doc.paperColor);
             // Per-note colour wins; otherwise fall back to the app default.
@@ -770,6 +963,9 @@ export default function DrawScreen() {
     paper: Paper;
     paperSize: PaperSize;
     customSize: { w: number; h: number } | null;
+    pageBackgrounds: (number | null)[];
+    pageTemplates: (Paper | null)[];
+    pageBookmarks: boolean[];
     orientation: 'portrait' | 'landscape';
     paperColorId: string;
     canvasColorHex: string;
@@ -781,6 +977,9 @@ export default function DrawScreen() {
     paper,
     paperSize,
     customSize,
+    pageBackgrounds,
+    pageTemplates,
+    pageBookmarks,
     orientation,
     paperColorId,
     canvasColorHex,
@@ -819,6 +1018,9 @@ export default function DrawScreen() {
         canvasColor: d.canvasColorHex,
         lineSpacing: d.lineSpacing,
         pageCount: d.pageCount,
+        pageBackgrounds: d.pageBackgrounds.length ? d.pageBackgrounds : undefined,
+        pageTemplates: d.pageTemplates.some((t) => t) ? d.pageTemplates : undefined,
+        pageBookmarks: d.pageBookmarks.some((b) => b) ? d.pageBookmarks : undefined,
         docVersion: 3,
         items: d.items,
       } as DrawingDoc),
@@ -919,6 +1121,15 @@ export default function DrawScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageCount, orientation, loading]);
 
+  // Selection bounds. Declared up here, before the gestures are built: their
+  // callbacks capture identifiers when constructed, and a const declared
+  // further down would still be in its temporal dead zone then.
+  const effW = (t: string, w: number) => effectiveWidth(t as InkTool, w);
+  const selBounds: SelRect | null = useMemo(
+    () => unionBounds(selectedIdx.map((i) => items[i]).filter(Boolean).map((it) => itemBounds(it, effW))),
+    [selectedIdx, items]
+  );
+
   const pushHistory = useCallback((prev: Item[]) => {
     historyRef.current.undo.push(prev);
     historyRef.current.redo = [];
@@ -950,9 +1161,10 @@ export default function DrawScreen() {
   // ----- Gesture handlers -----
   const isShapeTool = (t: Tool): t is ShapeTool => t === 'line' || t === 'rect' || t === 'ellipse';
   const isPenTool = (t: Tool): t is PenTool =>
-    t === 'pen' || t === 'fountain' || t === 'marker' || t === 'highlighter' || t === 'pencil';
+    t === 'pen' || t === 'fountain' || t === 'marker' || t === 'highlighter' || t === 'pencil' ||
+    t === 'fineliner' || t === 'calligraphy' || t === 'brush';
 
-  const finalizeStroke = (pts: InkPoint[]) => {
+  const finalizeStroke = (pts: InkPoint[], shape?: string) => {
     if (pts.length < 2 || !isPenTool(tool)) return;
     const w = widths[tool];
     // Every sample is kept: see storePoints. Simplifying here made the stroke
@@ -964,6 +1176,7 @@ export default function DrawScreen() {
       color,
       width: w,
       points,
+      ...(shape ? { shape } : {}),
     };
     setItems((prev) => {
       pushHistory(prev);
@@ -1005,12 +1218,15 @@ export default function DrawScreen() {
     AsyncStorage.setItem(StorageKeys.eraserMode, m).catch(() => {});
   }, []);
 
-  const eraseAt = (x: number, y: number) => {
+  /**
+   * Remove (or cut) whatever the eraser disc at (x, y) touches. Pure: returns
+   * the new list, or the same list when nothing was hit.
+   */
+  const eraseOnce = (items: Item[], x: number, y: number): Item[] => {
     const radius = widths.eraser / 2;
-    setItems((prev) => {
-      let changed = false;
+    let changed = false;
       const nextItems: Item[] = [];
-      for (const it of prev) {
+      for (const it of items) {
         if (it.kind === 'stroke') {
           if (eraserMode === 'stroke') {
             // Whole-stroke erase: remove if ANY segment intersects the eraser disc.
@@ -1050,7 +1266,7 @@ export default function DrawScreen() {
               }
             }
           }
-        } else {
+        } else if (it.kind === 'shape') {
           // Shapes: only "stroke" (whole-shape) erase applies.
           const a = it.start;
           const b = it.end;
@@ -1067,13 +1283,46 @@ export default function DrawScreen() {
           }
           if (hit) { changed = true; continue; }
           nextItems.push(it);
+        } else {
+          // Images and text boxes aren't erased by the pen eraser (as in
+          // other note apps); select them and delete instead.
+          nextItems.push(it);
         }
       }
-      if (changed) {
+    return changed ? nextItems : items;
+  };
+
+  const eraseAt = (x: number, y: number) => {
+    setItems((prev) => {
+      const next = eraseOnce(prev, x, y);
+      if (next !== prev) {
         pushHistory(prev);
-        persist(nextItems, paper, paperSize, paperColorId);
+        persist(next, paper, paperSize, paperColorId);
       }
-      return changed ? nextItems : prev;
+      return next;
+    });
+  };
+
+  /**
+   * Erase along a run of points in ONE state update, recording ONE undo step
+   * per eraser gesture. Erasing used to update state and push an undo snapshot
+   * for every single point, which was slow and, with a 50-step history,
+   * quickly pushed real edits out of reach of undo.
+   */
+  const eraseGestureRef = useRef<{ pushed: boolean }>({ pushed: false });
+  const eraseAlong = (pts: { x: number; y: number }[], startOfGesture: boolean) => {
+    if (startOfGesture) eraseGestureRef.current = { pushed: false };
+    setItems((prev) => {
+      let cur = prev;
+      for (const p of pts) cur = eraseOnce(cur, p.x, p.y);
+      if (cur !== prev) {
+        if (!eraseGestureRef.current.pushed) {
+          pushHistory(prev);
+          eraseGestureRef.current.pushed = true;
+        }
+        persist(cur, paper, paperSize, paperColorId);
+      }
+      return cur;
     });
   };
 
@@ -1174,13 +1423,27 @@ export default function DrawScreen() {
     .runOnJS(true)
     .numberOfTaps(1)
     .minPointers(2)
-    .onEnd(() => runGestureAction(settings.gestureTwoFingerTap));
+    // A tap is short and still. Without these limits any pinch-zoom shorter
+    // than half a second counted as a 2-finger tap and ran its action
+    // (undo, by default), so writing vanished when you zoomed.
+    .maxDuration(250)
+    .maxDistance(12)
+    .onEnd((_e, success) => {
+      if (success) runGestureAction(settings.gestureTwoFingerTap);
+    });
 
   const threeTap = Gesture.Tap()
     .runOnJS(true)
     .numberOfTaps(1)
     .minPointers(3)
-    .onEnd(() => runGestureAction(settings.gestureThreeFingerTap));
+    // A tap is short and still. Without these limits any pinch-zoom shorter
+    // than half a second counted as a 3-finger tap and ran its action
+    // (undo, by default), so writing vanished when you zoomed.
+    .maxDuration(250)
+    .maxDistance(12)
+    .onEnd((_e, success) => {
+      if (success) runGestureAction(settings.gestureThreeFingerTap);
+    });
 
   const composedGesture = Gesture.Simultaneous(pinch, twoFingerPanY);
   const tapsGesture = Gesture.Exclusive(threeTap, twoTap);
@@ -1323,8 +1586,13 @@ export default function DrawScreen() {
       // Default to allowing when pointerType is undefined (older devices) — but
       // still explicitly block when we know it's a finger.
       isStylusRef.current = pt !== 0;
-      // The native layer is drawing this stroke; don't draw it twice.
-      if (nativeInkActiveRef.current && pt === 1 && isPenTool(tool)) {
+      // The native layer owns stylus touches in its modes (ink, erase,
+      // lasso, rect); stand aside for the whole gesture so nothing happens twice.
+      jsSkipRef.current =
+        (nativeModeRef.current !== 'none' && pt === 1) ||
+        // Touches in the zoom pad's strip belong to the pad, not the page above.
+        (padOpenRef.current && e.y > viewport.h - (170 + 44));
+      if (jsSkipRef.current) {
         livePtsRef.current = [];
         clearLive();
         return;
@@ -1334,6 +1602,51 @@ export default function DrawScreen() {
         liveShapeRef.current = null;
         clearLive();
         return;
+      }
+      // A touch on the page while a text box is open saves it, nothing more.
+      if (textEdit) {
+        jsSkipRef.current = true;
+        commitTextEdit();
+        return;
+      }
+      // Text tool: a touch opens the editor, on an existing box or a new one.
+      if (textMode) {
+        const w0 = toWorld(e.x, e.y);
+        jsSkipRef.current = true;
+        let found = -1;
+        for (let i = items.length - 1; i >= 0; i--) {
+          const it = items[i];
+          if (it.kind === 'text' && boxContains(it, w0)) { found = i; break; }
+        }
+        if (found >= 0) {
+          const t = items[found] as TextItem;
+          setTextEdit({ index: found, x: t.x, y: t.y, w: t.w, fontSize: t.fontSize, color: t.color, text: t.text, angle: t.angle });
+        } else {
+          setTextEdit({ index: null, x: w0.x, y: w0.y - 12, w: Math.min(320, pageDims.w - w0.x - 8), fontSize: 18, color, text: '', angle: 0 });
+        }
+        return;
+      }
+      // A drag left over from a cancelled gesture must not linger.
+      if (selDragRef.current) {
+        selDragRef.current = null;
+        selXformRef.current = null;
+        setSelXform(null);
+      }
+      // Selection showing: grab a handle or the box, or dismiss it.
+      if (selectedIdx.length > 0) {
+        const w0 = toWorld(e.x, e.y);
+        const grab = selBounds ? hitSelection(selBounds, w0) : null;
+        if (grab) {
+          selDragRef.current = grab;
+          return;
+        }
+        setSelectedIdx([]);
+        // Outside the selection: with a pen, this touch only dismisses it.
+        // With the select tool it goes on to start a new selection.
+        if (family !== 'select') {
+          jsSkipRef.current = true;
+          return;
+        }
       }
       // Ruler snap: if the pen begins near the ruler edge, project this stroke onto it.
       snapToRulerRef.current = false;
@@ -1395,6 +1708,13 @@ export default function DrawScreen() {
       }
     })
     .onUpdate((e) => {
+      if (jsSkipRef.current) return;
+      if (selDragRef.current) {
+        const m = selectionDragMatrix(selDragRef.current, toWorld(e.x, e.y));
+        selXformRef.current = m;
+        setSelXform(m);
+        return;
+      }
       if (palmRejectionRef.current && !isStylusRef.current) return;
       // Ruler snap logic — the ruler acts as a physical barrier laid on the
       // paper. Two cases lock the current stroke to a ruler edge:
@@ -1452,6 +1772,15 @@ export default function DrawScreen() {
       }
     })
     .onEnd(() => {
+      if (jsSkipRef.current) return;
+      if (selDragRef.current) {
+        const m = selXformRef.current;
+        selDragRef.current = null;
+        selXformRef.current = null;
+        setSelXform(null);
+        if (m) commitSelectionTransform(m);
+        return;
+      }
       if (palmRejectionRef.current && !isStylusRef.current) {
         livePtsRef.current = [];
         liveShapeRef.current = null;
@@ -1485,15 +1814,12 @@ export default function DrawScreen() {
           }
           return inPoly;
         };
-        const hit: number[] = [];
-        items.forEach((it, idx) => {
-          const pts: { x: number; y: number }[] =
-            it.kind === 'stroke'
-              ? it.points
-              : [it.start, it.end, { x: it.start.x, y: it.end.y }, { x: it.end.x, y: it.start.y }];
-          if (pts.some((p) => inside(p.x, p.y))) hit.push(idx);
-        });
-        setSelectedIdx(hit);
+        const outline =
+          variantByFamily.select === 'rect'
+            ? marquee ? [{ x: marquee.x1, y: marquee.y1 }, { x: marquee.x2, y: marquee.y2 }] : []
+            : lassoPath ?? [];
+        void inside;
+        setSelectedIdx(selectionHits(items, variantByFamily.select === 'rect' ? 'rect' : 'lasso', outline));
         setMarquee(null);
         setLassoPath(null);
         return;
@@ -1528,9 +1854,26 @@ export default function DrawScreen() {
 
   const finalGesture = Gesture.Simultaneous(pan, composedGesture, fingerScrollPan, tapsGesture);
 
-  const nativeInkActive =
-    !!NativeInkView && settings.nativeInk !== false && isPenTool(tool) && !rulerEnabled;
-  nativeInkActiveRef.current = nativeInkActive;
+  // What the native layer does with the stylus. Select and Laser map to the
+  // 'pen' tool internally, so the family must be checked first, or the stylus
+  // would ink while you meant to select. The ruler is handled natively too.
+  const nativeAvailable = !!NativeInkView && settings.nativeInk !== false;
+  // With a selection showing, every touch may be a move / resize / rotate,
+  // so JavaScript takes them all until the selection is dismissed.
+  const nativeMode: 'ink' | 'erase' | 'lasso' | 'rect' | 'none' =
+    !nativeAvailable || selectedIdx.length > 0 || textMode || !!textEdit
+    ? 'none'
+    : family === 'select'
+    ? variantByFamily.select === 'lasso' ? 'lasso' : 'rect'
+    : family === 'laser'
+    ? 'none'
+    : tool === 'eraser'
+    ? 'erase'
+    : isPenTool(tool)
+    ? 'ink'
+    : 'none';
+  const nativeInkActive = nativeMode === 'ink';
+  nativeModeRef.current = nativeMode;
 
   /**
    * A stroke finished on the native layer. Its points are already in world
@@ -1538,11 +1881,47 @@ export default function DrawScreen() {
    * so it commits through the same code. The native layer keeps drawing it
    * until the committed copy has had time to render, then drops it.
    */
-  const onNativeStroke = (e: NativeStrokeEvent) => {
+  /** Eraser tool, or S Pen button held while writing: erase along the pen's path. */
+  const onNativeErase = (e: NativeEraseEvent) => {
+    const p = e.nativeEvent.points;
+    const pts: { x: number; y: number }[] = [];
+    for (let i = 0; i + 1 < p.length; i += 2) pts.push({ x: p[i], y: p[i + 1] });
+    eraseAlong(pts, !!e.nativeEvent.start);
+  };
+  /** Lasso / rectangle drawn natively: select what it encloses. */
+  const onNativeSelect = (e: NativeSelectEvent) => {
+    const p = e.nativeEvent.points;
+    const outline: { x: number; y: number }[] = [];
+    for (let i = 0; i + 1 < p.length; i += 2) outline.push({ x: p[i], y: p[i + 1] });
+    setSelectedIdx(selectionHits(items, e.nativeEvent.kind === 'rect' ? 'rect' : 'lasso', outline));
+    setMarquee(null);
+    setLassoPath(null);
+  };
+  /** S Pen button clicked (hovering, or as the pen lands) mapped to undo/redo. */
+  const onNativePenButton = (e: NativePenButtonEvent) => {
+    const a = e.nativeEvent.action;
+    if (a === 'undo' || a === 'redo') runGestureAction(a);
+  };
+
+  const onNativeStroke = (e: NativeStrokeEvent) => handleNativeStroke(e, setNativeCommittedId);
+  /** Strokes from the zoom pad: same commit, then move the pad along if the line is filling up. */
+  const onPadStroke = (e: NativeStrokeEvent) => {
+    handleNativeStroke(e, setPadCommittedId);
+    const flat = e.nativeEvent.points;
+    const stride = e.nativeEvent.stride ?? 5;
+    let maxX = -Infinity;
+    for (let i = 0; i < flat.length; i += stride) maxX = Math.max(maxX, flat[i]);
+    setZoomPad((zp) => (zp && maxX > zp.x + zp.w * 0.72 ? advancePad(zp, 1) : zp));
+  };
+  function handleNativeStroke(e: NativeStrokeEvent, setCommitted: React.Dispatch<React.SetStateAction<number>>) {
     const { id, points: flat } = e.nativeEvent;
+    // [x, y, t, p, w] per point, plus tilt when stride is 6.
+    const stride = e.nativeEvent.stride ?? 5;
     const pts: InkPoint[] = [];
-    for (let i = 0; i + 4 < flat.length; i += 5) {
-      pts.push({ x: flat[i], y: flat[i + 1], t: flat[i + 2], p: flat[i + 3], w: flat[i + 4] });
+    for (let i = 0; i + stride - 1 < flat.length; i += stride) {
+      const pt: InkPoint = { x: flat[i], y: flat[i + 1], t: flat[i + 2], p: flat[i + 3], w: flat[i + 4] };
+      if (stride >= 6 && flat[i + 5]) pt.a = flat[i + 5];
+      pts.push(pt);
     }
     if (pts.length >= 2) {
       const last = pts[pts.length - 1];
@@ -1550,13 +1929,13 @@ export default function DrawScreen() {
         setPageCount((c) => c + 1);
         setScrollY(pageCount * pageStrideY);
       }
-      finalizeStroke(pts);
+      finalizeStroke(pts, e.nativeEvent.shape);
     }
     // Two frames for the committed stroke to reach the screen, plus margin.
     requestAnimationFrame(() =>
-      requestAnimationFrame(() => setTimeout(() => setNativeCommittedId((c) => Math.max(c, id)), 32))
+      requestAnimationFrame(() => setTimeout(() => setCommitted((c) => Math.max(c, id)), 32))
     );
-  };
+  }
 
   // ----- Render strokes -----
   // Committed strokes render through <InkStroke />, which caches its SkPath
@@ -1571,8 +1950,214 @@ export default function DrawScreen() {
       tool={s.tool as InkTool}
       color={s.color}
       width={s.width}
+      shape={s.shape}
     />
   );
+
+  /** Save (or remove, if emptied) the text box being edited. */
+  function commitTextEdit(remove = false) {
+    const t = textEdit;
+    setTextEdit(null);
+    if (!t) return;
+    const text = remove ? '' : t.text.replace(/\s+$/, '');
+    const w = Math.max(40, t.w);
+    setItems((prev) => {
+      const next = [...prev];
+      if (!text) {
+        if (t.index === null) return prev;
+        pushHistory(prev);
+        next.splice(t.index, 1);
+      } else {
+        const h = textParagraph(text, t.fontSize, t.color, w).getHeight();
+        const item: TextItem = { kind: 'text', text, x: t.x, y: t.y, w, h, fontSize: t.fontSize, color: t.color, angle: t.angle };
+        pushHistory(prev);
+        if (t.index === null) next.push(item);
+        else next[t.index] = item;
+      }
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+  }
+
+  // ----- Zoom pad -----
+  const PAD_H = 170;
+  const PAD_MARGIN = 16;
+  const padScale = zoomPad ? viewport.w / Math.max(20, zoomPad.w) : 1;
+  const padWindowH = PAD_H / padScale;
+  /**
+   * Move the pad's window: forward along the line, back, or to the start of
+   * the next line (wrapping past the right edge of the page).
+   */
+  function advancePad(zp: { x: number; y: number; w: number }, dir: 1 | -1 | 0): { x: number; y: number; w: number } {
+    const winH = PAD_H / (viewport.w / Math.max(20, zp.w));
+    const lineStep = paper === 'ruled' || paper === 'narrow' ? Math.max(winH * 0.6, (lineSpacing ?? (paper === 'ruled' ? 32 : 20)) * 2) : winH * 0.75;
+    if (dir === 0) return { ...zp, x: PAD_MARGIN, y: zp.y + lineStep };
+    const nx = zp.x + dir * zp.w * 0.55;
+    if (dir === 1 && nx + zp.w * 0.3 > pageDims.w) return { ...zp, x: PAD_MARGIN, y: zp.y + lineStep };
+    return { ...zp, x: Math.max(0, Math.min(pageDims.w - zp.w * 0.5, nx)) };
+  }
+  function openZoomPad() {
+    const visibleTop = scrollY;
+    setZoomPad({ x: PAD_MARGIN, y: visibleTop + 40, w: pageDims.w * 0.4 });
+  }
+  // Keep the pad's window in view on the page above it.
+  useEffect(() => {
+    if (!zoomPad) return;
+    const visibleH = (viewport.h - PAD_H - 44) / Math.max(0.01, scale);
+    if (zoomPad.y < scrollY || zoomPad.y + padWindowH > scrollY + visibleH) {
+      setScrollY(Math.max(0, zoomPad.y - visibleH * 0.3));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomPad?.y]);
+
+  // ----- Export / share -----
+  const [exporting, setExporting] = useState(false);
+  /**
+   * PDF: every page, ink as vectors, imported PDF pages behind it.
+   * PNG: the page in the middle of the screen, 2400 px wide.
+   */
+  async function exportNote(format: 'pdf' | 'png') {
+    setShowPaperMenu(false);
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const visibleMid = scrollY + viewport.h / Math.max(0.01, scale) / 2;
+      const current = Math.max(0, Math.min(pageCount - 1, Math.floor(visibleMid / pageStrideY)));
+      const outW = paperSize === 'custom' && customSize ? customSize.w : orientation === 'landscape' ? 842 : 595;
+      const path = await exportDoc({
+        format,
+        name: note?.title || 'Note',
+        pageW: pageDims.w,
+        pageH: basePageH,
+        stride: pageStrideY,
+        pages: format === 'pdf' ? Array.from({ length: pageCount }, (_, i) => i) : [current],
+        paper,
+        paperColor,
+        lineColor: paperLine,
+        lineSpacing: lineSpacing ?? null,
+        outW,
+        pngWidth: 2400,
+        items,
+        images: imagesRef.current,
+        backgrounds: pageBackgrounds,
+        pageTemplates,
+      });
+      if (!path) {
+        Alert.alert('Export', 'Exporting needs the latest app build.');
+        return;
+      }
+      await Sharing.shareAsync(`file://${path}`, {
+        mimeType: format === 'pdf' ? 'application/pdf' : 'image/png',
+        dialogTitle: format === 'pdf' ? 'Share PDF' : 'Share page',
+      });
+    } catch (err) {
+      Alert.alert('Export failed', err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // ----- Images and text boxes on the page -----
+  // Image data lives in the note's `images` column (JPEG data URIs), the same
+  // place text notes keep theirs, so it is in backups and never re-written
+  // by the drawing autosave. Items point at it by index; the list only grows.
+  const imagesRef = useRef<string[]>([]);
+  const decodedRef = useRef<Map<number, SkImage | null>>(new Map());
+  const imageFor = (ref: number): SkImage | null => {
+    const cache = decodedRef.current;
+    if (cache.has(ref)) return cache.get(ref)!;
+    const uri = imagesRef.current[ref];
+    let img: SkImage | null = null;
+    if (uri) {
+      const b64 = uri.slice(uri.indexOf(',') + 1);
+      try {
+        img = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBase64(b64));
+      } catch {
+        img = null;
+      }
+    }
+    cache.set(ref, img);
+    return img;
+  };
+
+  const renderBox = (it: ImageItem | TextItem, key: string) => {
+    const origin = { x: it.x + it.w / 2, y: it.y + it.h / 2 };
+    const rot = it.angle ? [{ rotate: it.angle }] : undefined;
+    if (it.kind === 'image') {
+      const img = imageFor(it.ref);
+      return (
+        <Group key={key} origin={origin} transform={rot}>
+          {img ? (
+            <SkiaImage image={img} x={it.x} y={it.y} width={it.w} height={it.h} fit="fill" />
+          ) : (
+            <Path
+              path={(() => { const pp = Skia.Path.Make(); pp.addRect({ x: it.x, y: it.y, width: it.w, height: it.h }); return pp; })()}
+              color="#999"
+              style="stroke"
+              strokeWidth={1}
+            />
+          )}
+        </Group>
+      );
+    }
+    return (
+      <Group key={key} origin={origin} transform={rot}>
+        <Paragraph paragraph={textParagraph(it.text, it.fontSize, it.color, it.w)} x={it.x} y={it.y} width={it.w} />
+      </Group>
+    );
+  };
+
+  function renderItem(it: Item, key: string) {
+    if (it.kind === 'stroke') return renderStroke(it, key);
+    if (it.kind === 'shape') return renderShape(it, key);
+    return renderBox(it, key);
+  }
+
+  /** Thinner / thicker for lines; text boxes change font size instead; images don't. */
+  function resizeLine(it: Item, f: number): Item {
+    if (it.kind === 'stroke' || it.kind === 'shape') return { ...it, width: it.width * f };
+    if (it.kind === 'text') {
+      const fontSize = Math.max(4, it.fontSize * f);
+      const h = textParagraph(it.text, fontSize, it.color, it.w).getHeight();
+      return { ...it, fontSize, h };
+    }
+    return it;
+  }
+
+  /** Pick a picture from the gallery and drop it in the middle of the view, selected. */
+  async function insertImage() {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) return;
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        base64: true,
+        quality: 0.6,
+      });
+      const asset = res.canceled ? null : res.assets[0];
+      if (!asset?.base64) return;
+      const ref = imagesRef.current.length;
+      imagesRef.current = [...imagesRef.current, `data:image/jpeg;base64,${asset.base64}`];
+      decodedRef.current.delete(ref);
+      if (note) NotesApi.update(note.id, { images: imagesRef.current }).catch((err) => console.warn('image save failed', err));
+      const aspect = asset.width && asset.height ? asset.height / asset.width : 0.75;
+      const w = Math.min(pageDims.w * 0.6, (asset.width || 600) / 2);
+      const h = w * aspect;
+      const c = toWorld(viewport.w / 2, viewport.h / 2);
+      const item: ImageItem = { kind: 'image', ref, x: c.x - w / 2, y: c.y - h / 2, w, h, angle: 0 };
+      const index = items.length;
+      setItems((prev) => {
+        pushHistory(prev);
+        const next = [...prev, item];
+        persist(next, paper, paperSize, paperColorId);
+        return next;
+      });
+      setSelectedIdx([index]);
+      haptic.success();
+    } catch (err) {
+      console.warn('insert image failed', err);
+    }
+  }
 
   const renderShape = (s: ShapeData, key: string) => {
     const path = buildShapePath(s);
@@ -1661,6 +2246,138 @@ export default function DrawScreen() {
 
   function clearLive() {
     liveStrokeRef.current?.set(null);
+  }
+
+  // ----- Selection: bounds, handles, transforms, clipboard -----
+  /** Handle sizes are in screen points, so convert to world at the current zoom. */
+  const HANDLE_R = 9;
+  const ROTATE_OFFSET = 30;
+
+  function hitSelection(r: SelRect, w: { x: number; y: number }) {
+    const h = selHandles(r, ROTATE_OFFSET / scale);
+    const reach = 22 / scale; // generous: easy to grab with a finger
+    if (Math.hypot(w.x - h.rotate.x, w.y - h.rotate.y) <= reach) {
+      return { kind: 'rotate' as const, start: w, anchor: h.center };
+    }
+    for (let k = 0; k < 4; k++) {
+      const c = h.corners[k];
+      if (Math.hypot(w.x - c.x, w.y - c.y) <= reach) {
+        return { kind: 'scale' as const, start: w, anchor: h.corners[(k + 2) % 4] };
+      }
+    }
+    const pad = 8 / scale;
+    if (w.x >= r.x - pad && w.x <= r.x + r.w + pad && w.y >= r.y - pad && w.y <= r.y + r.h + pad) {
+      return { kind: 'move' as const, start: w, anchor: h.center };
+    }
+    return null;
+  }
+
+  function selectionDragMatrix(
+    d: { kind: 'move' | 'scale' | 'rotate'; start: { x: number; y: number }; anchor: { x: number; y: number } },
+    cur: { x: number; y: number }
+  ): Mat {
+    if (d.kind === 'move') return translate(cur.x - d.start.x, cur.y - d.start.y);
+    if (d.kind === 'scale') {
+      const d0 = Math.hypot(d.start.x - d.anchor.x, d.start.y - d.anchor.y) || 1;
+      const d1 = Math.hypot(cur.x - d.anchor.x, cur.y - d.anchor.y);
+      return scaleAbout(d.anchor, Math.max(0.05, d1 / d0));
+    }
+    const a0 = Math.atan2(d.start.y - d.anchor.y, d.start.x - d.anchor.x);
+    const a1 = Math.atan2(cur.y - d.anchor.y, cur.x - d.anchor.x);
+    return rotateAbout(d.anchor, snapAngle(a1 - a0));
+  }
+
+  /** Apply a finished drag to the selected items' points, as one undo step. */
+  function commitSelectionTransform(m: Mat) {
+    const moved = Math.abs(m.e) + Math.abs(m.f) > 1e-3 || Math.abs(m.a - 1) + Math.abs(m.b) + Math.abs(m.c) + Math.abs(m.d - 1) > 1e-4;
+    if (!moved) return;
+    const sel = new Set(selectedIdx);
+    setItems((prev) => {
+      pushHistory(prev);
+      const next = prev.map((it, i) => (sel.has(i) ? (bakeItem(it, m) as Item) : it));
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+  }
+
+  function editSelected(fn: (it: Item) => Item) {
+    const sel = new Set(selectedIdx);
+    setItems((prev) => {
+      pushHistory(prev);
+      const next = prev.map((it, i) => (sel.has(i) ? fn(it) : it));
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+  }
+
+  function copySelection() {
+    // Images carry their picture data, so they can be pasted into another note.
+    inkClipboard = selectedIdx
+      .map((i) => items[i])
+      .filter(Boolean)
+      .map((it) => {
+        const c = cloneItem(it) as Item;
+        return c.kind === 'image' ? ({ ...c, _data: imagesRef.current[c.ref] } as Item) : c;
+      });
+    setClipCount(inkClipboard.length);
+    haptic.success();
+  }
+
+  function deleteSelection() {
+    const sel = new Set(selectedIdx);
+    setItems((prev) => {
+      pushHistory(prev);
+      const next = prev.filter((_, idx) => !sel.has(idx));
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+    setSelectedIdx([]);
+  }
+
+  /** Add copies of `src` moved by `m`, and select them. */
+  function insertItems(src: Item[], m: Mat) {
+    if (!src.length) return;
+    // Pictures from another note (or a deleted one) are added to this note's images.
+    let imagesChanged = false;
+    const local = src.map((it) => {
+      const data = (it as { _data?: string })._data;
+      if (it.kind !== 'image' || !data) return it;
+      let ref = imagesRef.current.indexOf(data);
+      if (ref < 0) {
+        ref = imagesRef.current.length;
+        imagesRef.current = [...imagesRef.current, data];
+        imagesChanged = true;
+      }
+      const { _data, ...rest } = it as ImageItem & { _data?: string };
+      void _data;
+      return { ...rest, ref } as Item;
+    });
+    if (imagesChanged && note) {
+      NotesApi.update(note.id, { images: imagesRef.current }).catch((err) => console.warn('image save failed', err));
+    }
+    const added = local.map((it) => bakeItem(cloneItem(it), m) as Item);
+    const start = items.length;
+    setItems((prev) => {
+      pushHistory(prev);
+      const next = [...prev, ...added];
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+    setSelectedIdx(added.map((_, k) => start + k));
+  }
+
+  /** Paste into the middle of what's on screen, wherever the copy came from. */
+  function pasteClipboard() {
+    const b = unionBounds(inkClipboard.map((it) => itemBounds(it, effW)));
+    if (!b) return;
+    const c = toWorld(viewport.w / 2, viewport.h / 2);
+    insertItems(inkClipboard, translate(c.x - (b.x + b.w / 2), c.y - (b.y + b.h / 2)));
+    haptic.success();
+  }
+
+  function duplicateSelection() {
+    const src = selectedIdx.map((i) => items[i]).filter(Boolean);
+    insertItems(src, translate(18 / scale, 18 / scale));
   }
 
   const livePreview =
@@ -1949,6 +2666,9 @@ export default function DrawScreen() {
   const [zoomPresets, setZoomPresets] = useState<{ name: string; scale: number }[]>([]);
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [showPagesPanel, setShowPagesPanel] = useState(false);
+  // Long-press menu for one page in the pages panel, and the bookmark filter.
+  const [pageMenu, setPageMenu] = useState<number | null>(null);
+  const [onlyMarked, setOnlyMarked] = useState(false);
   // Fixed compact thumbnail size for the page sorter (three columns on typical panel widths).
   const pageThumbSize = 0.15;
 
@@ -1960,30 +2680,17 @@ export default function DrawScreen() {
       pushHistory(prev);
       const next: Item[] = [];
       for (const it of prev) {
-        if (it.kind === 'stroke') {
-          const home = Math.floor((it.points[0]?.y ?? 0) / pageStrideY);
-          if (home === pageIdx) continue; // drop
-          if (home > pageIdx) {
-            next.push({ ...it, points: it.points.map((p) => ({ ...p, y: p.y - pageStrideY })) });
-          } else {
-            next.push(it);
-          }
-        } else {
-          const home = Math.floor(it.start.y / pageStrideY);
-          if (home === pageIdx) continue;
-          if (home > pageIdx) {
-            next.push({
-              ...it,
-              start: { x: it.start.x, y: it.start.y - pageStrideY },
-              end: { x: it.end.x, y: it.end.y - pageStrideY },
-            });
-          } else {
-            next.push(it);
-          }
-        }
+        const home = Math.floor(itemHomeY(it) / pageStrideY);
+        if (home === pageIdx) continue; // drop
+        next.push(home > pageIdx ? shiftItem(it, -pageStrideY) : it);
       }
       persist(next, paper, paperSize, paperColorId);
       return next;
+    });
+    remapPageMeta(<T,>(arr: T[], blank: T): T[] => {
+      const n = [...arr];
+      if (pageIdx < n.length) n.splice(pageIdx, 1);
+      return n;
     });
     setPageCount((c) => Math.max(1, c - 1));
     setScrollY((s) => Math.max(0, Math.min(s, (pageCount - 2) * pageStrideY)));
@@ -1999,19 +2706,21 @@ export default function DrawScreen() {
     setItems((prev) => {
       pushHistory(prev);
       const next = prev.map((it) => {
-        if (it.kind === 'stroke') {
-          const home = Math.floor((it.points[0]?.y ?? 0) / pageStrideY);
-          if (home === a) return { ...it, points: it.points.map((p) => ({ ...p, y: p.y + delta })) };
-          if (home === b) return { ...it, points: it.points.map((p) => ({ ...p, y: p.y - delta })) };
-          return it;
-        }
-        const home = Math.floor(it.start.y / pageStrideY);
-        if (home === a) return { ...it, start: { ...it.start, y: it.start.y + delta }, end: { ...it.end, y: it.end.y + delta } };
-        if (home === b) return { ...it, start: { ...it.start, y: it.start.y - delta }, end: { ...it.end, y: it.end.y - delta } };
+        const home = Math.floor(itemHomeY(it) / pageStrideY);
+        if (home === a) return shiftItem(it, delta);
+        if (home === b) return shiftItem(it, -delta);
         return it;
       });
       persist(next, paper, paperSize, paperColorId);
       return next;
+    });
+    remapPageMeta(<T,>(arr: T[], blank: T): T[] => {
+      const n = [...arr];
+      while (n.length <= b) n.push(blank);
+      const t = n[a];
+      n[a] = n[b];
+      n[b] = t;
+      return n;
     });
   }, [pageCount, pageStrideY, paper, paperSize, paperColorId, persist]);
 
@@ -2020,24 +2729,62 @@ export default function DrawScreen() {
     const boundary = (pageIdx + 1) * pageStrideY;
     setItems((prev) => {
       pushHistory(prev);
-      const next = prev.map((it) => {
-        if (it.kind === 'stroke') {
-          return {
-            ...it,
-            points: it.points.map((p) => (p.y >= boundary ? { ...p, y: p.y + pageStrideY } : p)),
-          };
-        }
-        return {
-          ...it,
-          start: { x: it.start.x, y: it.start.y >= boundary ? it.start.y + pageStrideY : it.start.y },
-          end: { x: it.end.x, y: it.end.y >= boundary ? it.end.y + pageStrideY : it.end.y },
-        };
-      });
+      const next = prev.map((it) => shiftBelow(it, boundary, pageStrideY));
       persist(next, paper, paperSize, paperColorId);
       return next;
     });
+    remapPageMeta(<T,>(arr: T[], blank: T): T[] => {
+      const n = [...arr];
+      if (pageIdx + 1 <= n.length) n.splice(pageIdx + 1, 0, blank);
+      return n;
+    });
     setPageCount((c) => c + 1);
   }, [pageStrideY, paper, paperSize, paperColorId, persist]);
+
+  /** Copy a page's ink, text and pictures to a new page right after it. */
+  const duplicatePage = (pageIdx: number) => {
+    haptic.success();
+    const boundary = (pageIdx + 1) * pageStrideY;
+    setItems((prev) => {
+      pushHistory(prev);
+      const copies = prev
+        .filter((it) => Math.floor(itemHomeY(it) / pageStrideY) === pageIdx)
+        .map((it) => shiftItem(cloneItem(it) as Item, pageStrideY));
+      const next = [...prev.map((it) => shiftBelow(it, boundary, pageStrideY)), ...copies];
+      persist(next, paper, paperSize, paperColorId);
+      return next;
+    });
+    remapPageMeta(<T,>(arr: T[], blank: T): T[] => {
+      const n = [...arr];
+      while (n.length <= pageIdx) n.push(blank);
+      // The copy keeps the page's paper and PDF background, not its bookmark.
+      const copied = typeof blank === 'boolean' ? blank : n[pageIdx];
+      n.splice(pageIdx + 1, 0, copied);
+      return n;
+    });
+    setPageCount((c) => c + 1);
+  };
+
+  /** Set one page's paper (null = same as the note) or bookmark, and save. */
+  const setPageMeta = (pageIdx: number, change: { template?: Paper | null; bookmark?: boolean }) => {
+    if ('template' in change) {
+      setPageTemplates((a) => {
+        const n = [...a];
+        while (n.length <= pageIdx) n.push(null);
+        n[pageIdx] = change.template ?? null;
+        return n;
+      });
+    }
+    if ('bookmark' in change) {
+      setPageBookmarks((a) => {
+        const n = [...a];
+        while (n.length <= pageIdx) n.push(false);
+        n[pageIdx] = !!change.bookmark;
+        return n;
+      });
+    }
+    persist(items, paper, paperSize, paperColorId);
+  };
 
   const jumpToPage = useCallback((pageIdx: number) => {
     haptic.selection();
@@ -2114,6 +2861,25 @@ export default function DrawScreen() {
   }
 
   // Toolbar element — adapts orientation based on toolbarPos
+  /** Save the current pen (tool, colour, width) into favourite slot `k`. */
+  const saveFavoritePen = (k: number) => {
+    const next = [...(settings.favoritePens ?? [null, null, null, null, null])];
+    while (next.length < 5) next.push(null);
+    next[k] = { family, variant: variantByFamily[family], color, width: widths[tool] ?? 3 };
+    update({ favoritePens: next });
+    haptic.success();
+  };
+  const clearFavoritePen = (k: number) => {
+    const next = [...(settings.favoritePens ?? [null, null, null, null, null])];
+    next[k] = null;
+    update({ favoritePens: next });
+  };
+  const lumOf = (hex: string) => {
+    const h = (hex || '#000000').replace('#', '');
+    if (h.length < 6) return 0;
+    return (0.299 * parseInt(h.slice(0, 2), 16) + 0.587 * parseInt(h.slice(2, 4), 16) + 0.114 * parseInt(h.slice(4, 6), 16)) / 255;
+  };
+
   const renderToolbar = () => {
     const vertical = isVerticalToolbar;
     return (
@@ -2205,6 +2971,97 @@ export default function DrawScreen() {
             }}
             testID="tool-ruler"
           />
+          <ToolBtn
+            icon="format-text"
+            iconLib="mci"
+            label="Text"
+            active={textMode}
+            onPress={() => {
+              haptic.selection();
+              if (textEdit) commitTextEdit();
+              setSelectedIdx([]);
+              setTextMode((v) => !v);
+            }}
+            testID="tool-text"
+          />
+          <ToolBtn
+            icon="image-plus"
+            iconLib="mci"
+            label="Image"
+            active={false}
+            onPress={() => {
+              haptic.selection();
+              setTextMode(false);
+              void insertImage();
+            }}
+            testID="tool-image"
+          />
+          {NativeInkView && settings.nativeInk !== false && (
+            <ToolBtn
+              icon="magnify-plus-outline"
+              iconLib="mci"
+              label="Zoom pad"
+              active={!!zoomPad}
+              onPress={() => {
+                haptic.selection();
+                if (zoomPad) setZoomPad(null);
+                else openZoomPad();
+              }}
+              testID="tool-zoom-pad"
+            />
+          )}
+          <Divider vertical={vertical} />
+          {/* Favourite pens: tap an empty slot to save the current pen, tap a
+              saved one to switch to it, long-press to replace or clear it. */}
+          {(settings.favoritePens ?? [null, null, null, null, null]).slice(0, 5).map((fp, k) => {
+            const isPen = isPenTool(tool) && family !== 'select' && family !== 'laser';
+            const active =
+              !!fp && fp.family === family && fp.variant === variantByFamily[family] && fp.color === color && Math.abs(fp.width - (widths[tool] ?? 0)) < 0.01;
+            return (
+              <Pressable
+                key={`fav-${k}`}
+                testID={`fav-pen-${k}`}
+                accessibilityLabel={fp ? `Favourite pen ${k + 1}` : `Save current pen to slot ${k + 1}`}
+                onPress={() => {
+                  haptic.selection();
+                  if (fp) {
+                    applyFamilyVariant(fp.family as ToolFamily, fp.variant);
+                    setColor(fp.color);
+                    const t = familyVariantToTool(fp.family as ToolFamily, fp.variant);
+                    setWidths((prev) => ({ ...prev, [t]: fp.width }));
+                  } else if (isPen) {
+                    saveFavoritePen(k);
+                  }
+                }}
+                onLongPress={() => {
+                  haptic.medium();
+                  if (isPen && !active) saveFavoritePen(k);
+                  else clearFavoritePen(k);
+                }}
+                delayLongPress={400}
+                style={{
+                  width: 30,
+                  height: 30,
+                  margin: 3,
+                  borderRadius: 15,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: fp ? fp.color : 'transparent',
+                  borderWidth: active ? 2.5 : 1,
+                  borderColor: active ? colors.brand : fp ? 'rgba(0,0,0,0.2)' : colors.border,
+                  borderStyle: fp ? 'solid' : 'dashed',
+                }}
+              >
+                {fp ? (
+                  <Text style={{ fontSize: 10, fontWeight: '800', color: lumOf(fp.color) < 0.5 ? '#FFF' : '#000' }}>
+                    {(fp.variant || fp.family).charAt(0).toUpperCase()}
+                  </Text>
+                ) : (
+                  <Ionicons name="add" size={14} color={colors.muted} />
+                )}
+              </Pressable>
+            );
+          })}
           <Divider vertical={vertical} />
         </ScrollView>
       </View>
@@ -2299,28 +3156,41 @@ export default function DrawScreen() {
                     {Array.from({ length: pageCount }).map((_, i) => (
                       <Group key={`page-${i}`} transform={[{ translateY: i * pageStrideY }]}>
                         <SkiaPaper
-                          type={paper}
+                          type={pageTemplates[i] ?? paper}
                           color={paperColor}
                           lineColor={paperLine}
                           width={pageDims.w}
                           height={basePageH}
                           lineSpacing={lineSpacing}
                         />
+                        {/* Imported PDF page, fitted to the paper. */}
+                        {pageBackgrounds[i] != null && (() => {
+                          const img = imageFor(pageBackgrounds[i] as number);
+                          return img ? (
+                            <SkiaImage image={img} x={0} y={0} width={pageDims.w} height={basePageH} fit="contain" />
+                          ) : null;
+                        })()}
                       </Group>
                     ))}
                     {/* Clip strokes & live preview to the page bounds so nothing draws outside */}
                     <Group clip={{ x: 0, y: 0, width: pageDims.w, height: totalPageH }}>
                       {items.map((it, i) => {
-                        const el = it.kind === 'stroke' ? renderStroke(it, `s${i}`) : renderShape(it, `sh${i}`);
-                        const isSelected = selectedIdx.includes(i);
-                        if (!isSelected) return el;
-                        // Highlight overlay for selected items.
-                        return (
-                          <Group key={`sel-${i}`}>
-                            {el}
-                          </Group>
-                        );
+                        // While a selection is being dragged it's drawn below,
+                        // through the drag matrix, instead of here.
+                        if (selXform && selectedIdx.includes(i)) return null;
+                        // The text box being edited is shown by the editor instead.
+                        if (textEdit && textEdit.index === i) return null;
+                        return renderItem(it, `i${i}`);
                       })}
+                      {selXform && (
+                        <Group matrix={toSkia(selXform)}>
+                          {selectedIdx.map((i) => {
+                            const it = items[i];
+                            if (!it) return null;
+                            return renderItem(it, `d${i}`);
+                          })}
+                        </Group>
+                      )}
                       {/* Wet ink. Repaints on its own, without re-rendering
                           this screen or any committed stroke. */}
                       <LiveStrokeLayer ref={liveStrokeRef} />
@@ -2368,6 +3238,41 @@ export default function DrawScreen() {
                         />
                       )}
                     </Group>
+                    {/* Where the zoom pad is writing. */}
+                    {zoomPad && (
+                      <Path
+                        path={(() => { const pp = Skia.Path.Make(); pp.addRect({ x: zoomPad.x, y: zoomPad.y, width: zoomPad.w, height: padWindowH }); return pp; })()}
+                        color={colors.brand}
+                        style="stroke"
+                        strokeWidth={2 / scale}
+                      />
+                    )}
+                    {/* Selection box and handles (drawn outside the page clip so
+                        handles near the edge stay visible). */}
+                    {selBounds && selectedIdx.length > 0 && (() => {
+                      const h = selHandles(selBounds, ROTATE_OFFSET / scale);
+                      const box = Skia.Path.Make();
+                      box.addRect({ x: selBounds.x, y: selBounds.y, width: selBounds.w, height: selBounds.h });
+                      const stem = Skia.Path.Make();
+                      stem.moveTo(h.rotate.x, selBounds.y);
+                      stem.lineTo(h.rotate.x, h.rotate.y);
+                      const sw = 1.5 / scale;
+                      const r = HANDLE_R / scale / lengthScale(selXform ?? { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+                      return (
+                        <Group matrix={selXform ? toSkia(selXform) : undefined}>
+                          <Path path={box} color={colors.brand} style="stroke" strokeWidth={sw}>
+                            <DashPathEffect intervals={[6 / scale, 4 / scale]} />
+                          </Path>
+                          <Path path={stem} color={colors.brand} style="stroke" strokeWidth={sw} />
+                          {[...h.corners, h.rotate].map((c, k) => (
+                            <Group key={`h${k}`}>
+                              <Circle cx={c.x} cy={c.y} r={r} color="#FFFFFF" />
+                              <Circle cx={c.x} cy={c.y} r={r} color={colors.brand} style="stroke" strokeWidth={sw * 1.4} />
+                            </Group>
+                          ))}
+                        </Group>
+                      );
+                    })()}
                   </Group>
                 </Canvas>
                 {/* Native wet ink sits over the Skia canvas. Mounted for the
@@ -2378,12 +3283,28 @@ export default function DrawScreen() {
                   <NativeInkView
                     style={StyleSheet.absoluteFill}
                     inkEnabled={nativeInkActive}
+                    mode={nativeMode}
+                    accentColor={toAndroidColor(colors.brand)}
+                    onSelect={onNativeSelect}
                     tool={tool}
                     inkColor={toAndroidColor(color)}
                     baseWidth={isPenTool(tool) ? widths[tool] : 2}
                     viewTransform={[scale, tx, ty]}
                     pages={[pageDims.w, basePageH, pageStrideY, pageCount]}
                     frontBuffer={settings.frontBufferInk !== false}
+                    buttonAction={settings.sPenButton}
+                    shapeSnap={settings.shapeSnap !== false}
+                    ruler={[rulerEnabled ? 1 : 0, rulerState.x, rulerState.y, rulerState.angle, RULER_H / 2]}
+                    cursorWidth={
+                      isPenTool(tool)
+                        ? effectiveWidth(tool as InkTool, widths[tool])
+                        : tool === 'eraser'
+                        ? widths.eraser
+                        : 0
+                    }
+                    eraserWidth={widths.eraser}
+                    onErase={onNativeErase}
+                    onPenButton={onNativePenButton}
                     committedId={nativeCommittedId}
                     onStroke={onNativeStroke}
                   />
@@ -2401,45 +3322,171 @@ export default function DrawScreen() {
               </Text>
             </View>
           )}
-          {/* Selection action bar — shown when the user has one or more items selected. */}
-          {selectedIdx.length > 0 && (
+          {/* Zoom pad: write large here, it lands small in the outlined box on the page. */}
+          {zoomPad && NativeInkView && (
+            <View
+              style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: PAD_H + 44, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.divider }}
+            >
+              <View style={{ height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, gap: 4 }}>
+                <SelAction icon="chevron-left" label="Back" onPress={() => setZoomPad((zp) => (zp ? advancePad(zp, -1) : zp))} colors={colors} testID="pad-back" />
+                <SelAction icon="chevron-right" label="Next" onPress={() => setZoomPad((zp) => (zp ? advancePad(zp, 1) : zp))} colors={colors} testID="pad-next" />
+                <SelAction icon="keyboard-return" label="New line" onPress={() => setZoomPad((zp) => (zp ? advancePad(zp, 0) : zp))} colors={colors} testID="pad-newline" />
+                <View style={{ flex: 1 }} />
+                <SelAction icon="magnify-minus-outline" label="Less" onPress={() => setZoomPad((zp) => (zp ? { ...zp, w: Math.min(pageDims.w, zp.w * 1.25) } : zp))} colors={colors} testID="pad-zoom-out" />
+                <SelAction icon="magnify-plus-outline" label="More" onPress={() => setZoomPad((zp) => (zp ? { ...zp, w: Math.max(40, zp.w * 0.8) } : zp))} colors={colors} testID="pad-zoom-in" />
+                <SelAction icon="close" label="Close" onPress={() => setZoomPad(null)} colors={colors} testID="pad-close" />
+              </View>
+              <View style={{ height: PAD_H, overflow: 'hidden', backgroundColor: canvasColorHex }}>
+                <Canvas style={StyleSheet.absoluteFill}>
+                  <Group transform={[{ translateX: -zoomPad.x * padScale }, { translateY: -zoomPad.y * padScale }, { scale: padScale }]}>
+                    {Array.from({ length: pageCount }).map((_, i) => {
+                      const top = i * pageStrideY;
+                      if (top > zoomPad.y + padWindowH || top + basePageH < zoomPad.y) return null;
+                      return (
+                        <Group key={`pad-page-${i}`} transform={[{ translateY: top }]}>
+                          <SkiaPaper type={pageTemplates[i] ?? paper} color={paperColor} lineColor={paperLine} width={pageDims.w} height={basePageH} lineSpacing={lineSpacing} />
+                          {pageBackgrounds[i] != null && (() => {
+                            const img = imageFor(pageBackgrounds[i] as number);
+                            return img ? <SkiaImage image={img} x={0} y={0} width={pageDims.w} height={basePageH} fit="contain" /> : null;
+                          })()}
+                        </Group>
+                      );
+                    })}
+                    <Group clip={{ x: 0, y: 0, width: pageDims.w, height: totalPageH }}>
+                      {items.map((it, i) => {
+                        // Only what's near the window; the rest is off-screen anyway.
+                        const hy = itemHomeY(it);
+                        if (hy < zoomPad.y - pageStrideY || hy > zoomPad.y + padWindowH + pageStrideY) return null;
+                        return renderItem(it, `p${i}`);
+                      })}
+                    </Group>
+                  </Group>
+                </Canvas>
+                <NativeInkView
+                  style={StyleSheet.absoluteFill}
+                  inkEnabled={nativeInkActive}
+                  mode={nativeInkActive ? 'ink' : 'none'}
+                  accentColor={toAndroidColor(colors.brand)}
+                  onSelect={() => {}}
+                  tool={tool}
+                  inkColor={toAndroidColor(color)}
+                  baseWidth={isPenTool(tool) ? widths[tool] : 2}
+                  viewTransform={[padScale, -zoomPad.x * padScale, -zoomPad.y * padScale]}
+                  pages={[pageDims.w, basePageH, pageStrideY, pageCount]}
+                  frontBuffer={settings.frontBufferInk !== false}
+                  buttonAction={settings.sPenButton}
+                  shapeSnap={false}
+                  ruler={[0, 0, 0, 0, 0]}
+                  cursorWidth={isPenTool(tool) ? effectiveWidth(tool as InkTool, widths[tool]) : 0}
+                  eraserWidth={widths.eraser}
+                  onErase={onNativeErase}
+                  onPenButton={onNativePenButton}
+                  committedId={padCommittedId}
+                  onStroke={onPadStroke}
+                />
+              </View>
+            </View>
+          )}
+          {exporting && (
+            <View pointerEvents="none" style={{ position: 'absolute', top: 12, alignSelf: 'center', backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <ActivityIndicator color={colors.brand} size="small" />
+              <Text style={{ color: colors.onSurface, fontWeight: '600' }}>Exporting…</Text>
+            </View>
+          )}
+          {/* Text box editor, placed over the box on the page at the current zoom. */}
+          {textEdit && (
             <View
               style={{
                 position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: insets.bottom + 12,
-                alignItems: 'center',
+                left: textEdit.x * scale + tx,
+                top: textEdit.y * scale + ty,
+                width: Math.max(80, textEdit.w * scale),
               }}
+            >
+              <TextInput
+                testID="text-box-input"
+                autoFocus
+                multiline
+                value={textEdit.text}
+                onChangeText={(v) => setTextEdit((t) => (t ? { ...t, text: v } : t))}
+                placeholder="Type here"
+                placeholderTextColor={colors.muted}
+                style={{
+                  fontSize: textEdit.fontSize * scale,
+                  lineHeight: textEdit.fontSize * scale * 1.2,
+                  color: textEdit.color,
+                  padding: 0,
+                  minHeight: textEdit.fontSize * scale * 1.3,
+                  borderWidth: 1,
+                  borderStyle: 'dashed',
+                  borderColor: colors.brand,
+                  backgroundColor: 'rgba(255,255,255,0.35)',
+                  textAlignVertical: 'top',
+                }}
+              />
+              <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, alignSelf: 'flex-start', backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 }}>
+                <SelAction icon="format-font-size-decrease" label="Smaller" onPress={() => setTextEdit((t) => (t ? { ...t, fontSize: Math.max(6, t.fontSize / 1.15) } : t))} colors={colors} testID="text-smaller" />
+                <SelAction icon="format-font-size-increase" label="Larger" onPress={() => setTextEdit((t) => (t ? { ...t, fontSize: Math.min(120, t.fontSize * 1.15) } : t))} colors={colors} testID="text-larger" />
+                {textEdit.index !== null && (
+                  <SelAction icon="trash-can-outline" label="Delete" destructive onPress={() => commitTextEdit(true)} colors={colors} testID="text-delete" />
+                )}
+                <SelAction icon="check" label="Done" onPress={() => commitTextEdit()} colors={colors} testID="text-done" />
+              </View>
+            </View>
+          )}
+          {/* Selection action bar. Scrolls sideways on narrow phones. */}
+          {selectedIdx.length > 0 && !selXform && (
+            <View
+              style={{ position: 'absolute', left: 0, right: 0, bottom: insets.bottom + 12, alignItems: 'center' }}
               pointerEvents="box-none"
             >
-              <View style={{ flexDirection: 'row', gap: 8, backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 8, elevation: 6 }}>
-                <Text style={{ color: colors.onSurface, fontWeight: '600', alignSelf: 'center', marginRight: 4 }}>
-                  {selectedIdx.length} selected
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ maxWidth: '96%', flexGrow: 0 }}
+                contentContainerStyle={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                  backgroundColor: colors.surface,
+                  borderRadius: 999,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                }}
+              >
+                <Text style={{ color: colors.muted, fontWeight: '600', marginHorizontal: 4 }}>
+                  {selectedIdx.length}
                 </Text>
-                <Pressable
-                  testID="sel-delete"
-                  onPress={() => {
-                    haptic.warning();
-                    setItems((prev) => {
-                      pushHistory(prev);
-                      const next = prev.filter((_, idx) => !selectedIdx.includes(idx));
-                      persist(next, paper, paperSize, paperColorId);
-                      return next;
-                    });
-                    setSelectedIdx([]);
-                  }}
-                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.error }}
-                >
-                  <Text style={{ color: '#FFF', fontWeight: '600' }}>Delete</Text>
-                </Pressable>
-                <Pressable
-                  testID="sel-clear"
-                  onPress={() => setSelectedIdx([])}
-                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.surfaceSecondary }}
-                >
-                  <Text style={{ color: colors.onSurface, fontWeight: '600' }}>Clear</Text>
-                </Pressable>
+                <SelAction icon="content-copy" label="Copy" onPress={copySelection} colors={colors} testID="sel-copy" />
+                <SelAction icon="content-cut" label="Cut" onPress={() => { copySelection(); deleteSelection(); }} colors={colors} testID="sel-cut" />
+                <SelAction icon="content-duplicate" label="Duplicate" onPress={duplicateSelection} colors={colors} testID="sel-duplicate" />
+                <View style={{ width: 1, height: 22, backgroundColor: colors.divider, marginHorizontal: 2 }} />
+                {quickColors.slice(0, 6).map((c, k) => (
+                  <Pressable
+                    key={`sc${k}`}
+                    testID={`sel-color-${k}`}
+                    accessibilityLabel={`Recolour selection ${c}`}
+                    onPress={() => { haptic.selection(); editSelected((it) => (it.kind === 'image' ? it : ({ ...it, color: c } as Item))); }}
+                    style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: c, borderWidth: 1, borderColor: colors.border }}
+                  />
+                ))}
+                <View style={{ width: 1, height: 22, backgroundColor: colors.divider, marginHorizontal: 2 }} />
+                <SelAction icon="minus" label="Thinner" onPress={() => editSelected((it) => resizeLine(it, 0.8))} colors={colors} testID="sel-thinner" />
+                <SelAction icon="plus" label="Thicker" onPress={() => editSelected((it) => resizeLine(it, 1.25))} colors={colors} testID="sel-thicker" />
+                <View style={{ width: 1, height: 22, backgroundColor: colors.divider, marginHorizontal: 2 }} />
+                <SelAction icon="trash-can-outline" label="Delete" onPress={() => { haptic.warning(); deleteSelection(); }} colors={colors} destructive testID="sel-delete" />
+                <SelAction icon="check" label="Done" onPress={() => setSelectedIdx([])} colors={colors} testID="sel-clear" />
+              </ScrollView>
+            </View>
+          )}
+          {/* Paste, offered while the Select tool is active and something is copied. */}
+          {selectedIdx.length === 0 && family === 'select' && clipCount > 0 && (
+            <View
+              style={{ position: 'absolute', left: 0, right: 0, bottom: insets.bottom + 12, alignItems: 'center' }}
+              pointerEvents="box-none"
+            >
+              <View style={{ flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 }}>
+                <SelAction icon="content-paste" label={`Paste (${clipCount})`} onPress={pasteClipboard} colors={colors} testID="sel-paste" />
               </View>
             </View>
           )}
@@ -3092,6 +4139,64 @@ export default function DrawScreen() {
         </Pressable>
       </Modal>
 
+      {/* Long-press menu for one page: bookmark, duplicate, paper, delete. */}
+      <Modal visible={pageMenu !== null} transparent animationType="fade" onRequestClose={() => setPageMenu(null)}>
+        <Pressable style={styles.backdrop} onPress={() => setPageMenu(null)}>
+          {pageMenu !== null && (
+            <Pressable
+              onPress={(e) => e.stopPropagation()}
+              style={{ alignSelf: 'center', marginTop: '30%', width: 300, backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md }}
+            >
+              <Text style={{ color: colors.onSurface, fontWeight: '800', fontSize: typeScale.lg, marginBottom: spacing.sm }}>
+                Page {pageMenu + 1}
+              </Text>
+              <DrawMenuRow
+                icon={pageBookmarks[pageMenu] ? 'bookmark' : 'bookmark-outline'}
+                label={pageBookmarks[pageMenu] ? 'Remove bookmark' : 'Bookmark'}
+                onPress={() => { haptic.selection(); setPageMeta(pageMenu, { bookmark: !pageBookmarks[pageMenu] }); setPageMenu(null); }}
+                testID="page-menu-bookmark"
+              />
+              <DrawMenuRow
+                icon="copy-outline"
+                label="Duplicate page"
+                onPress={() => { duplicatePage(pageMenu); setPageMenu(null); }}
+                testID="page-menu-duplicate"
+              />
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, fontWeight: '700', marginTop: spacing.sm, marginBottom: 6 }}>
+                PAPER FOR THIS PAGE
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {([null, 'blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo', 'engineering', 'graph'] as (Paper | null)[]).map((t) => {
+                  const active = (pageTemplates[pageMenu] ?? null) === t;
+                  return (
+                    <Pressable
+                      key={t ?? 'same'}
+                      testID={`page-menu-paper-${t ?? 'same'}`}
+                      onPress={() => { haptic.selection(); setPageMeta(pageMenu, { template: t }); }}
+                      style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: active ? colors.brand : colors.surfaceSecondary }}
+                    >
+                      <Text style={{ color: active ? colors.onBrandPrimary : colors.onSurface, fontWeight: active ? '700' : '500', fontSize: typeScale.sm }}>
+                        {t === null ? 'Same as note' : t.charAt(0).toUpperCase() + t.slice(1)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {pageCount > 1 && (
+                <View style={{ marginTop: spacing.md }}>
+                  <DrawMenuRow
+                    icon="trash-outline"
+                    label="Delete page"
+                    onPress={() => { const i = pageMenu; setPageMenu(null); deletePage(i); }}
+                    testID="page-menu-delete"
+                  />
+                </View>
+              )}
+            </Pressable>
+          )}
+        </Pressable>
+      </Modal>
+
       {/* Pages preview panel (slides from right) — thumbnails, reorder, delete, add.
           No dark backdrop — canvas stays visible and interactive to the left of the panel. */}
       <Modal
@@ -3137,6 +4242,15 @@ export default function DrawScreen() {
                   <Text style={{ color: colors.onSurface, fontSize: typeScale.lg, fontWeight: '800' }}>
                     Pages ({pageCount})
                   </Text>
+                  <Pressable
+                    testID="pages-only-marked"
+                    accessibilityLabel={onlyMarked ? 'Show all pages' : 'Show bookmarked pages only'}
+                    onPress={() => { haptic.selection(); setOnlyMarked((v) => !v); }}
+                    hitSlop={8}
+                    style={{ marginLeft: 'auto', marginRight: spacing.md }}
+                  >
+                    <Ionicons name={onlyMarked ? 'bookmark' : 'bookmark-outline'} size={20} color={onlyMarked ? colors.brand : colors.onSurface} />
+                  </Pressable>
                   <Pressable onPress={() => setShowPagesPanel(false)} hitSlop={8}>
                     <Ionicons name="close" size={22} color={colors.onSurface} />
                   </Pressable>
@@ -3152,6 +4266,7 @@ export default function DrawScreen() {
                 >
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}>
                     {Array.from({ length: pageCount }).map((_, i) => {
+                      if (onlyMarked && !pageBookmarks[i]) return null;
                       const isCurrent = Math.floor(scrollY / Math.max(1, pageStrideY)) === i;
                       return (
                         <View
@@ -3168,6 +4283,8 @@ export default function DrawScreen() {
                         >
                           <Pressable
                             onPress={() => { jumpToPage(i); setShowPagesPanel(false); }}
+                            onLongPress={() => { haptic.medium(); setPageMenu(i); }}
+                            delayLongPress={350}
                             style={{
                               width: thumbW,
                               height: thumbH,
@@ -3185,22 +4302,21 @@ export default function DrawScreen() {
                                   return (
                                     <Group transform={[{ scale: scaleT }]}>
                                       <SkiaPaper
-                                        type={paper}
+                                        type={pageTemplates[i] ?? paper}
                                         color={paperColor}
                                         lineColor={paperLine}
                                         width={pageDims.w}
                                         height={basePageH}
                                         lineSpacing={lineSpacing}
                                       />
+                                      {pageBackgrounds[i] != null && (() => {
+                                        const img = imageFor(pageBackgrounds[i] as number);
+                                        return img ? <SkiaImage image={img} x={0} y={0} width={pageDims.w} height={basePageH} fit="contain" /> : null;
+                                      })()}
                                       <Group transform={[{ translateY: -i * pageStrideY }]}>
                                         {items
-                                          .filter((it) => {
-                                            const yy = it.kind === 'stroke' ? (it.points[0]?.y ?? 0) : it.start.y;
-                                            return Math.floor(yy / pageStrideY) === i;
-                                          })
-                                          .map((it, idx) =>
-                                            it.kind === 'stroke' ? renderStroke(it, `t${i}-s${idx}`) : renderShape(it, `t${i}-sh${idx}`)
-                                          )}
+                                          .filter((it) => Math.floor(itemHomeY(it) / pageStrideY) === i)
+                                          .map((it, idx) => renderItem(it, `t${i}-${idx}`))}
                                       </Group>
                                     </Group>
                                   );
@@ -3211,6 +4327,7 @@ export default function DrawScreen() {
                           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                             <Text style={{ color: colors.onSurface, fontWeight: '700', fontSize: 10 }}>
                               {i + 1}
+                              {pageBookmarks[i] ? ' ★' : ''}
                             </Text>
                             <View style={{ flexDirection: 'row' }}>
                               <Pressable
@@ -3619,6 +4736,31 @@ export default function DrawScreen() {
                 }}
                 testID="draw-menu-toolbar-toggle"
               />
+              <Text
+                style={{
+                  color: colors.muted,
+                  fontSize: typeScale.sm,
+                  fontWeight: '700',
+                  letterSpacing: 1.2,
+                  paddingHorizontal: spacing.lg,
+                  paddingTop: spacing.md,
+                  paddingBottom: spacing.xs,
+                }}
+              >
+                SHARE
+              </Text>
+              <DrawMenuRow
+                icon="document-outline"
+                label="Export as PDF"
+                onPress={() => { void exportNote('pdf'); }}
+                testID="draw-menu-export-pdf"
+              />
+              <DrawMenuRow
+                icon="image-outline"
+                label="Share this page as image"
+                onPress={() => { void exportNote('png'); }}
+                testID="draw-menu-export-png"
+              />
               {rulerEnabled && (
                 <>
                   <DrawMenuRow
@@ -3651,7 +4793,7 @@ export default function DrawScreen() {
                 onPress={() => { setShowPaperMenu(false); setShowSubSize(true); }}
                 testID="draw-menu-size"
               />
-              {(paper === 'ruled' || paper === 'narrow' || paper === 'grid' || paper === 'dotted' || paper === 'cornell' || paper === 'planner' || paper === 'todo') && (
+              {(paper === 'ruled' || paper === 'narrow' || paper === 'grid' || paper === 'dotted' || paper === 'cornell' || paper === 'planner' || paper === 'todo' || paper === 'engineering' || paper === 'graph') && (
                 <DrawMenuRow
                   icon="reorder-four-outline"
                   label="Line spacing"
@@ -3915,7 +5057,7 @@ export default function DrawScreen() {
               </Text>
             </View>
             <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, justifyContent: 'center' }}>
-              {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo'] as const).map((t) => {
+              {(['blank', 'ruled', 'narrow', 'grid', 'dotted', 'cornell', 'planner', 'todo', 'engineering', 'graph'] as const).map((t) => {
                 const active = paper === t;
                 return (
                   <Pressable
@@ -4691,6 +5833,8 @@ function PaperOption({
     cornell: 'Cornell',
     planner: 'Planner',
     todo: 'To-do',
+    engineering: 'Engineering',
+    graph: 'Graph',
   };
   return (
     <Pressable
@@ -4895,11 +6039,50 @@ function labelForTool(t: Tool): string {
     case 'marker': return 'Marker';
     case 'highlighter': return 'Highlighter';
     case 'pencil': return 'Pencil';
+    case 'fineliner': return 'Fineliner';
+    case 'calligraphy': return 'Calligraphy pen';
+    case 'brush': return 'Brush';
     case 'eraser': return 'Eraser';
     case 'line': return 'Line';
     case 'rect': return 'Rectangle';
     case 'ellipse': return 'Ellipse';
   }
+}
+
+/** One button in the selection bar: icon over a short label. */
+function SelAction({
+  icon,
+  label,
+  onPress,
+  colors,
+  destructive,
+  testID,
+}: {
+  icon: any;
+  label: string;
+  onPress: () => void;
+  colors: any;
+  destructive?: boolean;
+  testID?: string;
+}) {
+  const tint = destructive ? colors.error : colors.onSurface;
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      accessibilityLabel={label}
+      style={({ pressed }) => ({
+        alignItems: 'center',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 12,
+        backgroundColor: pressed ? colors.surfaceSecondary : 'transparent',
+      })}
+    >
+      <MaterialCommunityIcons name={icon} size={20} color={tint} />
+      <Text style={{ color: tint, fontSize: 10, marginTop: 1 }}>{label}</Text>
+    </Pressable>
+  );
 }
 
 const styles = StyleSheet.create({

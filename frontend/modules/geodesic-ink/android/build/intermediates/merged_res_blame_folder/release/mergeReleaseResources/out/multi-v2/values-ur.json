@@ -1,0 +1,34 @@
+{
+    "logs": [
+        {
+            "outputFile": "expo.modules.geodesicink.geodesic-ink-release-7:/values-ur/values-ur.xml",
+            "map": [
+                {
+                    "source": "/home/ugchimdi/.gradle/caches/8.14.3/transforms/7f10dd065ae4969af290e2da36ba66f1/transformed/core-1.8.0/res/values-ur/values-ur.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "100",
+                        "endOffsets": "151"
+                    }
+                }
+            ]
+        },
+        {
+            "outputFile": "expo.modules.geodesicink.geodesic-ink-mergeReleaseResources-5:/values-ur/values-ur.xml",
+            "map": [
+                {
+                    "source": "/home/ugchimdi/.gradle/caches/8.14.3/transforms/7f10dd065ae4969af290e2da36ba66f1/transformed/core-1.8.0/res/values-ur/values-ur.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "100",
+                        "endOffsets": "151"
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "expo.modules.geodesicink.geodesic-ink-release-7:/layout/notification_template_part_time.xml",
+        "source": "expo.modules.geodesicink.geodesic-ink-core-1.8.0-2:/layout/notification_template_part_time.xml"
+    },
+    {
+        "merged": "expo.modules.geodesicink.geodesic-ink-release-7:/layout/notification_template_part_chronometer.xml",
+        "source": "expo.modules.geodesicink.geodesic-ink-core-1.8.0-2:/layout/notification_template_part_chronometer.xml"
+    },
+    {
+        "merged": "expo.modules.geodesicink.geodesic-ink-release-7:/layout/custom_dialog.xml",
+        "source": "expo.modules.geodesicink.geodesic-ink-core-1.8.0-2:/layout/custom_dialog.xml"
+    }
+]

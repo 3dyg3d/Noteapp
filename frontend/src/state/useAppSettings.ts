@@ -62,6 +62,17 @@ export interface AppSettings {
    * buffer (Android 10+). Lowest latency; can tear briefly on some screens.
    */
   frontBufferInk: boolean;
+  /** Hold the pen still at the end of a stroke to snap it to a clean shape. */
+  shapeSnap: boolean;
+  /** Up to five saved pens (tool, colour, width) on the drawing toolbar. */
+  favoritePens: (FavoritePen | null)[];
+}
+
+export interface FavoritePen {
+  family: string;
+  variant: string;
+  color: string;
+  width: number;
 }
 
 const KEY = StorageKeys.appSettings;
@@ -82,6 +93,8 @@ const DEFAULTS: AppSettings = {
   homeSortDir: 'desc',
   nativeInk: true,
   frontBufferInk: true,
+  shapeSnap: true,
+  favoritePens: [null, null, null, null, null],
 };
 
 let cache: AppSettings | null = null;

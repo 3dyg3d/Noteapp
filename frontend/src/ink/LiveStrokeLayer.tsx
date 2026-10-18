@@ -1,7 +1,9 @@
 import React, { memo, useImperativeHandle, useState, forwardRef, useCallback } from 'react';
-import { Group, Path } from '@shopify/react-native-skia';
+import { Group, ImageShader, Path } from '@shopify/react-native-skia';
 
-import { InkPoint, InkTool, TOOL_OPACITY, buildLiveOutline, effectiveWidth } from './stroke';
+import { GRAIN_SCALE, GRAIN_SIZE, grainImage } from './grain';
+
+import { InkPoint, InkTool, TOOL_OPACITY, buildLiveOutline, effectiveWidth, isConstantWidth } from './stroke';
 
 /**
  * The wet stroke, isolated.
@@ -44,7 +46,7 @@ const LiveStrokeLayer = forwardRef<LiveStrokeHandle>((_props, ref) => {
 
   const width = effectiveWidth(stroke.tool, stroke.width);
   const path = buildLiveOutline(stroke.points, width, stroke.tool);
-  const isOutline = stroke.tool !== 'highlighter';
+  const isOutline = !isConstantWidth(stroke.tool);
 
   return (
     <Group opacity={TOOL_OPACITY[stroke.tool] ?? 1}>
@@ -56,7 +58,19 @@ const LiveStrokeLayer = forwardRef<LiveStrokeHandle>((_props, ref) => {
         strokeWidth={isOutline ? undefined : width}
         strokeCap="round"
         strokeJoin="round"
-      />
+      >
+        {/* Pencil grain, fixed to the paper (world units), so it doesn't
+            crawl as the stroke grows. Same tile as the native layer. */}
+        {stroke.tool === 'pencil' && (
+          <ImageShader
+            image={grainImage(stroke.color)}
+            tx="repeat"
+            ty="repeat"
+            fit="fill"
+            rect={{ x: 0, y: 0, width: GRAIN_SIZE * GRAIN_SCALE, height: GRAIN_SIZE * GRAIN_SCALE }}
+          />
+        )}
+      </Path>
     </Group>
   );
 });

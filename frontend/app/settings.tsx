@@ -529,6 +529,24 @@ export default function SettingsScreen() {
         )}
         {NativeInkView && settings.nativeInk && (
           <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md }]}>
+            <Ionicons name="shapes-outline" size={22} color={colors.onSurface} />
+            <View style={{ flex: 1, marginLeft: spacing.md }}>
+              <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Shape snapping</Text>
+              <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: 2 }}>
+                Draw a line, circle, triangle or box and keep the pen still for a moment: it snaps to a clean shape.
+              </Text>
+            </View>
+            <Switch
+              testID="toggle-shape-snap"
+              value={settings.shapeSnap}
+              onValueChange={(v) => update({ shapeSnap: v })}
+              thumbColor={settings.shapeSnap ? colors.brand : colors.muted}
+              trackColor={{ false: colors.border, true: colors.brandTertiary }}
+            />
+          </View>
+        )}
+        {NativeInkView && settings.nativeInk && (
+          <View style={[styles.row, { backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md }]}>
             <Ionicons name="speedometer-outline" size={22} color={colors.onSurface} />
             <View style={{ flex: 1, marginLeft: spacing.md }}>
               <Text style={{ color: colors.onSurface, fontSize: typeScale.lg }}>Direct-to-screen ink</Text>
@@ -554,7 +572,7 @@ export default function SettingsScreen() {
           testID="spen-action"
         />
         <Text style={{ color: colors.muted, fontSize: typeScale.sm, marginTop: -spacing.sm, marginBottom: spacing.md, paddingHorizontal: spacing.md }}>
-          Requires a stylus-equipped device. Works in a production build.
+          Eraser: hold the button while the pen touches the page. Undo / Redo: click the button while the pen hovers. Needs Low-latency ink. If a click opens the Samsung Air command menu instead, turn Air command off in the S Pen settings of the phone.
         </Text>
 
         <ActionPicker
