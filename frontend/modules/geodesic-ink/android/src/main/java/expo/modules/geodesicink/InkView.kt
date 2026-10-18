@@ -725,17 +725,17 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       // the same traversal), so there is no swap to see.
       dry.addProvisional(DryInkView.fromDraw(s.id, done))
       if (s.onFront) {
-        // The front buffer is a separate surface and updates at once, so it
-        // keeps the stroke until the frame with the stored copy is on screen.
+        // The front buffer is a separate surface: clearing it shows at once,
+        // while a normal app frame takes two or three refreshes to reach the
+        // screen after it's drawn. Clearing after two frames could beat the
+        // stored copy there, and the stroke blinked. Opaque ink drawn twice
+        // looks the same as once, so keep the front copy well past that.
+        // Nothing is redrawn on it now: the wet stroke there already has its
+        // final shape, and a clear-and-redraw on a buffer being shown could
+        // itself flash.
         pending.add(s)
         pendingDirty = false
-        front?.show(pendingDraws(), transform())
-        val ch = android.view.Choreographer.getInstance()
-        ch.postFrameCallback {
-          ch.postFrameCallback {
-            if (pending.remove(s)) refreshPending()
-          }
-        }
+        postDelayed({ if (pending.remove(s)) refreshPending() }, FRONT_HOLD_MS)
       }
       invalidate()
     } else {
@@ -965,6 +965,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     /** Shared by every ink view (main canvas and zoom pad), so ids never clash. */
     private val STROKE_IDS = java.util.concurrent.atomic.AtomicInteger(1)
     private const val TAG = "GeodesicInk"
+    /** How long the front copy of a finished stroke stays up (see finishStroke). */
+    private const val FRONT_HOLD_MS = 250L
     private const val MIN_SAMPLE_DISTANCE = 0.25f
     private const val PREDICT_WINDOW_MS = 24.0
     private const val PREDICT_AHEAD_MS = 8f
