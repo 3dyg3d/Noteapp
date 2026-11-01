@@ -125,6 +125,8 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     var shape: String? = null
     /** Drawn on the front buffer (opaque ink) rather than in onDraw. */
     var onFront = false
+    /** Front-buffer region the last incremental op drew in; world units. */
+    var tailClip: RectF? = null
   }
 
   // ------------------------------------------------------------ shape snap
@@ -804,7 +806,9 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     for (p in shownPrediction) take(p)
     // Generous margin: full half-width at the widest point, plus antialiasing.
     val pad = s.width * maxW * 1.5f + 1f
-    return RectF(minX - pad, minY - pad, maxX + pad, maxY + pad)
+    val r = RectF(minX - pad, minY - pad, maxX + pad, maxY + pad)
+    s.tailClip?.let { r.union(it) }
+    return r
   }
 
   /**
@@ -973,30 +977,82 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
       // up to j - 4 use only untapered outline points.
       stableEnd = min(stableEnd, j - 4)
     }
-    if (clear) {
-      // Round start, as the full outline has (the forward half lies inside).
-      val cap = android.graphics.Path()
-      cap.addCircle(d.xs[0], d.ys[0], d.hw[0], android.graphics.Path.Direction.CW)
-      draws.add(StrokeDraw(cap, s.color, alpha, false, s.width))
-    }
-    if (stableEnd >= 0 && stableEnd >= s.drawnTo) {
-      val a = max(0, s.drawnTo - 1)
-      draws.add(StrokeDraw(InkGeometry.piecePath(d, a, stableEnd), s.color, alpha, false, s.width))
-      s.drawnTo = stableEnd + 1
-    }
-    // Fold patches can be decided a little after a segment is drawn.
     val flags = InkGeometry.patchFlags(d)
-    val lastFinal = min(stableEnd, flags.size - 1)
-    for (k in 0..lastFinal) {
-      if (flags[k] && s.patched.add(k)) {
-        draws.add(StrokeDraw(InkGeometry.segmentQuadPath(d, k), s.color, alpha, false, s.width))
+    val tf = transform()
+    // Two screen pixels in world units: covers anti-aliasing spill.
+    val px2 = 2f / max(tf.scalePx, 1e-3f)
+    if (clear) {
+      // First incremental op: the buffer is wiped, so lay the stroke so far
+      // down once, as a single piece.
+      draws.add(startCap(d, s, alpha))
+      draws.add(StrokeDraw(InkGeometry.piecePath(d, 0, n - 2), s.color, alpha, false, s.width))
+      for (k in 0 until min(flags.size, n - 1)) {
+        if (flags[k]) draws.add(StrokeDraw(InkGeometry.segmentQuadPath(d, k), s.color, alpha, false, s.width))
       }
+      if (stableEnd + 1 > s.drawnTo) s.drawnTo = stableEnd + 1
+      s.tailClip = outlineBounds(d, max(0, s.drawnTo - 2), n - 1, px2)
+      return WetOp(true, draws, tf)
     }
-    // Provisional tail up to the nib.
-    for (k in max(0, s.drawnTo - 1)..n - 2) {
-      draws.add(StrokeDraw(InkGeometry.segmentQuadPath(d, k), s.color, alpha, false, s.width))
+    // Later ops. Pieces used to be ADDED on top of the buffer: anti-aliased
+    // edge pixels painted again and again build up to solid, which showed as
+    // fine pixelation along the stroke until the pen lifted. Instead, clear
+    // just the region where the stroke can still change (from the first
+    // non-final segment to the nib, plus whatever the last op drew there) and
+    // redraw the stroke inside it in one piece, so every pixel is painted once.
+    val region = outlineBounds(d, max(0, s.drawnTo - 2), n - 1, px2)
+    s.tailClip?.let { region.union(it) }
+    if (stableEnd + 1 > s.drawnTo) s.drawnTo = stableEnd + 1
+    s.tailClip = outlineBounds(d, max(0, s.drawnTo - 2), n - 1, px2)
+    // The clear wipes waiting strokes in the region too; redraw them (clipped).
+    draws.addAll(pendingDraws())
+    // Every run of segments touching the region (with margin, so the straight
+    // ends of each piece fall outside it and leave no seam) is drawn as one
+    // piece. Also covers earlier parts of a stroke that loops back over itself.
+    val q = RectF(region.left - px2, region.top - px2, region.right + px2, region.bottom + px2)
+    var k = 0
+    while (k <= n - 2) {
+      if (!segmentTouches(d, k, q)) { k++; continue }
+      val first = k
+      while (k + 1 <= n - 2 && segmentTouches(d, k + 1, q)) k++
+      if (first == 0) draws.add(startCap(d, s, alpha))
+      draws.add(StrokeDraw(InkGeometry.piecePath(d, first, k), s.color, alpha, false, s.width))
+      for (j in first..k) {
+        if (j < flags.size && flags[j]) draws.add(StrokeDraw(InkGeometry.segmentQuadPath(d, j), s.color, alpha, false, s.width))
+      }
+      k++
     }
-    return WetOp(clear, draws, transform())
+    return WetOp(false, draws, tf, region)
+  }
+
+  /** Round start, as the full outline has (the forward half lies inside). */
+  private fun startCap(d: InkGeometry.OutlineData, s: WetStroke, alpha: Int): StrokeDraw {
+    val cap = android.graphics.Path()
+    cap.addCircle(d.xs[0], d.ys[0], d.hw[0], android.graphics.Path.Direction.CW)
+    return StrokeDraw(cap, s.color, alpha, false, s.width)
+  }
+
+  /** World bounds of the outline around points from..to, padded. */
+  private fun outlineBounds(d: InkGeometry.OutlineData, from: Int, to: Int, pad: Float): RectF {
+    var l = Float.MAX_VALUE
+    var t = Float.MAX_VALUE
+    var r = -Float.MAX_VALUE
+    var b = -Float.MAX_VALUE
+    for (i in max(0, from)..min(to, d.n - 1)) {
+      val h = d.hw[i]
+      l = min(l, d.xs[i] - h); r = max(r, d.xs[i] + h)
+      t = min(t, d.ys[i] - h); b = max(b, d.ys[i] + h)
+    }
+    return RectF(l - pad, t - pad, r + pad, b + pad)
+  }
+
+  /** Whether segment k's outline (points k and k+1, both sides) can reach q. */
+  private fun segmentTouches(d: InkGeometry.OutlineData, k: Int, q: RectF): Boolean {
+    val h = max(d.hw[k], d.hw[k + 1])
+    val l = min(min(d.xs[k], d.xs[k + 1]) - h, min(d.lx[k], d.rx[k]))
+    val r = max(max(d.xs[k], d.xs[k + 1]) + h, max(d.lx[k], d.rx[k]))
+    val t = min(min(d.ys[k], d.ys[k + 1]) - h, min(d.ly[k], d.ry[k]))
+    val b = max(max(d.ys[k], d.ys[k + 1]) + h, max(d.ly[k], d.ry[k]))
+    return r >= q.left && l <= q.right && b >= q.top && t <= q.bottom
   }
 
   /**
