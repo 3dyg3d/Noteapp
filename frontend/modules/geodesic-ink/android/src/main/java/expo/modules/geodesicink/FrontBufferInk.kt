@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
+import android.graphics.RectF
 import android.view.SurfaceView
 import android.view.ViewGroup
 import androidx.annotation.RequiresApi
@@ -64,7 +65,14 @@ class InkTransform(
 class WetOp(
   @JvmField val clear: Boolean,
   @JvmField val draws: List<StrokeDraw>,
-  @JvmField val transform: InkTransform
+  @JvmField val transform: InkTransform,
+  /**
+   * Optional repair region in world units. When set, only this rectangle is
+   * cleared and `draws` are redrawn clipped to it; the rest of the buffer is
+   * left alone. Small, so the clear-and-redraw can't flash a large area.
+   * Never mutated after the op is created.
+   */
+  @JvmField val clip: RectF? = null
 )
 
 fun newFillPaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -119,6 +127,17 @@ class FrontBufferInk(context: Context, private val host: ViewGroup) {
         override fun onDrawFrontBufferedLayer(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: WetOp) {
           // Ops are drawn in order onto a buffer that keeps its contents, so
           // an op only needs to add the newest piece unless it clears.
+          val clip = param.clip
+          if (clip != null) {
+            // Partial repair: wipe and redraw just this region.
+            canvas.save()
+            param.transform.apply(canvas)
+            canvas.clipRect(clip)
+            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            for (d in param.draws) d.draw(canvas, fill, stroke)
+            canvas.restore()
+            return
+          }
           if (param.clear) canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
           if (param.draws.isEmpty()) return
           canvas.save()

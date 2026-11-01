@@ -46,3 +46,7 @@ app-example
 /android
 /ios
 .expo/
+
+# Gradle output of the local ink module (rebuilt every build)
+modules/geodesic-ink/android/build/
+modules/geodesic-ink/android/.gradle/

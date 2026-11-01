@@ -3,6 +3,7 @@ package expo.modules.geodesicink
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.RectF
 import android.os.Build
 import android.util.Log
 import android.view.MotionEvent
@@ -710,6 +711,9 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     }
     // No extra point at the exact lift position: the line ends where it was
     // already drawn, so lifting the pen can't make it jump forward.
+    // What the front buffer shows right now may include a prediction tip
+    // (full-redraw strokes) that the final stroke won't have.
+    val shownPrediction = if (s.incremental) emptyList() else prediction
     current = null
     activePointerId = -1
     prediction = emptyList()
@@ -730,9 +734,19 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
         // screen after it's drawn. Clearing after two frames could beat the
         // stored copy there, and the stroke blinked. Opaque ink drawn twice
         // looks the same as once, so keep the front copy well past that.
-        // Nothing is redrawn on it now: the wet stroke there already has its
-        // final shape, and a clear-and-redraw on a buffer being shown could
-        // itself flash.
+        // The front copy is NOT quite final yet: it can carry the prediction
+        // tip, provisional tail pieces, and lacks the sample added at lift.
+        // Left alone, those extras vanish when the copy is cleared 250 ms
+        // later, and the end of the stroke visibly shifts after the pen is up.
+        // So repair just the small region around the stroke's end now: clear
+        // it and redraw the exact final stroke there. The rest of the buffer
+        // is untouched, so a whole-layer flash can't happen.
+        val f = front
+        if (f != null && s.shape == null) {
+          repairBounds(s, shownPrediction)?.let { r ->
+            f.renderWet(WetOp(false, pendingDraws() + done, transform(), r))
+          }
+        }
         pending.add(s)
         pendingDirty = false
         postDelayed({ if (pending.remove(s)) refreshPending() }, FRONT_HOLD_MS)
@@ -766,6 +780,34 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
   }
 
   /**
+   * World-space rectangle around the part of [s] whose front-buffer pixels
+   * can differ from the finished stroke: the provisional tail (incremental
+   * mode) or the whole stroke (full-redraw mode), plus any prediction shown.
+   */
+  private fun repairBounds(s: WetStroke, shownPrediction: List<InkPt>): RectF? {
+    val pts = s.points
+    if (pts.isEmpty()) return null
+    val from = if (s.incremental) max(0, s.drawnTo - 2) else 0
+    var minX = Float.MAX_VALUE
+    var minY = Float.MAX_VALUE
+    var maxX = -Float.MAX_VALUE
+    var maxY = -Float.MAX_VALUE
+    var maxW = 1f
+    fun take(p: InkPt) {
+      if (p.x < minX) minX = p.x
+      if (p.y < minY) minY = p.y
+      if (p.x > maxX) maxX = p.x
+      if (p.y > maxY) maxY = p.y
+      if (p.w > maxW) maxW = p.w
+    }
+    for (k in from until pts.size) take(pts[k])
+    for (p in shownPrediction) take(p)
+    // Generous margin: full half-width at the widest point, plus antialiasing.
+    val pad = s.width * maxW * 1.5f + 1f
+    return RectF(minX - pad, minY - pad, maxX + pad, maxY + pad)
+  }
+
+  /**
    * Linear prediction ~one frame ahead from the recent velocity. Short and
    * capped: overshooting a sharp turn looks worse than a little lag.
    */
@@ -783,12 +825,47 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     val vy = (last.y - ref.y) / dt
     val speed = hypot(vx, vy)
     if (speed < 0.05f) return emptyList()
+    if (!predictionSafe(pts, j, n - 1)) return emptyList()
     val ahead = min(speed * PREDICT_AHEAD_MS, s.width * 2f)
     val ux = vx / speed
     val uy = vy / speed
     val mid = InkPt(last.x + ux * ahead * 0.5f, last.y + uy * ahead * 0.5f, last.t + PREDICT_AHEAD_MS / 2.0, last.p, last.w)
     val end = InkPt(last.x + ux * ahead, last.y + uy * ahead, last.t + PREDICT_AHEAD_MS.toDouble(), last.p, last.w)
     return listOf(mid, end)
+  }
+
+  /**
+   * A straight-line guess overshoots exactly where strokes end or turn, and on
+   * short strokes that overshoot is drawn. Like Samsung's linear predictor
+   * (its acceleration check), skip predicting when, across the window
+   * pts[from..to]:
+   *  - the pen is slowing down (about to stop, turn, or lift),
+   *  - its direction is changing sharply, or
+   *  - pressure is falling off (a lift is starting).
+   * Skipping costs a few milliseconds of lag at those moments only.
+   */
+  private fun predictionSafe(pts: List<InkPt>, from: Int, to: Int): Boolean {
+    val ref = pts[from]
+    val last = pts[to]
+    if (last.p > 0f && ref.p > 0f && last.p < ref.p * LIFT_PRESSURE_RATIO) return false
+    // Split the window in two by time and compare the halves' velocities.
+    val midT = ref.t + (last.t - ref.t) / 2.0
+    var m = to
+    while (m > from && pts[m].t > midT) m--
+    if (m <= from || m >= to) return true // too few samples to judge; keep the guess
+    val a = pts[m]
+    val dt0 = (a.t - ref.t).toFloat()
+    val dt1 = (last.t - a.t).toFloat()
+    if (dt0 <= 0f || dt1 <= 0f) return true
+    val v0x = (a.x - ref.x) / dt0
+    val v0y = (a.y - ref.y) / dt0
+    val v1x = (last.x - a.x) / dt1
+    val v1y = (last.y - a.y) / dt1
+    val s0 = hypot(v0x, v0y)
+    val s1 = hypot(v1x, v1y)
+    if (s1 < s0 * DECEL_RATIO) return false
+    if (s0 > 0f && s1 > 0f && (v0x * v1x + v0y * v1y) / (s0 * s1) < TURN_COS) return false
+    return true
   }
 
   // ---------------------------------------------------------------- drawing
@@ -970,6 +1047,12 @@ class InkView(context: Context, appContext: AppContext) : ExpoView(context, appC
     private const val MIN_SAMPLE_DISTANCE = 0.25f
     private const val PREDICT_WINDOW_MS = 24.0
     private const val PREDICT_AHEAD_MS = 8f
+    /** Second half of the window slower than this share of the first: slowing, don't predict. */
+    private const val DECEL_RATIO = 0.7f
+    /** cos(30 degrees): a sharper turn than this across the window, don't predict. */
+    private const val TURN_COS = 0.866f
+    /** Pressure fallen below this share of the window start: a lift is starting. */
+    private const val LIFT_PRESSURE_RATIO = 0.75f
     private const val HOLD_MS = 450L
     private const val HOLD_SLOP_DP = 3f
   }
