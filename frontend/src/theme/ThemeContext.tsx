@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { StorageKeys } from '@/src/state/storageKeys';
 import { useColorScheme } from 'react-native';
-import { lightColors, darkColors, AppColors, ACCENTS, AccentKey } from './tokens';
+import { lightColors, darkColors, AppColors, ACCENTS, AccentKey, DEFAULT_ACCENT } from './tokens';
 
 type Mode = 'system' | 'light' | 'dark';
 
@@ -24,7 +24,7 @@ const ACCENT_KEY = StorageKeys.themeAccent;
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const system = useColorScheme();
   const [mode, setModeState] = useState<Mode>('system');
-  const [accent, setAccentState] = useState<AccentKey>('sage');
+  const [accent, setAccentState] = useState<AccentKey>(DEFAULT_ACCENT);
 
   useEffect(() => {
     AsyncStorage.getItem(MODE_KEY).then((v) => {

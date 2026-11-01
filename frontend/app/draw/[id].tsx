@@ -250,10 +250,10 @@ const PAPER_COLORS: { id: string; light: string; dark: string }[] = [
 
 // ---------- Constants ----------
 // Full palette shown in tool popovers (long-press / re-tap tool).
-const PALETTE = ['#1A1A1C', '#FFFFFF', '#B85C5C', '#D4A352', '#7B8C73', '#6E7A8A', '#8B7AA8', '#638C61', '#E11D48', '#2563EB', '#059669', '#DB2777'];
+const PALETTE = ['#111114', '#FFFFFF', '#6B6B72', '#1F66E5', '#0A7468', '#2E8540', '#E0A800', '#B04A00', '#B42318', '#C2185B', '#6D4CD6', '#7A4E2D'];
 // Quick colors shown as inline chips on the main toolbar — the four everyday colors.
 // These are DEFAULTS; the user can long-press a slot to reassign it via the grid picker.
-const DEFAULT_QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */, '#059669' /* green */, '#D4A352' /* amber */];
+const DEFAULT_QUICK_COLORS = ['#E11D48' /* red */, '#2563EB' /* blue */, '#1A1A1C' /* black */, '#FFFFFF' /* white */, '#059669' /* green */, '#E0A800' /* yellow */];
 
 // A Photoshop-style grid palette (8 columns × 8 rows) used everywhere the user
 // picks a color. Rows are: grayscale, red, orange, yellow, green, blue, purple, brown.

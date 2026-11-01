@@ -21,7 +21,7 @@ interface Stroke {
   segments: Segment[];
 }
 
-const COLORS = ['#1A1A1C', '#B85C5C', '#7B8C73', '#D4A352', '#6E7A8A', '#8B7AA8'];
+const COLORS = ['#111114', '#1F66E5', '#2E8540', '#E0A800', '#B42318', '#6D4CD6'];
 
 interface DrawingPadProps {
   height?: number;

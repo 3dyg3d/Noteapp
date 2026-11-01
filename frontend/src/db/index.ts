@@ -64,7 +64,7 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
       CREATE TABLE IF NOT EXISTS folders (
         id         TEXT PRIMARY KEY NOT NULL,
         name       TEXT NOT NULL,
-        color      TEXT NOT NULL DEFAULT '#7B8C73',
+        color      TEXT NOT NULL DEFAULT '#1F66E5',
         parent_id  TEXT,
         created_at TEXT NOT NULL
       );
@@ -72,7 +72,7 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
       CREATE TABLE IF NOT EXISTS labels (
         id         TEXT PRIMARY KEY NOT NULL,
         name       TEXT NOT NULL,
-        color      TEXT NOT NULL DEFAULT '#7B8C73',
+        color      TEXT NOT NULL DEFAULT '#1F66E5',
         created_at TEXT NOT NULL
       );
 

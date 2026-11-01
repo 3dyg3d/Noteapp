@@ -516,7 +516,7 @@ export const FoldersApi = {
       const id = uuid();
       await db.runAsync(
         'INSERT INTO folders (id, name, color, parent_id, created_at) VALUES (?,?,?,?,?)',
-        [id, name.slice(0, 120), data.color ?? '#7B8C73', data.parent_id ?? null, nowIso()]
+        [id, name.slice(0, 120), data.color ?? '#1F66E5', data.parent_id ?? null, nowIso()]
       );
       const row = await db.getFirstAsync<Folder>('SELECT * FROM folders WHERE id = ?', [id]);
       return row!;
@@ -537,7 +537,7 @@ export const FoldersApi = {
       }
       if ('color' in data) {
         sets.push('color = ?');
-        args.push(data.color ?? '#7B8C73');
+        args.push(data.color ?? '#1F66E5');
       }
       if ('parent_id' in data) {
         if (data.parent_id === id) throw new ApiError(400, 'A folder cannot be inside itself');
@@ -597,7 +597,7 @@ export const LabelsApi = {
       await db.runAsync('INSERT INTO labels (id, name, color, created_at) VALUES (?,?,?,?)', [
         id,
         name.slice(0, 60),
-        data.color ?? '#7B8C73',
+        data.color ?? '#1F66E5',
         nowIso(),
       ]);
       const row = await db.getFirstAsync<Label>('SELECT * FROM labels WHERE id = ?', [id]);
@@ -619,7 +619,7 @@ export const LabelsApi = {
       }
       if ('color' in data) {
         sets.push('color = ?');
-        args.push(data.color ?? '#7B8C73');
+        args.push(data.color ?? '#1F66E5');
       }
 
       if (sets.length) {

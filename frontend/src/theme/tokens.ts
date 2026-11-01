@@ -1,53 +1,55 @@
-// Design tokens from design_guidelines.json (Samsung Notes / One UI 6 vibe)
+// Design tokens: One UI look (soft grey background, white cards, true-black dark).
 
 export const lightColors = {
-  surface: '#FFFFFF',
-  onSurface: '#1A1A1C',
-  // Was #F5F5F9: 4% off white, so sidebar, cards and page read as one sheet.
-  surfaceSecondary: '#EDEDF2',
-  onSurfaceSecondary: '#2C2C2E',
+  // One UI: a soft grey app background with white cards on it.
+  surface: '#F4F4F7',
+  onSurface: '#111114',
+  surfaceSecondary: '#FFFFFF',
+  onSurfaceSecondary: '#1C1C20',
   surfaceTertiary: '#EAEAEF',
-  onSurfaceTertiary: '#3A3A3C',
-  surfaceInverse: '#1A1A1C',
+  onSurfaceTertiary: '#2C2C31',
+  surfaceInverse: '#111114',
   onSurfaceInverse: '#FFFFFF',
-  brand: '#7B8C73',
-  brandPrimary: '#7B8C73',
+  // Brand tokens are overridden by the chosen accent (ACCENTS below).
+  brand: '#1F66E5',
+  brandPrimary: '#1F66E5',
   onBrandPrimary: '#FFFFFF',
-  brandSecondary: '#A3B19B',
-  brandTertiary: '#DCE3D8',
-  success: '#638C61',
-  warning: '#D4A352',
-  error: '#B85C5C',
-  info: '#6E7A8A',
-  border: '#D6D6DD',
-  borderStrong: '#C7C7CC',
-  divider: '#DEDEE4',
-  // 4.5:1 or better on both light surfaces (was #8E8E93, 3.3:1 on white).
-  muted: '#636368',
+  brandSecondary: '#6A9AF0',
+  brandTertiary: '#E7EEFC',
+  success: '#2E7D32',
+  warning: '#8F5B00',
+  error: '#B42318',
+  info: '#4B5563',
+  border: '#DCDCE2',
+  borderStrong: '#C7C7CE',
+  divider: '#E8E8EC',
+  // 6:1 on the grey background, 6.6:1 on white cards.
+  muted: '#5C5C63',
 };
 
 export const darkColors = {
   surface: '#000000',
-  onSurface: '#F2F2F7',
-  surfaceSecondary: '#1C1C1E',
-  onSurfaceSecondary: '#E5E5EA',
-  surfaceTertiary: '#2C2C2E',
-  onSurfaceTertiary: '#D1D1D6',
+  onSurface: '#F5F5F7',
+  surfaceSecondary: '#1C1C1F',
+  onSurfaceSecondary: '#E8E8ED',
+  surfaceTertiary: '#2C2C31',
+  onSurfaceTertiary: '#D6D6DC',
   surfaceInverse: '#FFFFFF',
   onSurfaceInverse: '#000000',
-  brand: '#8CA182',
-  brandPrimary: '#8CA182',
+  brand: '#6AA4FF',
+  brandPrimary: '#6AA4FF',
   onBrandPrimary: '#000000',
-  brandSecondary: '#687A5E',
-  brandTertiary: '#3A4533',
-  success: '#75A673',
-  warning: '#DEB36D',
-  error: '#CC6666',
-  info: '#8B98A8',
-  border: '#38383A',
-  borderStrong: '#48484A',
-  divider: '#38383A',
-  muted: '#8E8E93',
+  brandSecondary: '#3F6FC4',
+  brandTertiary: '#1D2A44',
+  success: '#6CC070',
+  warning: '#F2B53C',
+  error: '#FF6B5E',
+  info: '#A8B0BD',
+  border: '#38383D',
+  borderStrong: '#48484E',
+  divider: '#2C2C31',
+  // 6.8:1 on dark cards.
+  muted: '#A3A3AB',
 };
 
 export type AppColors = typeof lightColors;
@@ -81,29 +83,29 @@ export const typeScale = {
 };
 
 export const folderColors = [
-  '#7B8C73', // sage
-  '#A3B19B', // sage light
-  '#D4A352', // warm
-  '#B85C5C', // brick
-  '#6E7A8A', // slate
-  '#8B7AA8', // dusty purple (allowed as folder accent only)
-  '#638C61', // moss
-  '#C7C7CC', // gray
+  '#1F66E5', // blue
+  '#0A7468', // teal
+  '#2E8540', // green
+  '#B04A00', // orange
+  '#B42318', // red
+  '#C2185B', // pink
+  '#6D4CD6', // purple
+  '#6B6B72', // grey
 ];
 
-// Palette used for user-created labels/tags. Slightly more vivid than folder
-// swatches so labels read clearly as chips on note cards.
+// Palette used for user-created labels/tags. Slightly brighter than folder
+// colours so labels read clearly as chips on note cards.
 export const labelColors = [
-  '#E06C75', // coral red
-  '#E5A050', // amber
-  '#E6C34D', // saffron
-  '#7FB86E', // meadow
-  '#4EA6A6', // teal
-  '#5A8CD4', // sky blue
-  '#8B7AA8', // dusty purple
-  '#B36AA5', // magenta
-  '#6E7A8A', // slate
-  '#7B8C73', // sage
+  '#E5484D', // red
+  '#F08A24', // orange
+  '#E0A800', // yellow
+  '#46A758', // green
+  '#12A594', // teal
+  '#3A82F7', // blue
+  '#6E56CF', // purple
+  '#D6409F', // pink
+  '#6B6B72', // grey
+  '#8E4EC6', // violet
 ];
 
 // ---------- Accent palettes ----------
@@ -111,14 +113,16 @@ export const labelColors = [
 // without changing anything else. Add a new accent by supplying both a light and
 // dark variant of the five brand tokens.
 export type AccentKey =
-  | 'sage'
   | 'blue'
+  | 'ocean'
   | 'purple'
   | 'rose'
   | 'amber'
-  | 'ocean'
   | 'sunset'
   | 'graphite';
+
+/** Accent used when none is saved, or a saved one no longer exists (e.g. the old 'sage'). */
+export const DEFAULT_ACCENT: AccentKey = 'blue';
 
 type BrandTokens = {
   brand: string;
@@ -128,54 +132,50 @@ type BrandTokens = {
   onBrandPrimary: string;
 };
 
+// Every brand colour passes 4.5:1 both as a fill under its onBrandPrimary text
+// and as text on the app background, in light and dark.
 export const ACCENTS: Record<AccentKey, { label: string; swatch: string; light: BrandTokens; dark: BrandTokens }> = {
-  sage: {
-    label: 'Sage',
-    swatch: '#7B8C73',
-    light: { brand: '#7B8C73', brandPrimary: '#7B8C73', brandSecondary: '#A3B19B', brandTertiary: '#DCE3D8', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#8CA182', brandPrimary: '#8CA182', brandSecondary: '#687A5E', brandTertiary: '#3A4533', onBrandPrimary: '#0F1611' },
-  },
   blue: {
     label: 'Blue',
-    swatch: '#5B7BC2',
-    light: { brand: '#5B7BC2', brandPrimary: '#5B7BC2', brandSecondary: '#8CA5D9', brandTertiary: '#D7E1F3', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#7A97D9', brandPrimary: '#7A97D9', brandSecondary: '#4762A0', brandTertiary: '#28324F', onBrandPrimary: '#0B1224' },
+    swatch: '#1F66E5',
+    light: { brand: '#1F66E5', brandPrimary: '#1F66E5', brandSecondary: '#6A9AF0', brandTertiary: '#E7EEFC', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#6AA4FF', brandPrimary: '#6AA4FF', brandSecondary: '#3F6FC4', brandTertiary: '#1D2A44', onBrandPrimary: '#000000' },
+  },
+  ocean: {
+    label: 'Teal',
+    swatch: '#0A7468',
+    light: { brand: '#0A7468', brandPrimary: '#0A7468', brandSecondary: '#4FA79C', brandTertiary: '#DDF1EE', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#4FC3B0', brandPrimary: '#4FC3B0', brandSecondary: '#2B7D72', brandTertiary: '#12302C', onBrandPrimary: '#000000' },
   },
   purple: {
     label: 'Purple',
-    swatch: '#8B7AA8',
-    light: { brand: '#8B7AA8', brandPrimary: '#8B7AA8', brandSecondary: '#B4A6C9', brandTertiary: '#E4DCF0', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#A897C4', brandPrimary: '#A897C4', brandSecondary: '#6B5C87', brandTertiary: '#3A2F4E', onBrandPrimary: '#150F1F' },
+    swatch: '#6D4CD6',
+    light: { brand: '#6D4CD6', brandPrimary: '#6D4CD6', brandSecondary: '#9C86E8', brandTertiary: '#ECE7FB', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#B39DFF', brandPrimary: '#B39DFF', brandSecondary: '#6D58C4', brandTertiary: '#272042', onBrandPrimary: '#000000' },
   },
   rose: {
-    label: 'Rose',
-    swatch: '#C27BA0',
-    light: { brand: '#C27BA0', brandPrimary: '#C27BA0', brandSecondary: '#DCA5C1', brandTertiary: '#F4DDEA', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#D599B8', brandPrimary: '#D599B8', brandSecondary: '#8F5578', brandTertiary: '#4E2A3E', onBrandPrimary: '#1F0E17' },
+    label: 'Pink',
+    swatch: '#C2185B',
+    light: { brand: '#C2185B', brandPrimary: '#C2185B', brandSecondary: '#DB6F98', brandTertiary: '#FBE3EC', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#FF8AB3', brandPrimary: '#FF8AB3', brandSecondary: '#A8436B', brandTertiary: '#3A1726', onBrandPrimary: '#000000' },
   },
   amber: {
     label: 'Amber',
-    swatch: '#D4A352',
-    light: { brand: '#D4A352', brandPrimary: '#D4A352', brandSecondary: '#E4C48A', brandTertiary: '#F6E9CE', onBrandPrimary: '#1A1200' },
-    dark:  { brand: '#E4B970', brandPrimary: '#E4B970', brandSecondary: '#A67D39', brandTertiary: '#4F3A15', onBrandPrimary: '#1F1500' },
-  },
-  ocean: {
-    label: 'Ocean',
-    swatch: '#4A90A4',
-    light: { brand: '#4A90A4', brandPrimary: '#4A90A4', brandSecondary: '#7EB2C1', brandTertiary: '#D0E4EA', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#6FA9BB', brandPrimary: '#6FA9BB', brandSecondary: '#3B7383', brandTertiary: '#213F49', onBrandPrimary: '#07151B' },
+    swatch: '#8F5B00',
+    light: { brand: '#8F5B00', brandPrimary: '#8F5B00', brandSecondary: '#C08A2A', brandTertiary: '#FBEFD6', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#F2B53C', brandPrimary: '#F2B53C', brandSecondary: '#A67A1F', brandTertiary: '#3A2A0B', onBrandPrimary: '#000000' },
   },
   sunset: {
-    label: 'Sunset',
-    swatch: '#D97757',
-    light: { brand: '#D97757', brandPrimary: '#D97757', brandSecondary: '#EAA48D', brandTertiary: '#F8DDCE', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#E48F71', brandPrimary: '#E48F71', brandSecondary: '#A55639', brandTertiary: '#4E2717', onBrandPrimary: '#1B0902' },
+    label: 'Orange',
+    swatch: '#B04A00',
+    light: { brand: '#B04A00', brandPrimary: '#B04A00', brandSecondary: '#DB7B3A', brandTertiary: '#FCE8DA', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#FF9A4D', brandPrimary: '#FF9A4D', brandSecondary: '#B86A2E', brandTertiary: '#3D2210', onBrandPrimary: '#000000' },
   },
   graphite: {
     label: 'Graphite',
-    swatch: '#3A3A3C',
-    light: { brand: '#3A3A3C', brandPrimary: '#3A3A3C', brandSecondary: '#6E6E70', brandTertiary: '#E5E5EA', onBrandPrimary: '#FFFFFF' },
-    dark:  { brand: '#D1D1D6', brandPrimary: '#D1D1D6', brandSecondary: '#8E8E93', brandTertiary: '#38383A', onBrandPrimary: '#111113' },
+    swatch: '#3A3A40',
+    light: { brand: '#3A3A40', brandPrimary: '#3A3A40', brandSecondary: '#6E6E75', brandTertiary: '#E8E8EC', onBrandPrimary: '#FFFFFF' },
+    dark:  { brand: '#D1D1D6', brandPrimary: '#D1D1D6', brandSecondary: '#8E8E93', brandTertiary: '#2C2C31', onBrandPrimary: '#000000' },
   },
 };
 

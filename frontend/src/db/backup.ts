@@ -170,7 +170,7 @@ export async function restoreBackup(backup: BackupFile): Promise<RestoreSummary>
       if (exists) continue;
       await db.runAsync(
         `INSERT INTO folders (${FOLDER_COLUMNS.join(', ')}) VALUES (${FOLDER_COLUMNS.map(() => '?').join(', ')})`,
-        pick({ ...f, color: f.color ?? '#7B8C73', created_at: f.created_at ?? new Date().toISOString() }, FOLDER_COLUMNS) as any[]
+        pick({ ...f, color: f.color ?? '#1F66E5', created_at: f.created_at ?? new Date().toISOString() }, FOLDER_COLUMNS) as any[]
       );
       summary.foldersAdded++;
     }
