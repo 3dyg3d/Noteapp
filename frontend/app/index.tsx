@@ -43,7 +43,20 @@ import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
 import { useToast } from '@/src/components/Toast';
 
-type ViewMode = 'grid' | 'list';
+type ViewMode = 'grid' | 'list' | 'simple' | 'large';
+type TypeFilter = 'all' | 'handwriting' | 'text';
+const VIEW_OPTIONS: { id: ViewMode; label: string; short: string }[] = [
+  { id: 'grid', label: 'Grid', short: 'Grid' },
+  { id: 'list', label: 'List', short: 'List' },
+  { id: 'simple', label: 'Simple list', short: 'Simple' },
+  { id: 'large', label: 'Large previews', short: 'Large' },
+];
+const VIEW_ICONS: Record<ViewMode, React.ComponentProps<typeof Ionicons>['name']> = {
+  grid: 'grid-outline',
+  list: 'list-outline',
+  simple: 'reorder-four-outline',
+  large: 'albums-outline',
+};
 // A category may be one of the fixed views, a folder id, or a label id
 // prefixed with `label:` so we can distinguish them from folder ids.
 type CategoryKey = 'all' | 'favorites' | 'recent' | 'trash' | 'folders' | string;
@@ -232,7 +245,11 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<CategoryKey>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  // Remembered between launches (it used to reset to grid every time).
+  const viewMode: ViewMode = (settings.homeViewMode as ViewMode) ?? 'grid';
+  const setViewMode = (v: ViewMode) => updateSettings({ homeViewMode: v });
+  // Narrows the note list to one kind of note; folders are unaffected.
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [showSortMenu, setShowSortMenu] = useState(false);
   // Where the sort button is on screen, so the menu can open beside it. On a
   // tablet a bottom sheet is a long way from a control in the top bar.
@@ -357,13 +374,24 @@ export default function HomeScreen() {
 
   // Favorites float to the top of All notes. (Pinned used to do this, as a
   // second star alongside Favorites; the two are one now.)
+  const typedNotes = useMemo(
+    () =>
+      typeFilter === 'all'
+        ? sortedNotes
+        : sortedNotes.filter((n) => (typeFilter === 'handwriting') === (n.note_type === 'handwriting')),
+    [sortedNotes, typeFilter]
+  );
+  // A type filter belongs to the list it was set on; switching category clears it
+  // (folder views hide the chips, so a leftover filter would be invisible).
+  useEffect(() => { setTypeFilter('all'); }, [category]);
+
   const favoriteNotes = useMemo(
-    () => (category === 'all' ? sortedNotes.filter((n) => n.favorite) : []),
-    [sortedNotes, category]
+    () => (category === 'all' ? typedNotes.filter((n) => n.favorite) : []),
+    [typedNotes, category]
   );
   const otherNotes = useMemo(
-    () => (category === 'all' ? sortedNotes.filter((n) => !n.favorite) : sortedNotes),
-    [sortedNotes, category]
+    () => (category === 'all' ? typedNotes.filter((n) => !n.favorite) : typedNotes),
+    [typedNotes, category]
   );
 
   const folderById = (id: string | null | undefined) =>
@@ -1022,9 +1050,12 @@ export default function HomeScreen() {
   // --- Card renderer ---
   const renderNoteCard = (note: NoteSummary) => {
     const folder = folderById(note.folder_id);
-    const isGrid = viewMode === 'grid';
-    const cardWidth = isGrid ? cardPxWidth : undefined;
-    const cardHeight = isGrid ? cardPxHeight : undefined;
+    // Grid and Large previews share the tile layout; Large is one full-width
+    // tile per row with a taller page preview.
+    const isGrid = viewMode === 'grid' || viewMode === 'large';
+    const fullW = Math.max(0, contentW - spacing.lg * 2);
+    const cardWidth = viewMode === 'large' ? fullW : isGrid ? cardPxWidth : undefined;
+    const cardHeight = viewMode === 'large' ? Math.round(fullW * 0.62) : isGrid ? cardPxHeight : undefined;
     const isSelected = selectedIds.has(note.id);
     const noteLabels = (note.label_ids || [])
       .map((lid) => labels.find((ll) => ll.id === lid))
@@ -1107,8 +1138,8 @@ export default function HomeScreen() {
                 {note.preview ? (
                   <HandwritingThumbnail
                     preview={note.preview}
-                    width={cardPxWidth}
-                    height={cardPxHeight ?? Math.round(cardPxWidth * 0.9)}
+                    width={cardWidth ?? cardPxWidth}
+                    height={cardHeight ?? Math.round(cardPxWidth * 0.9)}
                     radius={radius.lg}
                   />
                 ) : (
@@ -1176,6 +1207,60 @@ export default function HomeScreen() {
             )}
           </View>
         </View>
+      );
+    }
+
+    // ---- Simple list: titles only, with folder colour and date. The
+    // densest view, for scanning a long list by name.
+    if (viewMode === 'simple') {
+      return (
+        <Pressable
+          key={note.id}
+          testID={`note-card-${note.id}`}
+          onPress={() => {
+            if (selectionMode) { toggleSelect(note); return; }
+            if (category === 'trash') { enterSelectionWith(note); return; }
+            if (note.locked) router.push(`/lock?noteId=${note.id}`);
+            else if (note.note_type === 'handwriting') router.push(`/draw/${note.id}`);
+            else router.push(`/note/${note.id}`);
+          }}
+          onLongPress={() => enterSelectionWith(note)}
+          delayLongPress={300}
+          style={({ pressed }) => [
+            styles.simpleRow,
+            {
+              backgroundColor: isSelected ? colors.brandTertiary : pressed ? colors.surfaceTertiary : colors.surfaceSecondary,
+              borderBottomColor: colors.divider,
+            },
+          ]}
+        >
+          {selectionMode ? (
+            <View
+              style={[
+                styles.listCheck,
+                { marginRight: spacing.md, backgroundColor: isSelected ? colors.brand : 'transparent', borderColor: isSelected ? colors.brand : colors.border },
+              ]}
+            >
+              {isSelected && <Ionicons name="checkmark" size={13} color={colors.onBrandPrimary} />}
+            </View>
+          ) : (
+            <View style={{ width: 8, height: 8, borderRadius: 4, marginRight: spacing.md, backgroundColor: folder?.color ?? 'transparent' }} />
+          )}
+          {note.favorite && <Ionicons name="star" size={13} color={colors.brand} style={{ marginRight: 6 }} />}
+          {note.locked && <Ionicons name="lock-closed" size={13} color={colors.muted} style={{ marginRight: 6 }} />}
+          <Ionicons
+            name={note.note_type === 'handwriting' ? 'create-outline' : 'document-text-outline'}
+            size={15}
+            color={colors.muted}
+            style={{ marginRight: spacing.sm }}
+          />
+          <Text numberOfLines={1} style={{ flex: 1, fontSize: typeScale.lg, color: colors.onSurface }}>
+            {displayTitle(note)}
+          </Text>
+          <Text style={{ fontSize: typeScale.sm, color: colors.muted, marginLeft: spacing.sm }}>
+            {relativeDate(note.updated_at)}
+          </Text>
+        </Pressable>
       );
     }
 
@@ -1380,7 +1465,7 @@ export default function HomeScreen() {
       {category === 'folders' && folderViewNotes.length > 0 && (
         <>
           <SectionLabel label="Notes" color={colors.muted} />
-          <View style={styles.grid}>{folderViewNotes.map(renderNoteCard)}</View>
+          <View style={viewMode === 'simple' ? [styles.simpleList, { backgroundColor: colors.surfaceSecondary }] : styles.grid}>{folderViewNotes.map(renderNoteCard)}</View>
         </>
       )}
       {insideFolder && otherNotes.length > 0 && (
@@ -1388,7 +1473,7 @@ export default function HomeScreen() {
           {folderViewChildren.length > 0 && (
             <SectionLabel label="Notes" color={colors.muted} />
           )}
-          <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
+          <View style={viewMode === 'simple' ? [styles.simpleList, { backgroundColor: colors.surfaceSecondary }] : styles.grid}>{otherNotes.map(renderNoteCard)}</View>
         </>
       )}
 
@@ -1701,30 +1786,42 @@ export default function HomeScreen() {
                   ? goBack
                   : () => { haptic.selection(); setDrawerOpen((o) => !o); }
               }
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+              style={styles.iconBtn}
             >
               <Ionicons name={insideFolder ? 'arrow-back' : 'menu'} size={22} color={colors.onSurface} />
             </Pressable>
-            <Text style={[styles.bigTitle, { color: colors.onSurface }]} testID="home-title">
-              {categoryLabel}
-            </Text>
+            <View style={{ flex: 1, marginLeft: spacing.xs }}>
+              <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.onSurface }]} testID="home-title">
+                {categoryLabel}
+              </Text>
+              {!loading && !isFileManagerView && (
+                <Text style={{ fontSize: typeScale.base, color: colors.muted, marginTop: 1 }} testID="home-count">
+                  {typedNotes.length} {typedNotes.length === 1 ? 'note' : 'notes'}
+                </Text>
+              )}
+            </View>
             <Pressable
               testID="sort-btn"
               onPress={async (e) => {
                 setSortAnchor(await measureAnchor(e));
                 setShowSortMenu(true);
               }}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+              style={styles.iconBtn}
             >
               <Ionicons name="swap-vertical-outline" size={20} color={colors.onSurface} />
             </Pressable>
             <Pressable
               testID="toggle-view-btn"
-              onPress={() => { haptic.selection(); setViewMode((v) => (v === 'grid' ? 'list' : 'grid')); }}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+              accessibilityLabel="View as"
+              onPress={async (e) => {
+                haptic.selection();
+                setSortAnchor(await measureAnchor(e));
+                setShowSortMenu(true);
+              }}
+              style={styles.iconBtn}
             >
               <Ionicons
-                name={viewMode === 'grid' ? 'list-outline' : 'grid-outline'}
+                name={VIEW_ICONS[viewMode]}
                 size={20}
                 color={colors.onSurface}
               />
@@ -1747,7 +1844,7 @@ export default function HomeScreen() {
               }}
               delayLongPress={400}
               accessibilityLabel={`Tile size ${tileSizeLabel}. Tap to change, long-press to reset.`}
-              style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary, width: undefined, paddingHorizontal: 10, flexDirection: 'row', gap: 4 }]}
+              style={[styles.iconBtn, { width: undefined, paddingHorizontal: 10, flexDirection: 'row', gap: 4 }]}
             >
               {/* It was an "expand" icon, which looked like fullscreen. It now
                   says what it does: the current tile size. */}
@@ -1763,17 +1860,17 @@ export default function HomeScreen() {
               <Pressable
                 testID="selection-close-btn"
                 onPress={clearSelection}
-                style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+                style={styles.iconBtn}
               >
                 <Ionicons name="close" size={22} color={colors.onSurface} />
               </Pressable>
-              <Text style={[styles.bigTitle, { color: colors.onSurface }]} testID="selection-count">
+              <Text style={[styles.bigTitle, { color: colors.onSurface, flex: 1, marginLeft: spacing.xs }]} testID="selection-count">
                 {selectedIds.size} selected
               </Text>
               <Pressable
                 testID="select-all-btn"
                 onPress={() => (allSelected ? clearSelection() : selectAllVisible())}
-                style={[styles.iconBtn, { backgroundColor: colors.surfaceSecondary }]}
+                style={styles.iconBtn}
               >
                 <Ionicons
                   name={allSelected ? 'checkbox' : 'checkbox-outline'}
@@ -1802,6 +1899,31 @@ export default function HomeScreen() {
                 <Ionicons name="close-circle" size={18} color={colors.muted} />
               </Pressable>
             )}
+          </View>
+        )}
+
+        {!selectionMode && category !== 'trash' && !isFileManagerView && (
+          <View style={styles.chipRow} testID="type-chips">
+            {([
+              { id: 'all', label: 'All' },
+              { id: 'handwriting', label: 'Handwriting' },
+              { id: 'text', label: 'Text' },
+            ] as { id: TypeFilter; label: string }[]).map((c) => {
+              const on = typeFilter === c.id;
+              return (
+                <Pressable
+                  key={c.id}
+                  testID={`type-chip-${c.id}`}
+                  accessibilityState={{ selected: on }}
+                  onPress={() => { haptic.selection(); setTypeFilter(c.id); }}
+                  style={[styles.chip, { backgroundColor: on ? colors.brand : colors.surfaceSecondary }]}
+                >
+                  <Text style={{ color: on ? colors.onBrandPrimary : colors.onSurface, fontWeight: on ? '700' : '500', fontSize: typeScale.base }}>
+                    {c.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
         )}
 
@@ -1940,13 +2062,13 @@ export default function HomeScreen() {
                 {!isFileManagerView && !!favoriteNotes.length && (
                   <>
                     <SectionLabel label="Favorites" color={colors.muted} />
-                    <View style={styles.grid}>{favoriteNotes.map(renderNoteCard)}</View>
+                    <View style={viewMode === 'simple' ? [styles.simpleList, { backgroundColor: colors.surfaceSecondary }] : styles.grid}>{favoriteNotes.map(renderNoteCard)}</View>
                   </>
                 )}
                 {!isFileManagerView && !!otherNotes.length && (
                   <>
                     {!!favoriteNotes.length && <SectionLabel label="Others" color={colors.muted} />}
-                    <View style={styles.grid}>{otherNotes.map(renderNoteCard)}</View>
+                    <View style={viewMode === 'simple' ? [styles.simpleList, { backgroundColor: colors.surfaceSecondary }] : styles.grid}>{otherNotes.map(renderNoteCard)}</View>
                   </>
                 )}
               </View>
@@ -2923,6 +3045,34 @@ export default function HomeScreen() {
               },
             ]}
           >
+            <Text style={[styles.sheetTitle, { color: colors.onSurface, fontSize: typeScale.lg }]}>View as</Text>
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+              {VIEW_OPTIONS.map((o) => {
+                const active = viewMode === o.id;
+                return (
+                  <Pressable
+                    key={o.id}
+                    testID={`view-${o.id}`}
+                    accessibilityLabel={o.label}
+                    accessibilityState={{ selected: active }}
+                    onPress={() => { haptic.selection(); setViewMode(o.id); }}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      paddingVertical: spacing.sm,
+                      borderRadius: radius.md,
+                      alignItems: 'center',
+                      gap: 4,
+                      backgroundColor: active ? colors.brandTertiary : pressed ? colors.surfaceTertiary : colors.surfaceSecondary,
+                    })}
+                  >
+                    <Ionicons name={VIEW_ICONS[o.id]} size={20} color={active ? colors.brand : colors.onSurface} />
+                    <Text style={{ fontSize: typeScale.sm, color: active ? colors.brand : colors.onSurface, fontWeight: active ? '700' : '500' }}>
+                      {o.short}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <Text style={[styles.sheetTitle, { color: colors.onSurface, fontSize: typeScale.lg }]}>Sort by</Text>
             {([
               { id: 'updated', label: 'Date modified' },
@@ -3577,7 +3727,19 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     gap: spacing.sm,
   },
-  bigTitle: { fontSize: typeScale.xxl, fontWeight: '700', flex: 1 },
+  // One UI-sized screen title.
+  bigTitle: { fontSize: 28, fontWeight: '700', letterSpacing: -0.4 },
+  chipRow: { flexDirection: 'row', gap: spacing.sm, paddingTop: spacing.sm, paddingBottom: spacing.xs },
+  chip: { height: 34, paddingHorizontal: spacing.lg, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  simpleList: { borderRadius: radius.lg, overflow: 'hidden' },
+  simpleRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 52,
+    paddingHorizontal: spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   iconBtn: {
     width: 40,
     height: 40,

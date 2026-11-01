@@ -23,7 +23,7 @@ import * as SQLite from 'expo-sqlite';
 const DB_NAME = 'geodesic.db';
 
 /** Bump when the schema changes and add a matching block in `migrate`. */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -111,6 +111,18 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     await db.execAsync(`
       UPDATE notes SET favorite = 1 WHERE pinned = 1;
       UPDATE notes SET pinned = 0 WHERE pinned = 1;
+    `);
+  }
+
+  if (current < 4) {
+    // The sage-green branding is gone. Folders and labels that still carry one
+    // of the old sage-family default colours move to the new palette once;
+    // colours the user picked from the rest of the palette are left alone.
+    await db.execAsync(`
+      UPDATE folders SET color = '#1F66E5' WHERE upper(color) = '#7B8C73';
+      UPDATE folders SET color = '#0A7468' WHERE upper(color) = '#A3B19B';
+      UPDATE folders SET color = '#2E8540' WHERE upper(color) = '#638C61';
+      UPDATE labels  SET color = '#3A82F7' WHERE upper(color) = '#7B8C73';
     `);
   }
 

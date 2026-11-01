@@ -50,6 +50,8 @@ export interface AppSettings {
   /** Last page setup used; null until the user has chosen one. */
   lastPageSetup: PageSetup | null;
   /** Home list order, remembered across launches. */
+  /** Home note layout: page grid, list with thumbnails, titles only, or one big preview per row. */
+  homeViewMode: 'grid' | 'list' | 'simple' | 'large';
   homeSortBy: 'updated' | 'created' | 'title';
   homeSortDir: 'desc' | 'asc';
   /**
@@ -89,6 +91,7 @@ const DEFAULTS: AppSettings = {
   autoAddPage: true,
   homeTileScale: 1.0,
   lastPageSetup: null,
+  homeViewMode: 'grid',
   homeSortBy: 'updated',
   homeSortDir: 'desc',
   nativeInk: true,
