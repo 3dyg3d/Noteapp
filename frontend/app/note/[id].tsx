@@ -42,6 +42,7 @@ import OpenTabsStrip from '@/src/components/OpenTabsStrip';
 import DrawingPad from '@/src/components/DrawingPad';
 import SaveIndicator from '@/src/components/SaveIndicator';
 import { labelColors } from '@/src/theme/tokens';
+import { discardIfBlank, isBlankNote } from '@/src/notes/discardBlank';
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -182,6 +183,21 @@ export default function NoteEditor() {
       cancelled = true;
     };
   }, [id, unlocked, router, openTab]);
+
+  // Like Samsung Notes, a text note left empty is not kept. On leaving (back or
+  // a tab switch) the queue's last write lands first, then the note is re-read
+  // and discarded only if both this screen and the database copy are blank.
+  const noteRef = useRef<Note | null>(null);
+  noteRef.current = note;
+  useEffect(() => {
+    const leavingId = id as string;
+    return () => {
+      const n = noteRef.current;
+      if (!n || n.id !== leavingId || !isBlankNote(n)) return;
+      void queue.flush().then(() => discardIfBlank(leavingId));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   /** Optimistic local update plus a queued write. */
   const scheduleSave = useCallback(

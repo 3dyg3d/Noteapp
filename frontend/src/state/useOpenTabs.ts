@@ -34,6 +34,12 @@ async function save(tabs: OpenTab[]) {
   } catch {}
 }
 
+/** Close a tab without the hook, e.g. when its note is discarded on exit. */
+export async function closeTabEverywhere(id: string): Promise<void> {
+  const cur = await load();
+  if (cur.some((t) => t.id === id)) await save(cur.filter((t) => t.id !== id));
+}
+
 export function useOpenTabs() {
   const [tabs, setTabs] = useState<OpenTab[]>(cache);
 

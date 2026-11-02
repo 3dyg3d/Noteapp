@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  DeviceEventEmitter,
   View,
   Text,
   StyleSheet,
@@ -42,6 +43,7 @@ import { displayTitle, relativeDate } from '@/src/notes/display';
 import PaperPreview, { PaperType } from '@/src/components/PaperPreview';
 import HandwritingThumbnail from '@/src/components/HandwritingThumbnail';
 import { useToast } from '@/src/components/Toast';
+import { NOTE_DISCARDED_EVENT } from '@/src/notes/discardBlank';
 
 type ViewMode = 'grid' | 'list' | 'simple' | 'large';
 type TypeFilter = 'all' | 'handwriting' | 'text';
@@ -129,6 +131,11 @@ const TEMPLATES: Template[] = [
   },
 ];
 
+/** Same breakpoint as the inline sidebar (`isTablet` in HomeScreen). */
+function isTabletWidth(w: number) {
+  return w >= 720;
+}
+
 function rid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -186,6 +193,12 @@ export default function HomeScreen() {
   const [layout, setLayout] = useState<{ w: number; headerH: number }>({ w: 0, headerH: 0 });
   const contentW = layout.w || winW;
   const headerH = layout.headerH || 120;
+  // One UI collapsing title: a tall area with the big centred title scrolls
+  // away; the toolbar, search and chips under it stay pinned.
+  const heroH = Math.round(Math.min(isTabletWidth(winW) ? 240 : 170, Math.max(110, winH * (isTabletWidth(winW) ? 0.2 : 0.17))));
+  const scrollY = useRef(new RNAnimated.Value(0)).current;
+  const headerShift = scrollY.interpolate({ inputRange: [0, heroH], outputRange: [0, -heroH], extrapolate: 'clamp' });
+  const heroOpacity = scrollY.interpolate({ inputRange: [0, heroH * 0.6], outputRange: [1, 0], extrapolate: 'clamp' });
 
   // Aim for cards around 190pt wide, whatever the screen.
   const baseColumns = useMemo(() => {
@@ -381,6 +394,15 @@ export default function HomeScreen() {
         : sortedNotes.filter((n) => (typeFilter === 'handwriting') === (n.note_type === 'handwriting')),
     [sortedNotes, typeFilter]
   );
+  // A blank note discarded as its editor closed: drop its card right away
+  // (the list may have reloaded a moment before the delete landed).
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(NOTE_DISCARDED_EVENT, (noteId: string) => {
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+    });
+    return () => sub.remove();
+  }, []);
+
   // A type filter belongs to the list it was set on; switching category clears it
   // (folder views hide the chips, so a leftover filter would be invisible).
   useEffect(() => { setTypeFilter('all'); }, [category]);
@@ -1165,30 +1187,31 @@ export default function HomeScreen() {
 
           {/* Caption row — title + date + pin/lock icons live UNDER the card,
               matching iOS Photos-style tiles. Labels flow below the caption. */}
-          <View style={{ paddingHorizontal: 4, paddingTop: spacing.xs }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={{ paddingHorizontal: 4, paddingTop: spacing.sm, alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', maxWidth: '100%' }}>
               {folder && (
                 <View style={[styles.folderDot, { backgroundColor: folder.color, marginRight: 4, width: 8, height: 8, borderRadius: 4 }]} />
               )}
               {note.favorite && <Ionicons name="star" size={12} color={colors.brand} style={{ marginRight: 4 }} />}
               {note.locked && <Ionicons name="lock-closed" size={12} color={colors.muted} style={{ marginRight: 4 }} />}
               <Text
-                numberOfLines={1}
+                numberOfLines={2}
                 style={{
-                  flex: 1,
-                  fontSize: typeScale.base,
+                  flexShrink: 1,
+                  fontSize: typeScale.lg,
                   fontWeight: '700',
                   color: colors.onSurface,
+                  textAlign: 'center',
                 }}
               >
                 {displayTitle(note)}
               </Text>
             </View>
-            <Text style={{ fontSize: typeScale.sm, color: colors.muted, marginTop: 2 }}>
+            <Text style={{ fontSize: typeScale.sm, color: colors.muted, marginTop: 2, textAlign: 'center' }}>
               {relativeDate(note.updated_at)}
             </Text>
             {noteLabels.length > 0 && (
-              <View style={[styles.labelChipRow, { marginTop: 4 }]}>
+              <View style={[styles.labelChipRow, { marginTop: 4, justifyContent: 'center' }]}>
                 {noteLabels.slice(0, 3).map((l) => (
                   <View
                     key={l.id}
@@ -1730,6 +1753,60 @@ export default function HomeScreen() {
 
   return (
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.surface }}>
+      {/* Collapsed sidebar on tablets: an icon rail with the main places. */}
+      {isTablet && !drawerOpen && (
+        <View
+          testID="icon-rail"
+          style={{
+            width: 76,
+            alignItems: 'center',
+            paddingTop: insets.top + spacing.lg,
+            paddingBottom: insets.bottom + spacing.lg,
+            gap: spacing.sm,
+          }}
+        >
+          <Pressable
+            testID="rail-open-drawer"
+            accessibilityLabel="Open folders"
+            onPress={() => { haptic.selection(); setDrawerOpen(true); }}
+            style={styles.railBtn}
+          >
+            <Ionicons name="menu" size={24} color={colors.onSurface} />
+          </Pressable>
+          <View style={{ height: spacing.lg }} />
+          {([
+            { id: 'all', icon: 'document-text-outline', label: 'All notes' },
+            { id: 'favorites', icon: 'star-outline', label: 'Favorites' },
+            { id: 'recent', icon: 'time-outline', label: 'Recents' },
+            { id: 'folders', icon: 'folder-outline', label: 'Folders' },
+            { id: 'trash', icon: 'trash-outline', label: 'Trash' },
+          ] as { id: string; icon: React.ComponentProps<typeof Ionicons>['name']; label: string }[]).map((r) => {
+            const active = category === r.id || (r.id === 'folders' && insideFolder);
+            return (
+              <Pressable
+                key={r.id}
+                testID={`rail-${r.id}`}
+                accessibilityLabel={r.label}
+                accessibilityState={{ selected: active }}
+                onPress={() => { haptic.selection(); setCategory(r.id as any); }}
+                style={[styles.railBtn, active && { backgroundColor: colors.brandTertiary }]}
+              >
+                <Ionicons name={r.icon} size={23} color={active ? colors.brand : colors.onSurface} />
+              </Pressable>
+            );
+          })}
+          <View style={{ flex: 1 }} />
+          <Pressable
+            testID="rail-settings"
+            accessibilityLabel="Settings"
+            onPress={() => router.push('/settings')}
+            style={styles.railBtn}
+          >
+            <Ionicons name="settings-outline" size={23} color={colors.onSurface} />
+          </Pressable>
+        </View>
+      )}
+
       {/* Persistent inline sidebar on tablets */}
       {isTablet && drawerOpen && (
         <View
@@ -1738,12 +1815,15 @@ export default function HomeScreen() {
             width: SIDEBAR_WIDTH,
             // Distinct from the note area next to it: a bare hairline against
             // an identical background gave no sense of two panes.
+            // A floating rounded panel, as in Samsung Notes on tablets.
             backgroundColor: colors.surfaceSecondary,
-            borderRightWidth: StyleSheet.hairlineWidth,
-            borderRightColor: colors.border,
+            borderRadius: 28,
+            marginTop: insets.top + spacing.sm,
+            marginBottom: insets.bottom + spacing.sm,
+            marginLeft: spacing.sm,
             paddingHorizontal: spacing.lg,
-            paddingTop: insets.top + spacing.lg,
-            paddingBottom: insets.bottom + spacing.lg,
+            paddingTop: spacing.lg,
+            paddingBottom: spacing.lg,
           }}
         >
           {drawerInner}
@@ -1756,7 +1836,7 @@ export default function HomeScreen() {
           the previous BlurView) gives a clean, solid bar on all platforms and
           matches the rest of the app chrome. A hairline divider at the bottom
           hints that content scrolls beneath it. */}
-      <View
+      <RNAnimated.View
         onLayout={(e) => {
           const { width, height } = e.nativeEvent.layout;
           // Height is taken from the NORMAL header only. The selection header
@@ -1774,11 +1854,26 @@ export default function HomeScreen() {
             backgroundColor: colors.surface,
             borderBottomWidth: StyleSheet.hairlineWidth,
             borderBottomColor: colors.divider,
+            transform: [{ translateY: headerShift }],
           },
         ]}
       >
+        {/* Expanded app bar: big centred title + count, as in One UI. */}
+        <RNAnimated.View style={{ height: heroH, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg, opacity: heroOpacity }}>
+          <Text numberOfLines={2} style={[styles.heroTitle, { color: colors.onSurface }]} testID={selectionMode ? 'selection-count' : 'home-title'}>
+            {selectionMode ? `${selectedIds.size} selected` : categoryLabel}
+          </Text>
+          {!selectionMode && !loading && (
+            <Text style={{ fontSize: typeScale.lg, color: colors.muted, marginTop: spacing.xs, fontWeight: '600' }} testID="home-count">
+              {isFileManagerView
+                ? `${folderViewChildren.length} ${folderViewChildren.length === 1 ? 'folder' : 'folders'}, ${(category === 'folders' ? folderViewNotes : otherNotes).length} notes`
+                : `${typedNotes.length} ${typedNotes.length === 1 ? 'note' : 'notes'}`}
+            </Text>
+          )}
+        </RNAnimated.View>
         {!selectionMode ? (
           <View style={styles.headerTopRow}>
+            {(insideFolder || !isTablet || drawerOpen) && (
             <Pressable
               testID={insideFolder ? 'header-back-btn' : 'open-drawer-btn'}
               onPress={
@@ -1790,16 +1885,8 @@ export default function HomeScreen() {
             >
               <Ionicons name={insideFolder ? 'arrow-back' : 'menu'} size={22} color={colors.onSurface} />
             </Pressable>
-            <View style={{ flex: 1, marginLeft: spacing.xs }}>
-              <Text numberOfLines={1} style={[styles.bigTitle, { color: colors.onSurface }]} testID="home-title">
-                {categoryLabel}
-              </Text>
-              {!loading && !isFileManagerView && (
-                <Text style={{ fontSize: typeScale.base, color: colors.muted, marginTop: 1 }} testID="home-count">
-                  {typedNotes.length} {typedNotes.length === 1 ? 'note' : 'notes'}
-                </Text>
-              )}
-            </View>
+            )}
+            <View style={{ flex: 1 }} />
             <Pressable
               testID="sort-btn"
               onPress={async (e) => {
@@ -1864,9 +1951,7 @@ export default function HomeScreen() {
               >
                 <Ionicons name="close" size={22} color={colors.onSurface} />
               </Pressable>
-              <Text style={[styles.bigTitle, { color: colors.onSurface, flex: 1, marginLeft: spacing.xs }]} testID="selection-count">
-                {selectedIds.size} selected
-              </Text>
+              <View style={{ flex: 1 }} />
               <Pressable
                 testID="select-all-btn"
                 onPress={() => (allSelected ? clearSelection() : selectAllVisible())}
@@ -1939,7 +2024,7 @@ export default function HomeScreen() {
             </Text>
           </Pressable>
         )}
-      </View>
+      </RNAnimated.View>
 
       {/* Pinch to zoom home tiles.
           RNGH's Pinch gesture reliably races with the FlatList's internal
@@ -1987,8 +2072,10 @@ export default function HomeScreen() {
         });
         return (
           <View style={{ flex: 1 }} {...pinchPan.panHandlers}>
-            <FlatList
+            <RNAnimated.FlatList
             testID="notes-list"
+            onScroll={RNAnimated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+            scrollEventThrottle={16}
             data={[]}
             keyExtractor={() => 'static'}
             renderItem={null as any}
@@ -3729,6 +3816,8 @@ const styles = StyleSheet.create({
   },
   // One UI-sized screen title.
   bigTitle: { fontSize: 28, fontWeight: '700', letterSpacing: -0.4 },
+  heroTitle: { fontSize: 38, fontWeight: '700', letterSpacing: -0.6, textAlign: 'center' },
+  railBtn: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
   chipRow: { flexDirection: 'row', gap: spacing.sm, paddingTop: spacing.sm, paddingBottom: spacing.xs },
   chip: { height: 34, paddingHorizontal: spacing.lg, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   simpleList: { borderRadius: radius.lg, overflow: 'hidden' },

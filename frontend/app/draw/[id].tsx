@@ -73,6 +73,7 @@ import SkiaPaper from '@/src/components/SkiaPaper';
 import PaperPreview from '@/src/components/PaperPreview';
 import SaveIndicator from '@/src/components/SaveIndicator';
 import { labelColors } from '@/src/theme/tokens';
+import { discardIfBlank } from '@/src/notes/discardBlank';
 
 // ---------- Types ----------
 type PenTool = 'pen' | 'fountain' | 'marker' | 'highlighter' | 'pencil' | 'fineliner' | 'calligraphy' | 'brush';
@@ -934,9 +935,18 @@ export default function DrawScreen() {
     })();
     return () => {
       cancelled = true;
+      const leavingId = id as string;
+      // In-memory guard: if anything is on the page here, never discard, even
+      // if the database copy looks empty (e.g. the last save failed).
+      const d = docRef.current;
+      const hadContent =
+        (d?.items?.length ?? 0) > 0 || (d?.pageBackgrounds ?? []).some((b) => b !== null && b !== undefined);
       // Leaving this note (tab switch reuses the screen): write anything
-      // pending to THIS note before the next one's state replaces it.
-      void flushSave(id as string);
+      // pending to THIS note before the next one's state replaces it. Then,
+      // like Samsung Notes, a note left blank is not kept.
+      void flushSave(leavingId).then(() => {
+        if (!hadContent && !dirtyRef.current) void discardIfBlank(leavingId);
+      });
     };
   }, [id]);
 
